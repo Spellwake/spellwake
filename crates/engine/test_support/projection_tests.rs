@@ -245,20 +245,30 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
                         into: CreatureTypeSlot::new(0),
                         excluding: Default::default(),
                     },
-                    Instruction::DrawController {
-                        amount: ValueExpr::Literal(0.into()),
-                    },
+                    spellwake_engine::program::Instruction::DrawCards(Box::new(
+                        spellwake_engine::toolbox::DrawCardsSpec::simple(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::Literal(0.into()),
+                        ),
+                    )),
                     Instruction::ChooseCreatureType {
                         into: CreatureTypeSlot::new(1),
                         excluding: Default::default(),
                     },
-                    Instruction::DrawController {
-                        amount: ValueExpr::count_battlefield(
-                            ObjectFilter::any()
-                                .controlled()
-                                .of_chosen_slot(CreatureTypeSlot::new(0)),
+                    spellwake_engine::program::Instruction::DrawCards(Box::new(
+                        spellwake_engine::toolbox::DrawCardsSpec::simple(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::count_battlefield(
+                                ObjectFilter::any()
+                                    .controlled()
+                                    .of_chosen_slot(CreatureTypeSlot::new(0)),
+                            ),
                         ),
-                    },
+                    )),
                 ],
             ),
         }),

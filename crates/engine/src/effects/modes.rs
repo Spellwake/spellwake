@@ -712,16 +712,27 @@ mod segment_tests {
 
     #[test]
     fn expanding_then_removing_host_operations_keeps_splice_target_and_branch_boundaries() {
+        let damage = Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
+            source: crate::toolbox::DamageSourceQuery::EntrySource,
+            recipients: crate::toolbox::DamageTargetQuery::Targets,
+            amount: crate::program::DamageAmountSpec::Expr(ValueExpr::Literal(2.into())),
+            exile_if_dies: false,
+        }));
         let host = ExecutableBody::new(
             BodyTarget::None,
             vec![
                 Instruction::FlipCoin {
                     lose_destination: 2,
                 },
-                Instruction::DrawController {
-                    amount: ValueExpr::Literal(1.into()),
-                },
-                Instruction::Damage { amount: 2.into() },
+                crate::program::Instruction::DrawCards(Box::new(
+                    crate::toolbox::DrawCardsSpec::simple(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        ValueExpr::Literal(1.into()),
+                    ),
+                )),
+                damage.clone(),
             ],
         );
         let StackPayload::Instructions(mut payload) = StackPayload::from_body(host, None) else {
@@ -753,9 +764,6 @@ mod segment_tests {
                 lose_destination: 3
             }
         );
-        assert_eq!(
-            payload.body.instructions[3],
-            Instruction::Damage { amount: 2.into() }
-        );
+        assert_eq!(payload.body.instructions[3], damage);
     }
 }

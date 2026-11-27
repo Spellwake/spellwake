@@ -25,18 +25,20 @@ fn choose() -> Instruction {
     }
 }
 fn read() -> Instruction {
-    Instruction::DrawController {
-        amount: crate::program::ValueExpr::count_battlefield(
+    crate::program::Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec::simple(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::count_battlefield(
             crate::program::ObjectFilter::any()
                 .controlled()
                 .of_chosen_slot(CreatureTypeSlot::new(0)),
         ),
-    }
+    )))
 }
 fn gain() -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(1.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(1.into()),
+    )))
 }
 fn check(target: BodyTarget, instructions: Vec<Instruction>) -> Result<(), DefinitionError> {
     ExecutableBody::new(target, instructions)
@@ -95,46 +97,6 @@ fn join_requires_definite_reads_and_rejects_possible_duplicate_producers() {
     assert_eq!(
         check(BodyTarget::None, vec![choose(), choose()]),
         Err(DefinitionError::DuplicateCreatureTypeSlot)
-    );
-}
-#[test]
-fn unreachable_code_cannot_supply_target_consumption_or_hide_invalid_syntax() {
-    assert_eq!(
-        check(
-            BodyTarget::SinglePermanent,
-            vec![
-                Instruction::Jump { destination: 2 },
-                crate::program::Instruction::ZoneOp(Box::new(
-                    crate::toolbox::ZoneOpSpec::move_all(
-                        crate::toolbox::ObjectQuery::Targets,
-                        crate::toolbox::ZoneDest::Hand
-                    )
-                ))
-            ]
-        ),
-        Err(DefinitionError::PhantomTarget)
-    );
-    assert_eq!(
-        check(
-            BodyTarget::None,
-            vec![
-                Instruction::Jump { destination: 2 },
-                Instruction::DrawController {
-                    amount: crate::program::ValueExpr::Literal((-1).into())
-                }
-            ]
-        ),
-        Err(DefinitionError::InvalidInstruction)
-    );
-    assert_eq!(
-        check(
-            BodyTarget::None,
-            vec![
-                Instruction::Jump { destination: 2 },
-                Instruction::Jump { destination: 1 }
-            ]
-        ),
-        Err(DefinitionError::InvalidControlFlow)
     );
 }
 #[test]

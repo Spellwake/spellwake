@@ -3,7 +3,6 @@ use super::*;
 use crate::{
     effects::SeedCard,
     land::{BasicLandType, LandType},
-    life::LifeAdjustment,
     mana::{ManaAbilityRef, ManaCost, ManaType},
     object_identity::{CardId, ObjectDestination},
     program::{Instruction, PlayerRelation, Program, TriggeredAbility, TriggeredAbilityId},
@@ -51,9 +50,14 @@ fn prepare_grouped_count(count: i64, grouping: crate::program::TriggerGrouping) 
             ),
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                }],
+                vec![crate::program::Instruction::AdjustLife(Box::new(
+                    crate::toolbox::AdjustLifeSpec::gain(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        crate::program::ValueExpr::Literal(1.into()),
+                    ),
+                ))],
             ),
         });
     }

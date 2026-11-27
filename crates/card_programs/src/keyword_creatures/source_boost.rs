@@ -698,7 +698,33 @@ pub(super) fn parse(
         let body = ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::MillEachPlayer(3),
+                Instruction::ForEachPlayerQuery {
+                    selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(
+                        spellwake_engine::program::AffectedPlayers::EachPlayer,
+                    )),
+                    bind_player: spellwake_engine::toolbox::BindingId(905),
+                    body: Box::new(ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Bound(
+                                            spellwake_engine::toolbox::BindingId(905),
+                                        ),
+                                    )),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
+                                        spellwake_engine::program::ValueExpr::literal(3),
+                                    )),
+                                },
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Mill,
+                                },
+                            ),
+                        ))],
+                    )),
+                },
                 Instruction::ExileMilledCreatures { maximum: 2 },
                 Instruction::CreateTokens { creations },
             ],
@@ -807,9 +833,11 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
                 vec![
-                    Instruction::Damage {
-                        amount: amount.into(),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(amount),
+                        false,
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
@@ -857,9 +885,13 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage {
-                    amount: i64::from(amount).into(),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(i64::from(amount)),
+                        false,
+                    ),
+                ],
             ),
             restriction,
         ));
@@ -1058,11 +1090,16 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: spellwake_engine::life::LifeAdjustment::Gain(
-                        i64::from(amount.parse::<u16>().ok()?).into(),
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(i64::from(
+                            amount.parse::<u16>().ok()?,
+                        )),
                     ),
-                }],
+                ],
             ),
             restriction,
         ));
@@ -1077,9 +1114,13 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::SingleAnyTarget,
-                vec![Instruction::Damage {
-                    amount: amount.into(),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(amount),
+                        false,
+                    ),
+                ],
             ),
             restriction,
         ));
@@ -1110,7 +1151,14 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::AbilitySourceControllerLosesLife(amount.parse().ok()?),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                        spellwake_engine::toolbox::PlayerSelector::ControllersOf(Box::new(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                        )),
+                        spellwake_engine::program::ValueExpr::literal(i64::from(
+                            amount.parse::<u16>().ok()?,
+                        )),
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
                     ),
@@ -1259,7 +1307,21 @@ pub(super) fn parse(
             ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([static_keyword(keyword)?])),
             ResolvedPartSpec::SetPT(PowerToughness {power:p.parse::<i64>().ok()?.into(),toughness:t.parse::<i64>().ok()?.into()}),
         ]);
-        return Some((mana_cost,source_cost,ExecutableBody::new(BodyTarget::None,vec![Instruction::ChangeAbilitySource {parts,duration:ResolvedDuration::UntilEndOfTurn}]),Some(ActivationRestriction::DiscountLegendaryCreaturesAndPlaneswalkers)));
+        return Some((
+            mana_cost,
+            source_cost,
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Source,
+                        parts,
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                ],
+            ),
+            Some(ActivationRestriction::DiscountLegendaryCreaturesAndPlaneswalkers),
+        ));
     }
     if rest == "Exile all graveyards." {
         return Some((
@@ -1353,9 +1415,12 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::AdjustControllerLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Gain(amount.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(amount),
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
                     ),

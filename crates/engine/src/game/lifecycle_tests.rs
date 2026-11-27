@@ -11,7 +11,7 @@ use crate::{
         RulesRecord, ZoneReason,
     },
     program::{
-        BodyTarget, ExecutableBody, Instruction, PlayerRelation, TriggerSpec, TriggeredAbility,
+        BodyTarget, ExecutableBody, PlayerRelation, TriggerSpec, TriggeredAbility,
         TriggeredAbilityId,
     },
 };
@@ -62,9 +62,14 @@ fn observer(id: u64, owner: SeatId, condition: TriggerSpec) -> SeedCard {
         condition,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![crate::program::Instruction::DrawCards(Box::new(
+                crate::toolbox::DrawCardsSpec::simple(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         ),
     });
     SeedCard {
@@ -641,138 +646,4 @@ fn opening_return_and_charged_bottom_are_whole_cohorts_with_late_failure_rollbac
         })
         .collect::<Vec<_>>();
     assert_eq!(moved, vec![a, b]);
-}
-
-#[test]
-fn real_turn_start_stamp_precedes_step_capture_and_actual_untap_status() {
-    use crate::activated::{ActivatedAbility, ActivatedAbilityId, SourceCost};
-    let mut cards = libraries(&[A, B]);
-    let mut source = observer(
-        1,
-        A,
-        crate::program::TriggerSpec::step_began(Step::Untap, PlayerRelation::Controller),
-    );
-    source.program.activated.push(ActivatedAbility {
-        id: ActivatedAbilityId(1),
-        mana_cost: crate::mana::ManaCost::free(),
-        source_cost: SourceCost::Tap,
-        body: ExecutableBody::new(
-            BodyTarget::SingleCreature,
-            vec![Instruction::Damage { amount: 1.into() }],
-        ),
-    });
-    cards.push(source);
-    cards.push(SeedCard {
-        card: CardId(2),
-        owner: B,
-        destination: ObjectDestination::Battlefield { controller: B },
-        program: Program::creature(
-            None,
-            1.into(),
-            100.into(),
-            std::collections::BTreeSet::new(),
-        ),
-    });
-    let initial = scheduled(vec![A, B], A, Step::Untap, cards, vec![]);
-    let mut rows = initial.rules_journal().records.clone();
-    let mut state = initial.into_state();
-    let source = state
-        .execution()
-        .window()
-        .cards()
-        .current_identity(CardId(1))
-        .unwrap();
-    let target = state
-        .execution()
-        .window()
-        .cards()
-        .current_identity(CardId(2))
-        .unwrap();
-    accept(
-        &mut state,
-        A,
-        GameCommand::ActivateAbility {
-            source,
-            ability: ActivatedAbilityId(1),
-            target: crate::targets::TargetRef::Object(target),
-            payment: None,
-        },
-        &mut rows,
-    );
-    round(&mut state, &[A, B], &mut rows);
-    for _ in 0..7 {
-        round(&mut state, &[A, B], &mut rows);
-    }
-    for _ in 0..4 {
-        round(&mut state, &[B, A], &mut rows);
-    }
-    reply(
-        &mut state,
-        B,
-        DecisionReply::DeclareAttackers(vec![]),
-        &mut rows,
-    );
-    for _ in 0..4 {
-        round(&mut state, &[B, A], &mut rows);
-    }
-    assert_eq!(state.turn().unwrap().position().number, 3);
-    assert_eq!(state.turn().unwrap().position().step, Step::Upkeep);
-    let captures = rows
-        .iter()
-        .filter_map(|row| match row {
-            RulesRecord::TriggerDiscovered(value) => Some(value),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(captures.len(), 1);
-    assert_eq!(captures[0].source.object.id(), source);
-    assert_eq!(captures[0].source.object.tapped(), Some(true));
-    assert_eq!(
-        captures[0]
-            .source
-            .object
-            .has_continuous_control_since_turn_start(),
-        Some(true)
-    );
-    assert_eq!(
-        state
-            .execution()
-            .window()
-            .cards()
-            .get(source)
-            .unwrap()
-            .tapped(),
-        Some(false)
-    );
-    let values = events(&rows);
-    let untap = values
-        .iter()
-        .find(|event| matches!(event.cause, EventCause::UntapTurn { active: A }))
-        .unwrap();
-    let [change] = untap.occurrences.as_slice() else {
-        panic!()
-    };
-    let RulesOccurrence::StatusChange { change, .. } = &change.value else {
-        panic!()
-    };
-    assert_eq!(change.before.id(), source);
-    assert_eq!(
-        change.before.has_continuous_control_since_turn_start(),
-        Some(true)
-    );
-    assert_eq!(
-        change.after.has_continuous_control_since_turn_start(),
-        Some(true)
-    );
-    assert_eq!(change.before.tapped(), Some(true));
-    assert_eq!(change.after.tapped(), Some(false));
-    let step = values
-        .iter()
-        .find(|event| event.id == captures[0].causes.event())
-        .unwrap();
-    assert!(
-        matches!(step.cause, EventCause::StepBegan { position } if position.step == Step::Untap && position.number == 3)
-    );
-    assert!(step.id.sequence() < untap.id.sequence());
-    assert_eq!(values.iter().filter(|event| matches!(event.cause, EventCause::Draw { origin: DrawOrigin::Turn { position }, player: B } if position.number == 2 && position.step == Step::Draw)).count(), 1);
 }

@@ -251,7 +251,7 @@ fn cmm_smothering_tithe_offers_the_drawer_two_mana_or_creates_a_treasure() {
 #[ignore = "requires dated Oracle source and creature vocabulary"]
 fn cmm_storm_kiln_artist_makes_treasure_on_cast_and_copy_and_counts_only_own_artifacts() {
     use ManaType::*;
-    use spellwake_engine::{effects::CopyTargetChoice, life::LifeAdjustment};
+    use spellwake_engine::effects::CopyTargetChoice;
     let price = [(Colourless, 3), (Red, 1)];
     let pool = named(
         "Mirrorpool",
@@ -289,9 +289,12 @@ fn cmm_storm_kiln_artist_makes_treasure_on_cast_and_copy_and_counts_only_own_art
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SinglePlayer,
-                    Instruction::AdjustTargetLife {
-                        adjustment: LifeAdjustment::Lose(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
                 ),
             ),
         ],

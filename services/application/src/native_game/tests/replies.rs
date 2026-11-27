@@ -163,9 +163,10 @@ fn optional_and_creature_type_use_actual_chooser_options_and_exclusions() {
             Instruction::OptionalEffect {
                 chooser: ResolvingPlayer::Controller,
             },
-            Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(3.into()),
-            },
+            Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::literal(3),
+            ))),
         ],
         vec![],
     );
@@ -203,9 +204,10 @@ fn optional_and_creature_type_use_actual_chooser_options_and_exclusions() {
                 into: CreatureTypeSlot::new(0),
                 excluding: BTreeSet::from([excluded]),
             },
-            Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(2.into()),
-            },
+            Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::literal(2),
+            ))),
         ],
         vec![],
     );
@@ -563,7 +565,16 @@ fn copied_spell_retain_and_changed_targets_are_bound_options() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreatureOrPlayer,
-                vec![Instruction::Damage { amount: 1.into() }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
             ),
         ),
         card(
@@ -656,14 +667,28 @@ fn trigger_order_then_target_use_actual_instances_and_controller() {
             body: if id == 1 {
                 ExecutableBody::new(
                     BodyTarget::SingleCreatureOrPlayer,
-                    vec![Instruction::Damage { amount: 1.into() }],
+                    vec![Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec {
+                            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                                spellwake_engine::program::ValueExpr::literal(1),
+                            ),
+                            exile_if_dies: false,
+                        },
+                    ))],
                 )
             } else {
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AdjustControllerLife {
-                        adjustment: LifeAdjustment::Gain(1.into()),
-                    }],
+                    vec![Instruction::AdjustLife(Box::new(
+                        spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                    ))],
                 )
             },
         })
@@ -675,9 +700,14 @@ fn trigger_order_then_target_use_actual_instances_and_controller() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                }],
+                vec![Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         card(
@@ -771,7 +801,16 @@ fn singleton_damage_effect_order_uses_only_current_offered_application() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 3.into() }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::literal(3),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
             ),
         ),
         card(
@@ -1164,14 +1203,16 @@ fn combat_declarations_damage_order_and_prevention_use_actual_simultaneous_frame
 fn storm_controller_selects_each_copy_target_through_player_actions() {
     use spellwake_engine::{
         effects::CopyTargetChoice,
-        life::LifeAdjustment,
         program::{CastCopyKeyword, TriggeredAbility, TriggeredAbilityId},
     };
     let mut storm = instant(
         BodyTarget::SinglePlayer,
-        vec![Instruction::AdjustTargetLife {
-            adjustment: LifeAdjustment::Lose(2.into()),
-        }],
+        vec![Instruction::AdjustLife(Box::new(
+            spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
+                spellwake_engine::program::ValueExpr::literal(2),
+            ),
+        ))],
     );
     storm.triggered.push(TriggeredAbility::spell_copies(
         TriggeredAbilityId(31),
@@ -1184,9 +1225,14 @@ fn storm_controller_selects_each_copy_target_through_player_actions() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                }],
+                vec![Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         card(2, A, ObjectDestination::Hand, storm),
@@ -1400,11 +1446,15 @@ fn energy_counter_myriad_keyword_and_extended_counter_kinds_project_cleanly() {
     });
     let energy_spell = instant(
         BodyTarget::None,
-        vec![Instruction::AddPlayerCounter {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            kind: CounterKind::Energy,
-            amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::add_counter(
+                spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::One(
+                    ResolvingPlayer::Controller,
+                )),
+                CounterKind::Energy,
+                spellwake_engine::program::ValueExpr::Literal(3.into()),
+            ),
+        ))],
     );
     let source = main_state(vec![
         card(1, A, ObjectDestination::Hand, energy_spell),
@@ -2100,11 +2150,12 @@ fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_
                     opponents_only: true,
                 },
             },
-            Instruction::AdjustPlayersLife {
-                players: AffectedPlayers::One(ResolvingPlayer::ChosenPlayer),
-                amount: ValueExpr::Literal(2.into()),
-                gain: false,
-            },
+            Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::One(
+                    ResolvingPlayer::ChosenPlayer,
+                )),
+                ValueExpr::Literal(2.into()),
+            ))),
         ],
     );
     let rand_src = main_state(vec![card(1, A, ObjectDestination::Hand, rand_spell)]);
@@ -2140,7 +2191,16 @@ fn damage_source_choice_projects_public_labels_round_trips_wire_and_rejects_inva
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SingleAnyTarget,
-            vec![Instruction::Damage { amount: 2.into() }],
+            vec![Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::literal(2),
+                    ),
+                    exile_if_dies: false,
+                },
+            ))],
         ),
     });
 
@@ -2152,7 +2212,16 @@ fn damage_source_choice_projects_public_labels_round_trips_wire_and_rejects_inva
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SingleAnyTarget,
-            vec![Instruction::Damage { amount: 2.into() }],
+            vec![Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::literal(2),
+                    ),
+                    exile_if_dies: false,
+                },
+            ))],
         ),
     });
 

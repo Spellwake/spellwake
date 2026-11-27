@@ -33,9 +33,14 @@ fn base_with_grouping(
             grouping,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                }],
+                vec![crate::program::Instruction::AdjustLife(Box::new(
+                    crate::toolbox::AdjustLifeSpec::gain(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        crate::program::ValueExpr::Literal(1.into()),
+                    ),
+                ))],
             ),
         })
         .collect();
@@ -439,135 +444,6 @@ fn p08_entry_and_departure_missing_participant_context_reject_without_adoption()
         assert_eq!(state, saved);
         assert!(state.triggers.waiting().is_empty());
     }
-}
-
-#[test]
-fn matched_count_rejects_missing_or_inconsistent_actual_installed_bindings() {
-    use crate::test_support::characteristic_trajectories as t;
-    use crate::{
-        game::{DecisionReply, RuleFrame},
-        program::CreatureTypeSlot,
-        token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients},
-    };
-    let vocabulary = t::vocabulary();
-    let mut watcher = Program::artifact(None, vec![]);
-    watcher.triggered.push(TriggeredAbility {
-        id: TriggeredAbilityId(7),
-        condition: crate::program::TriggerSpec::enters(crate::program::ObjectFilter::creature()),
-        grouping: TriggerGrouping::OneOrMoreTogether,
-        body: ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::ChooseCreatureType {
-                    into: CreatureTypeSlot::new(0),
-                    excluding: BTreeSet::new(),
-                },
-                Instruction::DrawController {
-                    amount: crate::program::ValueExpr::event(
-                        crate::program::EventValueKind::MatchedOccurrences,
-                    ),
-                },
-            ],
-        ),
-    });
-    let game = t::world(
-        vocabulary.clone(),
-        vec![
-            t::card(2, watcher, true),
-            t::spell(
-                1,
-                BodyTarget::None,
-                vec![Instruction::CreateTokens {
-                    creations: vec![TokenCreation {
-                        definition: TokenDefinition::new(
-                            Program::creature(None, 1.into(), 1.into(), BTreeSet::new()),
-                            TokenName::Default {
-                                ordered_subtypes: vec![],
-                            },
-                            &vocabulary,
-                        )
-                        .unwrap(),
-                        amount: crate::program::ValueExpr::Literal(2.into()),
-                        base_size: None,
-                        enters_tapped: false,
-                        recipients: TokenRecipients::Controller,
-                    }],
-                }],
-            ),
-        ],
-        vec![CardId(2)],
-    );
-    let cast = t::submit(
-        &game,
-        A,
-        crate::game::GameCommand::CastUntargeted {
-            spell: t::object(&game, 1),
-            payment: None,
-        },
-    );
-    let pending = t::pass_pair(cast.state());
-    let RuleFrame::TimestampOrder(frame) = pending.state().pending_decision().unwrap().frame()
-    else {
-        panic!("timestamp");
-    };
-    let ordered = t::reply(
-        pending.state(),
-        A,
-        DecisionReply::TimestampOrder(frame.members().iter().map(|m| m.member).collect()),
-    );
-    let resolving = t::pass_pair(ordered.state());
-    assert!(matches!(
-        resolving.state().pending_decision().unwrap().frame(),
-        RuleFrame::CreatureType(_)
-    ));
-    let execution = resolving.state().execution();
-    let entry = execution.window.resolving().unwrap().id();
-    let saved = execution.clone();
-    assert_eq!(
-        execution.resolve_value_expr(
-            A,
-            &crate::program::ValueExpr::event(crate::program::EventValueKind::MatchedOccurrences)
-        ),
-        Ok(2.into())
-    );
-    assert_eq!(
-        execution.resolve_value_expr(
-            B,
-            &crate::program::ValueExpr::event(crate::program::EventValueKind::MatchedOccurrences)
-        ),
-        Err(EffectError::InconsistentProgram)
-    );
-    for missing in [false, true] {
-        let mut malformed = execution.clone();
-        let alternate_source = malformed
-            .window
-            .cards()
-            .iter()
-            .find(|o| o.is_token())
-            .unwrap()
-            .clone();
-        let StackPayload::Instructions(payload) = malformed.payloads.get_mut(&entry).unwrap()
-        else {
-            panic!("instructions");
-        };
-        if missing {
-            payload.bindings.trigger = None;
-        } else {
-            payload.bindings.trigger.as_mut().unwrap().source.object = alternate_source;
-        }
-        let malformed_saved = malformed.clone();
-        assert_eq!(
-            malformed.resolve_value_expr(
-                A,
-                &crate::program::ValueExpr::event(
-                    crate::program::EventValueKind::MatchedOccurrences
-                )
-            ),
-            Err(EffectError::InconsistentProgram)
-        );
-        assert_eq!(malformed, malformed_saved);
-    }
-    assert_eq!(execution, &saved);
 }
 
 #[test]

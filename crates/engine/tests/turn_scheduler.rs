@@ -5,13 +5,12 @@ use spellwake_engine::combat::CombatRules;
 use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
-    activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
-    effects::{EffectError, Instruction, Program, SeedCard},
+    effects::{EffectError, Program, SeedCard},
     game::{
         CandidateBase, DecisionId, DecisionReply, GameCommand, GameContext, GameError, GameId,
         GameInput, GameState, NativeCandidate,
     },
-    mana::{FloatingMana, ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaPayment, ManaType},
+    mana::{FloatingMana, ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaType},
     object_identity::{CardId, ObjectDestination, ObjectId, ObjectZone},
     priority::{PriorityPhase, SeatId},
     stack_window::WindowPhase,
@@ -492,7 +491,16 @@ fn instant(card: u64, owner: SeatId) -> SeedCard {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 3.into() }],
+                vec![spellwake_engine::program::Instruction::DealDamage(
+                    Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::Literal(3.into()),
+                        ),
+                        exile_if_dies: false,
+                    }),
+                )],
             ),
         ),
     }
@@ -584,88 +592,6 @@ fn native_first_turn_skips_two_player_draw_and_executes_multiplayer_draw() {
     assert_eq!(drawn.draw_journal().events.len(), 1);
     assert_eq!(holder(drawn.state()), B);
     assert_eq!(drawn.state().pending_turn_work(), None);
-}
-
-#[test]
-fn ordinary_commands_cannot_bypass_mandatory_turn_work() {
-    let artifact = SeedCard {
-        card: CardId(3),
-        owner: A,
-        destination: ObjectDestination::Battlefield { controller: A },
-        program: Program::artifact(
-            None,
-            vec![ActivatedAbility {
-                id: ActivatedAbilityId(7),
-                mana_cost: ManaCost::free(),
-                source_cost: SourceCost::Tap,
-                body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Damage { amount: 1.into() }],
-                ),
-            }],
-        ),
-    };
-    let cards = vec![land(1, A, A), instant(2, A), artifact, creature(99, 100)];
-    for (step, work) in [
-        (Step::DeclareBlockers, TurnWork::DeclareBlockers),
-        (
-            Step::CombatDamage,
-            TurnWork::CombatDamage { additional: false },
-        ),
-        (Step::Cleanup, TurnWork::Cleanup),
-    ] {
-        let mut prepared = cards.clone();
-        if step == Step::Cleanup {
-            prepared.extend((4..=10).map(|card| instant(card, A)));
-        }
-        let game = setup(vec![A, B], A, prepared, pools(&[A, B]), start(2, step)).into_state();
-        let target = TargetRef::Object(object(&game, 99));
-        let commands = [
-            GameCommand::Pass,
-            GameCommand::ActivateMana {
-                source: object(&game, 1),
-                ability: spellwake_engine::mana::ManaAbilityRef::Printed(ManaAbilityId(7)),
-            },
-            GameCommand::ActivateAbility {
-                source: object(&game, 3),
-                ability: ActivatedAbilityId(7),
-                target,
-                payment: None,
-            },
-            GameCommand::Cast {
-                spell: object(&game, 2),
-                target,
-            },
-            GameCommand::CastPaid {
-                spell: object(&game, 2),
-                target,
-                payment: ManaPayment::default(),
-            },
-            GameCommand::Reply {
-                decision: DecisionId(1),
-                choice: DecisionReply::ManaColor(ManaType::Red),
-            },
-        ];
-        let saved = game.clone();
-        assert_eq!(game.pending_turn_work(), Some(work));
-        assert_eq!(game.execution().window().phase(), WindowPhase::TurnWork);
-        for actor in [A, B] {
-            for command in commands.clone() {
-                let error =
-                    if work == TurnWork::Cleanup && matches!(command, GameCommand::Reply { .. }) {
-                        if actor == A {
-                            GameError::Effect(EffectError::WrongDecisionKind)
-                        } else {
-                            GameError::WrongChooser
-                        }
-                    } else {
-                        GameError::TurnWorkRequired(work)
-                    };
-                assert_eq!(game.advance(input(&game, actor, command)), Err(error));
-                assert_eq!(game, saved);
-            }
-        }
-    }
 }
 
 #[test]

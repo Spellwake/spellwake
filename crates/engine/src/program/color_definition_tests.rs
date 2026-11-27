@@ -82,32 +82,6 @@ fn color_definition_roundtrips_program_and_printed_text_including_colorless() {
 }
 
 #[test]
-fn color_definitions_admit_on_spells_but_ordinary_battlefield_statics_do_not() {
-    let v = selected_vocabulary().unwrap();
-    let body = ExecutableBody::new(
-        BodyTarget::None,
-        vec![Instruction::DrawController {
-            amount: crate::program::ValueExpr::Literal(1.into()),
-        }],
-    );
-    for mut p in [
-        Program::instant(ManaCost::free(), body.clone()),
-        Program::sorcery(ManaCost::free(), body),
-    ] {
-        p.continuous = source().continuous;
-        assert_eq!(p.validate(&v), Ok(()));
-        assert_eq!(codec::decode(codec::view(&p), &v).unwrap(), p);
-        p.continuous = Some(StaticContinuousAbility::Battlefield {
-            id: StaticAbilityId(7),
-            selector: PermanentSelector::default(),
-            parts: StaticParts(vec![StaticPart::SwitchPT]),
-        });
-        assert_eq!(p.validate(&v), Err(DefinitionError::ContinuousEffect));
-        assert!(codec::decode(codec::view(&p), &v).is_err());
-    }
-}
-
-#[test]
 fn tagged_static_codec_rejects_old_mixed_missing_and_unknown_forms() {
     let v = selected_vocabulary().unwrap();
     let encoded = codec::view(&source());

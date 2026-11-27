@@ -1268,7 +1268,14 @@ pub(super) fn lower_tokens_copies_instruction(
         }
         InstructionAst::CreateEmblem(text) => {
             let def = build_emblem_definition(text, None, vocabulary)?;
-            builder.instructions.push(Instruction::CreateEmblem(def));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    def,
+                ),
+            );
             Ok(())
         }
         InstructionAst::CreateEmblemFor {
@@ -1277,19 +1284,43 @@ pub(super) fn lower_tokens_copies_instruction(
             compiled,
         } => {
             let def = build_emblem_definition(text, compiled.as_deref(), vocabulary)?;
-            match recipient.as_ref() {
+            let selector = match recipient.as_ref() {
                 SubjectRefAst::Player(PlayerRefAst::You) => {
-                    builder.instructions.push(Instruction::CreateEmblem(def));
-                    Ok(())
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    )
                 }
                 SubjectRefAst::Player(PlayerRefAst::EachOpponent) => {
-                    builder
-                        .instructions
-                        .push(Instruction::CreateOpponentEmblems(def));
-                    Ok(())
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent)
                 }
-                _ => Err("oracle:unsupported-emblem-recipient"),
-            }
+                SubjectRefAst::Player(PlayerRefAst::EachPlayer) => {
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer)
+                }
+                SubjectRefAst::TargetPlayer {
+                    opponent_only,
+                    count: TargetCountAst::Exact(1),
+                } => {
+                    builder.bind_target(if *opponent_only {
+                        BodyTarget::SingleOpponent
+                    } else {
+                        BodyTarget::SinglePlayer
+                    })?;
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer,
+                    )
+                }
+                SubjectRefAst::Player(p) => {
+                    let players = lower_affected_players_in_context(*p, builder, in_trigger)?;
+                    spellwake_engine::toolbox::PlayerSelector::Group(players)
+                }
+                _ => return Err("oracle:unsupported-emblem-recipient"),
+            };
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    selector, def,
+                ),
+            );
+            Ok(())
         }
         InstructionAst::CreateQualifiedToken(qt) => {
             if qt.blocking || qt.chosen_color || qt.chosen_type || qt.dynamic_pt_text.is_some() {
@@ -1689,17 +1720,20 @@ fn try_lower_extra_predefined_token_def(
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::ChangeAbilitySource {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                            BlockingRestriction::OnlyBlockedByMatching(ObjectFilter::Clause(
-                                ObjectClause {
-                                    keyword: Some(KeywordAbility::Haste),
-                                    ..ObjectClause::creature()
-                                },
-                            )),
-                        )]),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                                BlockingRestriction::OnlyBlockedByMatching(ObjectFilter::Clause(
+                                    ObjectClause {
+                                        keyword: Some(KeywordAbility::Haste),
+                                        ..ObjectClause::creature()
+                                    },
+                                )),
+                            )]),
+                            ResolvedDuration::UntilEndOfTurn,
+                        ),
+                    ],
                 ),
             });
             p.activated.push(ActivatedAbility {
@@ -1708,9 +1742,14 @@ fn try_lower_extra_predefined_token_def(
                 source_cost: SourceCost::TapSacrifice,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AdjustControllerLife {
-                        adjustment: LifeAdjustment::Gain(3.into()),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::literal(3),
+                        ),
+                    ],
                 ),
             });
             TokenDefinition::new(
@@ -1739,24 +1778,27 @@ fn try_lower_extra_predefined_token_def(
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::ChangeAbilitySource {
-                        parts: ResolvedPartsSpec(vec![
-                            ResolvedPartSpec::Type(TypeChangeSpec {
-                                supertypes: TypeOperation::Keep,
-                                types: TypeOperation::Add(BTreeSet::from([CardType::Creature])),
-                                subtypes: SubtypeOperation::Keep,
-                                land_subtypes: SubtypeOperation::Keep,
-                            }),
-                            ResolvedPartSpec::Abilities(AbilityChange::grant_keywords(
-                                BTreeSet::from([KeywordAbility::Changeling]),
-                            )),
-                            ResolvedPartSpec::SetPT(PowerToughness {
-                                power: 2.into(),
-                                toughness: 2.into(),
-                            }),
-                        ]),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            ResolvedPartsSpec(vec![
+                                ResolvedPartSpec::Type(TypeChangeSpec {
+                                    supertypes: TypeOperation::Keep,
+                                    types: TypeOperation::Add(BTreeSet::from([CardType::Creature])),
+                                    subtypes: SubtypeOperation::Keep,
+                                    land_subtypes: SubtypeOperation::Keep,
+                                }),
+                                ResolvedPartSpec::Abilities(AbilityChange::grant_keywords(
+                                    BTreeSet::from([KeywordAbility::Changeling]),
+                                )),
+                                ResolvedPartSpec::SetPT(PowerToughness {
+                                    power: 2.into(),
+                                    toughness: 2.into(),
+                                }),
+                            ]),
+                            ResolvedDuration::UntilEndOfTurn,
+                        ),
+                    ],
                 ),
             });
             TokenDefinition::new(
@@ -3444,8 +3486,11 @@ mod wave12_token_ability_tests {
         let program = creation.definition.program();
         assert_eq!(program.triggered.len(), 1);
         assert!(program.printed_keywords.contains(&KeywordAbility::Flying));
-        assert!(program.triggered[0].body.instructions.iter().any(|op|
-            matches!(op, Instruction::AdjustControllerLife { adjustment: LifeAdjustment::Gain(amount) } if *amount == 1.into())));
+        assert!(program.triggered[0].body.instructions.iter().any(|op| matches!(
+            op,
+            Instruction::AdjustLife(spec)
+                if matches!(&spec.op, spellwake_engine::toolbox::LifeOp::Gain(amount) if *amount == ValueExpr::literal(1))
+        )));
         let (second, _) = lower_token_spec_with_abilities(
             &token,
             TokenRecipients::EachOpponent,

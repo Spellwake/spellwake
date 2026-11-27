@@ -169,9 +169,14 @@ fn cmm_mizzix_awards_experience_only_for_instants_and_sorceries_above_the_thresh
     let spell = |instant, price: &str| {
         let body = ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ],
         );
         if instant {
             Program::instant(fixed_cost(price).unwrap(), body)
@@ -389,9 +394,14 @@ fn cmm_grand_abolisher_prohibits_opposing_spells_and_artifact_creature_enchantme
     let gain = || {
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ],
         )
     };
     let ability = ActivatedAbility {

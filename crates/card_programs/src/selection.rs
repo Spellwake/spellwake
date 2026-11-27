@@ -5,7 +5,6 @@ use super::{Definition, OracleId, ProgramKey, RegistryError, Scope, TeachingPool
 use spellwake_content::{Inventory, Legality};
 use spellwake_contracts::creature_types::CreatureTypeVocabulary;
 use spellwake_engine::{
-    life::LifeAdjustment,
     mana::{ManaCost, ManaType},
     program::{
         AffectedPlayers, BodyTarget, CardType, ExecutableBody, Instruction, PermanentTypeFilter,
@@ -165,9 +164,14 @@ pub(super) fn definition(
                     BodyTarget::SinglePlayer,
                     vec![
                         sacrifice(targeted),
-                        Instruction::AdjustTargetLife {
-                            adjustment: LifeAdjustment::Lose(1.into()),
-                        },
+                        Instruction::AdjustLife(Box::new(
+                            spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::TargetPlayer,
+                                ),
+                                spellwake_engine::program::ValueExpr::literal(1),
+                            ),
+                        )),
                     ],
                 ),
             ),
@@ -468,9 +472,14 @@ mod tests {
                         BodyTarget::SinglePlayer,
                         vec![
                             expected_sacrifice(targeted),
-                            Instruction::AdjustTargetLife {
-                                adjustment: LifeAdjustment::Lose(1.into()),
-                            },
+                            Instruction::AdjustLife(Box::new(
+                                spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::TargetPlayer,
+                                    ),
+                                    spellwake_engine::program::ValueExpr::literal(1),
+                                ),
+                            )),
                         ],
                     ),
                 ),
@@ -578,9 +587,14 @@ mod tests {
                         spell.body.instructions,
                         vec![
                             sacrifice(AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
-                            Instruction::AdjustTargetLife {
-                                adjustment: LifeAdjustment::Lose(1.into())
-                            }
+                            Instruction::AdjustLife(Box::new(
+                                spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::TargetPlayer,
+                                    ),
+                                    spellwake_engine::program::ValueExpr::literal(1),
+                                ),
+                            ))
                         ]
                     );
                 }

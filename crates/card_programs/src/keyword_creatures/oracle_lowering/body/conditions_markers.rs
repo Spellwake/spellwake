@@ -299,18 +299,25 @@ pub(super) fn lower_zone_action_this_way_action(
         .or_else(|| core.strip_suffix(" were dealt damage"))
     {
         let dmg_mref = match builder.instructions.last() {
-            Some(
-                Instruction::Damage { .. }
-                | Instruction::DamageAmount(_)
-                | Instruction::DamageAmountThenExileIfDies(_),
-            ) if is_object_body_target(builder.target, true) => Some(MatchObjectRef::TargetObject),
-            Some(Instruction::DealDamageFrom { recipients, .. }) => match recipients.as_ref() {
-                DamageRecipientsRef::Target if is_object_body_target(builder.target, true) => {
+            Some(Instruction::DealDamage(spec)) => match &spec.recipients {
+                spellwake_engine::toolbox::DamageTargetQuery::Targets
+                | spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                ) if is_object_body_target(builder.target, true) => {
                     Some(MatchObjectRef::TargetObject)
                 }
-                DamageRecipientsRef::TriggeringObject if in_trigger => {
-                    Some(MatchObjectRef::TriggerSubject)
-                }
+                spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                    spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                ) if in_trigger => Some(MatchObjectRef::TriggerSubject),
+                spellwake_engine::toolbox::DamageTargetQuery::Relative(r) => match r.as_ref() {
+                    DamageRecipientsRef::Target if is_object_body_target(builder.target, true) => {
+                        Some(MatchObjectRef::TargetObject)
+                    }
+                    DamageRecipientsRef::TriggeringObject if in_trigger => {
+                        Some(MatchObjectRef::TriggerSubject)
+                    }
+                    _ => None,
+                },
                 _ => None,
             },
             _ => None,
@@ -5426,17 +5433,21 @@ pub(super) fn lower_marker_or_action_condition(
                 | "excess damage was dealt this way" => {
                     let preceded_by_target_damage = matches!(
                         builder.instructions.last(),
-                        Some(
-                            Instruction::Damage { .. }
-                                | Instruction::DamageAmount(_)
-                                | Instruction::DamageAmountThenExileIfDies(_)
-                                | Instruction::DamageFromPower(_)
-                                | Instruction::CreatureDealsPowerDamageToOther { .. }
-                        )
+                        Some(Instruction::CreatureDealsPowerDamageToOther { .. })
                     ) || matches!(
                         builder.instructions.last(),
-                        Some(Instruction::DealDamageFrom { recipients, .. })
-                            if matches!(recipients.as_ref(), DamageRecipientsRef::Target)
+                        Some(Instruction::DealDamage(spec))
+                            if matches!(
+                                &spec.recipients,
+                                spellwake_engine::toolbox::DamageTargetQuery::Targets
+                                    | spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                                        spellwake_engine::toolbox::ObjectQuery::Targets
+                                    )
+                            ) || matches!(
+                                &spec.recipients,
+                                spellwake_engine::toolbox::DamageTargetQuery::Relative(r)
+                                    if matches!(r.as_ref(), DamageRecipientsRef::Target)
+                            )
                     );
                     if !preceded_by_target_damage || !is_object_body_target(builder.target, true) {
                         return Err("oracle:unsupported-if-condition");

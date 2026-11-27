@@ -23,22 +23,11 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
     body.instructions.iter().all(|ins| match ins {
         Instruction::Jump { .. }
         | Instruction::BranchIfFalse { .. }
-        | Instruction::GainControllerLife { .. }
-        | Instruction::AdjustControllerLife { .. }
-        | Instruction::AdjustPlayersLife { .. }
-        | Instruction::SetPlayersLife { .. }
-        | Instruction::DrainOpponents(_)
-        | Instruction::DrawController { .. }
         | Instruction::DrawCards(_)
+        | Instruction::AdjustLife(_)
+        | Instruction::MutatePlayer(_)
         | Instruction::Mill { .. }
-        | Instruction::MillEachPlayer(_)
-        | Instruction::AddExperienceCounter
-        | Instruction::AddPlayerCounter { .. }
-        | Instruction::WinGame(_)
-        | Instruction::LoseGame(_)
-        | Instruction::TakeExtraTurn
         | Instruction::BecomeMonarch(_)
-        | Instruction::DisallowDamagePreventionThisTurn
         | Instruction::ExileTopPlay { .. } => true,
         Instruction::ZoneOp(spec) => {
             matches!(spec.selection, crate::toolbox::ZoneSelection::All)
@@ -1160,36 +1149,6 @@ impl EffectWindow {
         }
     }
 
-    fn resolve_replacement_players(
-        &self,
-        players: AffectedPlayers,
-        rep: &EventBodyReplacement,
-    ) -> Result<Vec<SeatId>, EffectError> {
-        match players {
-            AffectedPlayers::One(role) => {
-                let seat = self.resolve_replacement_player(role, rep)?;
-                Ok(self
-                    .window
-                    .participants()
-                    .contains(&seat)
-                    .then_some(seat)
-                    .into_iter()
-                    .collect())
-            }
-            AffectedPlayers::EachPlayer => Ok(self.window.apnap_players()?.collect()),
-            AffectedPlayers::EachOpponent | AffectedPlayers::EachOtherPlayer => {
-                let opponents = self
-                    .combat_rules
-                    .opponents(self.window.participants(), rep.controller)?;
-                Ok(self
-                    .window
-                    .apnap_players()?
-                    .filter(|seat| opponents.contains(seat))
-                    .collect())
-            }
-        }
-    }
-
     fn run_inline_replacement_body(
         &mut self,
         rep: &EventBodyReplacement,
@@ -1228,75 +1187,208 @@ impl EffectWindow {
                         continue;
                     }
                 }
-                Instruction::GainControllerLife { amount } => {
-                    let val = self
-                        .resolve_inline_value_expr(rep, &amount, event_amount)?
-                        .max(0.into());
-                    self.adjust_players_at_cut(
-                        synthetic_entry,
-                        synthetic_index,
-                        BTreeMap::from([(rep.controller, LifeAdjustment::Gain(val))]),
-                        append,
-                    )?;
-                }
-                Instruction::AdjustControllerLife { adjustment } => {
-                    self.adjust_players_at_cut(
-                        synthetic_entry,
-                        synthetic_index,
-                        BTreeMap::from([(rep.controller, adjustment)]),
-                        append,
-                    )?;
-                }
-                Instruction::AdjustPlayersLife {
-                    players,
-                    gain,
-                    amount,
-                } => {
-                    let val = self
-                        .resolve_inline_value_expr(rep, &amount, event_amount)?
-                        .max(0.into());
-                    let seats = self.resolve_replacement_players(players, rep)?;
-                    let adj = if gain {
-                        LifeAdjustment::Gain(val)
-                    } else {
-                        LifeAdjustment::Lose(val)
+                Instruction::AdjustLife(spec) => {
+                    let seats: Vec<SeatId> = match &spec.players {
+                        crate::toolbox::PlayerSelector::Resolving(role)
+                        | crate::toolbox::PlayerSelector::Group(AffectedPlayers::One(role)) => {
+                            vec![self.resolve_replacement_player(*role, rep)?]
+                        }
+                        crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer) => {
+                            self.window.apnap_players()?.collect()
+                        }
+                        crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent) => {
+                            self.window
+                                .apnap_players()?
+                                .filter(|seat| *seat != rep.controller)
+                                .collect()
+                        }
+                        _ => Vec::new(),
                     };
-                    let map = seats.into_iter().map(|s| (s, adj.clone())).collect();
-                    self.adjust_players_at_cut(synthetic_entry, synthetic_index, map, append)?;
+                    match &spec.op {
+                        crate::toolbox::LifeOp::Gain(expr) => {
+                            let val = self.resolve_inline_value_expr(rep, expr, event_amount)?;
+                            if val.is_positive() {
+                                let adjustments: BTreeMap<_, _> = seats
+                                    .into_iter()
+                                    .map(|p| (p, LifeAdjustment::Gain(val.clone())))
+                                    .collect();
+                                if !adjustments.is_empty() {
+                                    self.adjust_players_at_cut(
+                                        synthetic_entry,
+                                        synthetic_index,
+                                        adjustments,
+                                        append,
+                                    )?;
+                                }
+                            }
+                        }
+                        crate::toolbox::LifeOp::Lose(expr) => {
+                            let val = self.resolve_inline_value_expr(rep, expr, event_amount)?;
+                            if val.is_positive() {
+                                let adjustments: BTreeMap<_, _> = seats
+                                    .into_iter()
+                                    .map(|p| (p, LifeAdjustment::Lose(val.clone())))
+                                    .collect();
+                                if !adjustments.is_empty() {
+                                    self.adjust_players_at_cut(
+                                        synthetic_entry,
+                                        synthetic_index,
+                                        adjustments,
+                                        append,
+                                    )?;
+                                }
+                            }
+                        }
+                        crate::toolbox::LifeOp::Set(expr) => {
+                            let val = self.resolve_inline_value_expr(rep, expr, event_amount)?;
+                            let adjustments: BTreeMap<_, _> = seats
+                                .into_iter()
+                                .map(|p| (p, LifeAdjustment::Set(val.clone())))
+                                .collect();
+                            if !adjustments.is_empty() {
+                                self.adjust_players_at_cut(
+                                    synthetic_entry,
+                                    synthetic_index,
+                                    adjustments,
+                                    append,
+                                )?;
+                            }
+                        }
+                        crate::toolbox::LifeOp::Drain {
+                            amount,
+                            gain_to,
+                            per_loss,
+                        } => {
+                            let val = self.resolve_inline_value_expr(rep, amount, event_amount)?;
+                            if val.is_positive() {
+                                let mut adjustments: BTreeMap<_, _> = BTreeMap::new();
+                                let mut total_lost: RulesInteger = 0.into();
+                                for p in &seats {
+                                    adjustments.insert(*p, LifeAdjustment::Lose(val.clone()));
+                                    total_lost = total_lost.plus(&val);
+                                }
+                                let gain_amt = if *per_loss { total_lost } else { val.clone() };
+                                let gainers: Vec<SeatId> = match gain_to {
+                                    crate::toolbox::PlayerSelector::Resolving(role)
+                                    | crate::toolbox::PlayerSelector::Group(
+                                        AffectedPlayers::One(role),
+                                    ) => {
+                                        vec![self.resolve_replacement_player(*role, rep)?]
+                                    }
+                                    _ => vec![rep.controller],
+                                };
+                                for g in gainers {
+                                    adjustments.insert(g, LifeAdjustment::Gain(gain_amt.clone()));
+                                }
+                                if !adjustments.is_empty() {
+                                    self.adjust_players_at_cut(
+                                        synthetic_entry,
+                                        synthetic_index,
+                                        adjustments,
+                                        append,
+                                    )?;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
-                Instruction::SetPlayersLife { players, amount } => {
-                    let val = self.resolve_inline_value_expr(rep, &amount, event_amount)?;
-                    let seats = self.resolve_replacement_players(players, rep)?;
-                    let adj = LifeAdjustment::Set(val);
-                    let map = seats.into_iter().map(|s| (s, adj.clone())).collect();
-                    self.adjust_players_at_cut(synthetic_entry, synthetic_index, map, append)?;
-                }
-                Instruction::DrainOpponents(amount) => {
-                    let val = self
-                        .resolve_inline_value_expr(rep, &amount, event_amount)?
-                        .max(0.into());
-                    self.drain_opponents(
-                        synthetic_entry,
-                        synthetic_index,
-                        rep.controller,
-                        &val,
-                        append,
-                    )?;
-                }
-                Instruction::DrawController { amount } => {
-                    let val = self
-                        .resolve_inline_value_expr(rep, &amount, event_amount)?
-                        .max(0.into());
-                    if val.is_positive() && self.window.participants().contains(&rep.controller) {
-                        let _ = self.draw_at_cuts(
-                            rep.controller,
-                            val,
-                            DrawOrigin::Instruction {
-                                entry: synthetic_entry,
-                                instruction: synthetic_index,
-                            },
-                            append,
-                        )?;
+                Instruction::MutatePlayer(spec) => {
+                    let seats: Vec<SeatId> = match &spec.players {
+                        crate::toolbox::PlayerSelector::Resolving(role)
+                        | crate::toolbox::PlayerSelector::Group(AffectedPlayers::One(role)) => {
+                            vec![self.resolve_replacement_player(*role, rep)?]
+                        }
+                        crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer) => {
+                            self.window.apnap_players()?.collect()
+                        }
+                        crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent) => {
+                            self.window
+                                .apnap_players()?
+                                .filter(|seat| *seat != rep.controller)
+                                .collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    match &spec.op {
+                        crate::toolbox::PlayerMutation::AddCounter { kind, amount } => {
+                            let val = self
+                                .resolve_inline_value_expr(rep, amount, event_amount)?
+                                .max(0.into());
+                            if val.is_positive() {
+                                for seat in seats {
+                                    self.inline_add_player_counter(
+                                        seat,
+                                        *kind,
+                                        &val,
+                                        cause.clone(),
+                                        append,
+                                    )?;
+                                }
+                            }
+                        }
+                        crate::toolbox::PlayerMutation::WinGame => {
+                            if let Some(&winner) = seats.first() {
+                                let evaluated = self.evaluated_characteristics()?;
+                                if self.window.participants().contains(&winner)
+                                    && !self.player_cannot_win(&evaluated, winner)?
+                                {
+                                    self.won_by_effect =
+                                        Some((winner, rep.source.unwrap_or(ObjectId::SENTINEL)));
+                                }
+                            }
+                        }
+                        crate::toolbox::PlayerMutation::LoseGame => {
+                            let evaluated = self.evaluated_characteristics()?;
+                            let mut losing = BTreeSet::new();
+                            for seat in seats {
+                                if self.window.participants().contains(&seat)
+                                    && !self.player_cannot_lose(&evaluated, seat, false)?
+                                    && !self.try_replace_player_loss(
+                                        &evaluated,
+                                        seat,
+                                        cause.clone(),
+                                        append,
+                                    )?
+                                {
+                                    losing.insert(seat);
+                                }
+                            }
+                            if !losing.is_empty() {
+                                let before = self.rules_snapshot(None)?;
+                                let mut occs = Vec::with_capacity(losing.len());
+                                for &seat in &losing {
+                                    self.state_based_losses.insert(seat);
+                                    occs.push(RulesOccurrence::PlayerLost {
+                                        player: seat,
+                                        reasons: [crate::occurrence::PlayerLossReason::Effect]
+                                            .into(),
+                                    });
+                                }
+                                self.emit_from(cause.clone(), &before, None, append, |_, _, _| {
+                                    Ok(occs)
+                                })?;
+                            }
+                        }
+                        crate::toolbox::PlayerMutation::TakeExtraTurn => {
+                            for seat in seats {
+                                self.extra_turns.push(seat);
+                            }
+                        }
+                        crate::toolbox::PlayerMutation::BecomeMonarch => {
+                            if let Some(&seat) = seats.first() {
+                                self.become_monarch(
+                                    synthetic_entry,
+                                    synthetic_index,
+                                    seat,
+                                    append,
+                                )?;
+                            }
+                        }
+                        crate::toolbox::PlayerMutation::DisallowDamagePreventionThisTurn => {
+                            self.damage_state.prevention_disallowed_this_turn = true;
+                        }
+                        _ => {}
                     }
                 }
                 Instruction::DrawCards(spec) => {
@@ -1507,13 +1599,6 @@ impl EffectWindow {
                         .max(0.into());
                     self.inline_mill_player(seat, &val, cause.clone(), append)?;
                 }
-                Instruction::MillEachPlayer(amount) => {
-                    let val = RulesInteger::from(i64::from(amount));
-                    let seats: Vec<SeatId> = self.window.apnap_players()?.collect();
-                    for seat in seats {
-                        self.inline_mill_player(seat, &val, cause.clone(), append)?;
-                    }
-                }
                 Instruction::RemoveCountersFromPermanent {
                     target_self: true,
                     kind: Some(kind),
@@ -1534,35 +1619,6 @@ impl EffectWindow {
                         }
                     }
                 }
-                Instruction::AddExperienceCounter => {
-                    self.inline_add_player_counter(
-                        rep.controller,
-                        CounterKind::Experience,
-                        &1.into(),
-                        cause.clone(),
-                        append,
-                    )?;
-                }
-                Instruction::AddPlayerCounter {
-                    players,
-                    kind,
-                    amount,
-                } => {
-                    let val = self
-                        .resolve_inline_value_expr(rep, &amount, event_amount)?
-                        .max(0.into());
-                    if val.is_positive() {
-                        for seat in self.resolve_replacement_players(players, rep)? {
-                            self.inline_add_player_counter(
-                                seat,
-                                kind,
-                                &val,
-                                cause.clone(),
-                                append,
-                            )?;
-                        }
-                    }
-                }
                 Instruction::CreateTokens { creations } => {
                     self.inline_create_tokens(
                         &creations,
@@ -1572,50 +1628,6 @@ impl EffectWindow {
                         append,
                     )?;
                 }
-                Instruction::WinGame(player) => {
-                    let winner = self.resolve_replacement_player(player, rep)?;
-                    let evaluated = self.evaluated_characteristics()?;
-                    if self.window.participants().contains(&winner)
-                        && !self.player_cannot_win(&evaluated, winner)?
-                    {
-                        self.won_by_effect =
-                            Some((winner, rep.source.unwrap_or(ObjectId::SENTINEL)));
-                    }
-                }
-                Instruction::LoseGame(players) => {
-                    let evaluated = self.evaluated_characteristics()?;
-                    let mut losing = BTreeSet::new();
-                    for seat in self.resolve_replacement_players(players, rep)? {
-                        if self.window.participants().contains(&seat)
-                            && !self.player_cannot_lose(&evaluated, seat, false)?
-                        {
-                            losing.insert(seat);
-                        }
-                    }
-                    if !losing.is_empty() {
-                        let before = self.rules_snapshot(None)?;
-                        let mut loss_occs = Vec::with_capacity(losing.len());
-                        for &seat in &losing {
-                            self.state_based_losses.insert(seat);
-                            loss_occs.push(RulesOccurrence::PlayerLost {
-                                player: seat,
-                                reasons: [crate::occurrence::PlayerLossReason::Effect].into(),
-                            });
-                        }
-                        self.emit_from(cause.clone(), &before, None, append, |_, _, _| {
-                            Ok(loss_occs)
-                        })?;
-                    }
-                }
-                Instruction::TakeExtraTurn => {
-                    self.extra_turns.push(rep.controller);
-                    let before = self.rules_snapshot(None)?;
-                    self.emit_from(cause.clone(), &before, None, append, |_, _, _| {
-                        Ok(vec![RulesOccurrence::ExtraTurnCreated {
-                            player: rep.controller,
-                        }])
-                    })?;
-                }
                 Instruction::BecomeMonarch(player) => {
                     self.become_monarch(
                         synthetic_entry,
@@ -1623,9 +1635,6 @@ impl EffectWindow {
                         player.unwrap_or(rep.controller),
                         append,
                     )?;
-                }
-                Instruction::DisallowDamagePreventionThisTurn => {
-                    self.damage_state.prevention_disallowed_this_turn = true;
                 }
                 Instruction::ZoneOp(spec) => {
                     let evaluated = self.evaluated_characteristics()?;

@@ -11,7 +11,6 @@ use spellwake_engine::{
         StaticPart, StaticParts,
     },
     land::EntryTap,
-    life::LifeAdjustment,
     mana::{ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaType},
     program::{
         BodyTarget, Comparison, EffectSubject, ExecutableBody, Instruction, LibraryPlacement,
@@ -118,10 +117,19 @@ pub(super) fn spell(
     use Instruction::*;
     let draw =
         |n| crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(amount(n));
-    let lose = |n: i64| AdjustTargetLife {
-        adjustment: LifeAdjustment::Lose(n.into()),
+    let lose = |n: i64| {
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
+            amount(n),
+        )
     };
-    let damage = |n: i64| Damage { amount: n.into() };
+    let damage = |n: i64| {
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount(n),
+            false,
+        )
+    };
     let counters = |n: i64| {
         crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
             spellwake_engine::effects::CounterKind::PlusOne,
@@ -220,11 +228,26 @@ pub(super) fn spell(
         ),
         "Corpse Lunge deals damage equal to the exiled card's power to target creature." if name == "Corpse Lunge" => (
             SingleCreature,
-            vec![DamageAmount(spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::ExiledCostCreature, spellwake_engine::program::ObjectStatKind::Power))],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::object_stat(
+                        spellwake_engine::program::ValueObjectRef::ExiledCostCreature,
+                        spellwake_engine::program::ObjectStatKind::Power,
+                    ),
+                    false,
+                ),
+            ],
         ),
         "Harvest Pyre deals X damage to target creature." if name == "Harvest Pyre" => (
             SingleCreature,
-            vec![DamageAmount(spellwake_engine::program::ValueExpr::chosen_x())],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::chosen_x(),
+                    false,
+                ),
+            ],
         ),
         "Each instant and sorcery card in your graveyard gains flashback until end of turn. The flashback cost is equal to its mana cost." => (
             NoTarget,
@@ -242,7 +265,15 @@ pub(super) fn spell(
                     },
                     destination: 3,
                 },
-                GainControllerLife { amount: spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::DestructionTarget, spellwake_engine::program::ObjectStatKind::Toughness) },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::object_stat(
+                        spellwake_engine::program::ValueObjectRef::DestructionTarget,
+                        spellwake_engine::program::ObjectStatKind::Toughness,
+                    ),
+                ),
             ],
         ),
         "Target player discards two cards. Morbid — If a creature died this turn, instead that player reveals their hand, you choose two cards from it, then that player discards those cards." => (
@@ -267,7 +298,15 @@ pub(super) fn spell(
         "Transform all Humans. Prevent all combat damage that would be dealt this turn by creatures other than Werewolves and Wolves." => (
             NoTarget,
             vec![
-                TransformSubtype(subtype("Human")?),
+                Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::all(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                            ObjectFilter::creature().with_subtype(subtype("Human")?),
+                        ),
+                        spellwake_engine::toolbox::ObjectMutation::Transform,
+                    ),
+                )),
                 PreventDamageThisTurn(spellwake_engine::damage::TurnPreventionFilter::CombatFromCreaturesWithoutEitherSubtype(
                     subtype("Werewolf")?, subtype("Wolf")?,
                 )),
@@ -322,7 +361,14 @@ pub(super) fn spell(
             (
                 NoTarget,
                 vec![
-                    PreventDamageThisTurn(spellwake_engine::damage::TurnPreventionFilter::Combat),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+                        spellwake_engine::damage::TurnPreventionSpec {
+                            combat_only: true,
+                            source: spellwake_engine::damage::PreventionSourceSpec::Any,
+                            recipient: spellwake_engine::damage::PreventionRecipientSpec::Any,
+                            both_directions: false,
+                        },
+                    ),
                     BranchIfFalse {
                         condition: ResolutionCondition {
                             left: spellwake_engine::program::ValueExpr::PlayerStat(spellwake_engine::program::PlayerStatExpr::ControllerLife),
@@ -337,17 +383,33 @@ pub(super) fn spell(
         }
         "You gain 2 life for each creature card in your graveyard." => (
             NoTarget,
-            vec![GainControllerLife {
-                amount: spellwake_engine::program::ValueExpr::count_graveyard(spellwake_engine::program::ResolvingPlayer::Controller, spellwake_engine::program::ObjectFilter::creature()).scaled(i64::from(2)),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::count_graveyard(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                        spellwake_engine::program::ObjectFilter::creature(),
+                    )
+                    .scaled(i64::from(2)),
+                ),
+            ],
         ),
         "You gain 2 life for each card in your graveyard, then shuffle your graveyard into your library." => {
             (
                 NoTarget,
                 vec![
-                    GainControllerLife {
-                        amount: spellwake_engine::program::ValueExpr::count_graveyard(spellwake_engine::program::ResolvingPlayer::Controller, spellwake_engine::program::ObjectFilter::any()).scaled(i64::from(2)),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::count_graveyard(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                            spellwake_engine::program::ObjectFilter::any(),
+                        )
+                        .scaled(i64::from(2)),
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), spellwake_engine::program::ObjectFilter::any()), spellwake_engine::toolbox::ZoneDest::Library { position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto })),
                 ],
             )
@@ -357,10 +419,17 @@ pub(super) fn spell(
         {
             (
                 NoTarget,
-                vec![DamageGroup {
-                    group: spellwake_engine::program::DamageGroup::CreaturesWithoutFlying,
-                    amount: 2.into(),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                            spellwake_engine::program::DamageRecipientsRef::Group(
+                                spellwake_engine::program::DamageGroup::CreaturesWithoutFlying,
+                            ),
+                        )),
+                        amount(2),
+                        false,
+                    ),
+                ],
             )
         }
         "Destroy target land. Scorch the Fields deals 1 damage to each Human creature."
@@ -370,12 +439,17 @@ pub(super) fn spell(
                 FilteredPermanent(ObjectFilter::land()),
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } })),
-                    DamageGroup {
-                        group: spellwake_engine::program::DamageGroup::CreaturesOfSubtype(subtype(
-                            "Human",
-                        )?),
-                        amount: 1.into(),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                            spellwake_engine::program::DamageRecipientsRef::Group(
+                                spellwake_engine::program::DamageGroup::CreaturesOfSubtype(
+                                    subtype("Human")?,
+                                ),
+                            ),
+                        )),
+                        amount(1),
+                        false,
+                    ),
                 ],
             )
         }
@@ -383,9 +457,14 @@ pub(super) fn spell(
             NoTarget,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(ObjectFilter::enchantment(), true),
-                GainControllerLife {
-                    amount: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::DestroyedPermanents),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::event(
+                        spellwake_engine::program::EventValueKind::DestroyedPermanents,
+                    ),
+                ),
             ],
         ),
         "Discard all the cards in your hand, then draw that many cards." => (
@@ -407,7 +486,16 @@ pub(super) fn spell(
         {
             (
                 SingleAnyTarget,
-                vec![DamageAmount(spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::SacrificedCreature, spellwake_engine::program::ObjectStatKind::Power))],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::object_stat(
+                            spellwake_engine::program::ValueObjectRef::SacrificedCreature,
+                            spellwake_engine::program::ObjectStatKind::Power,
+                        ),
+                        false,
+                    ),
+                ],
             )
         }
         "Create five 1/1 white Human creature tokens. If this spell was cast from a graveyard, create ten of those tokens instead." => {
@@ -492,7 +580,15 @@ pub(super) fn spell(
                         required_types: [spellwake_engine::program::CardType::Creature].into(),
                         forbidden_types: Default::default(), object_filter: None },
                 },
-                GainControllerLife { amount: spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::LastSacrificedCreature, spellwake_engine::program::ObjectStatKind::Toughness) },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::object_stat(
+                        spellwake_engine::program::ValueObjectRef::LastSacrificedCreature,
+                        spellwake_engine::program::ObjectStatKind::Toughness,
+                    ),
+                ),
             ],
         ),
         "Return all Zombie creature cards from your graveyard to the battlefield tapped, then destroy all Humans." => (
@@ -564,7 +660,13 @@ pub(super) fn spell(
         ),
         "Devil's Play deals X damage to any target." if name == "Devil's Play" => (
             SingleAnyTarget,
-            vec![DamageAmount(spellwake_engine::program::ValueExpr::chosen_x())],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::chosen_x(),
+                    false,
+                ),
+            ],
         ),
         "Target creature deals damage to itself equal to its power." => (
             SingleCreature,
@@ -937,7 +1039,13 @@ pub(super) fn compile(
             amount(1),
         )
     };
-    let damage_two = || Damage { amount: 2.into() };
+    let damage_two = || {
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount(2),
+            false,
+        )
+    };
     let mill = |player, n| Mill {
         player,
         amount: amount(n),
@@ -1432,7 +1540,11 @@ pub(super) fn compile(
             vec![(
                 etb,
                 BodyTarget::FilteredPermanent(ObjectFilter::creature().attacking_or_blocking()),
-                vec![RemoveTargetFromCombat],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_from_combat(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ),
+                ],
             )],
         ),
         "Werewolf creatures you control get +1/+0 and have trample.\nSacrifice this enchantment: Regenerate all Werewolf creatures you control."
@@ -1535,7 +1647,14 @@ pub(super) fn compile(
                 &mut program,
                 spellwake_engine::program::TriggerSpec::blocks_or_blocked(spellwake_engine::program::ObjectFilter::any().attached_to_self(), spellwake_engine::program::BlockTriggerKind::Blocks),
                 NoTarget,
-                vec![GainControllerLife { amount: amount(3) }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        amount(3),
+                    ),
+                ],
             );
             return Some(program);
         }
@@ -1545,7 +1664,12 @@ pub(super) fn compile(
                 fixed_cost("{1}")?,
                 SourceCost::None,
                 NoTarget,
-                vec![TapEnchantedCreature],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
+                        spellwake_engine::toolbox::ObjectQuery::AttachedHost,
+                        spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                    ),
+                ],
             ));
             return Some(program);
         }
@@ -1619,9 +1743,27 @@ pub(super) fn compile(
         {
             let mut program = Program::aura(Some(price()?), EnchantRestriction::Player);
             program.enchantment_subtypes.insert(spellwake_engine::program::EnchantmentSubtype::Curse);
-            add_trigger(&mut program, spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::StepBegan { step: spellwake_engine::turn::Step::Upkeep, player: spellwake_engine::program::TriggerPlayerScope::EnchantedPlayer }), NoTarget, vec![
-                DamageGroup { group: spellwake_engine::program::DamageGroup::RelatedPlayerOrTheirPlaneswalker, amount: 1.into() },
-            ]);
+            add_trigger(
+                &mut program,
+                spellwake_engine::program::TriggerSpec::new(
+                    spellwake_engine::program::TriggerEvent::StepBegan {
+                        step: spellwake_engine::turn::Step::Upkeep,
+                        player: spellwake_engine::program::TriggerPlayerScope::EnchantedPlayer,
+                    },
+                ),
+                NoTarget,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                            spellwake_engine::program::DamageRecipientsRef::Group(
+                                spellwake_engine::program::DamageGroup::RelatedPlayerOrTheirPlaneswalker,
+                            ),
+                        )),
+                        amount(1),
+                        false,
+                    ),
+                ],
+            );
             return Some(program);
         }
         "Enchant player\nAt the beginning of enchanted player's upkeep, that player exiles two cards from their graveyard."
@@ -1643,7 +1785,19 @@ pub(super) fn compile(
                 &mut program,
                 spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::StepBegan { step: spellwake_engine::turn::Step::Upkeep, player: spellwake_engine::program::TriggerPlayerScope::EnchantedPlayer }),
                 NoTarget,
-                vec![DamageRelatedPlayerAmount(spellwake_engine::program::ValueExpr::AttachedCount(spellwake_engine::program::AttachedCountKind::CursesOnRelatedPlayer))],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                            spellwake_engine::program::DamageRecipientsRef::Group(
+                                spellwake_engine::program::DamageGroup::RelatedPlayer,
+                            ),
+                        )),
+                        spellwake_engine::program::ValueExpr::AttachedCount(
+                            spellwake_engine::program::AttachedCountKind::CursesOnRelatedPlayer,
+                        ),
+                        false,
+                    ),
+                ],
             );
             return Some(program);
         }
@@ -1803,10 +1957,17 @@ pub(super) fn compile(
             vec![(
                 spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::creature().controlled(), spellwake_engine::program::AttackTriggerMode::Individual { capture_defender: true }),
                 NoTarget,
-                vec![DamageGroup {
-                    group: spellwake_engine::program::DamageGroup::CapturedAttackedPlayerOrPlaneswalker,
-                    amount: 1.into(),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                            spellwake_engine::program::DamageRecipientsRef::Group(
+                                spellwake_engine::program::DamageGroup::CapturedAttackedPlayerOrPlaneswalker,
+                            ),
+                        )),
+                        amount(1),
+                        false,
+                    ),
+                ],
             )],
         ),
         "When this creature enters, it deals 1 damage to target creature and 1 damage to you." => (
@@ -1814,10 +1975,17 @@ pub(super) fn compile(
             vec![(
                 etb,
                 SingleCreature,
-                vec![DamageGroup {
-                    group: spellwake_engine::program::DamageGroup::ControllerAndTargetCreature,
-                    amount: 1.into(),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                            spellwake_engine::program::DamageRecipientsRef::Group(
+                                spellwake_engine::program::DamageGroup::ControllerAndTargetCreature,
+                            ),
+                        )),
+                        amount(1),
+                        false,
+                    ),
+                ],
             )],
         ),
         "Whenever this creature attacks or blocks, other Humans you control get +1/+1 until end of turn." => (
@@ -1844,7 +2012,17 @@ pub(super) fn compile(
             vec![(
                 spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::creature(), mode: spellwake_engine::program::DiesTriggerMode::DamagedBySource }),
                 NoTarget,
-                vec![GainControllerLife { amount: spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::DyingCreature, spellwake_engine::program::ObjectStatKind::Toughness) }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::object_stat(
+                            spellwake_engine::program::ValueObjectRef::DyingCreature,
+                            spellwake_engine::program::ObjectStatKind::Toughness,
+                        ),
+                    ),
+                ],
             )],
         ),
         "Flying\nAt the beginning of your upkeep, return target Spirit card from your graveyard to your hand." => (
@@ -1868,7 +2046,17 @@ pub(super) fn compile(
                     count: 1,
                 },
                 NoTarget,
-                vec![GainControllerLife { amount: spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::SacrificedCreature, spellwake_engine::program::ObjectStatKind::Toughness) }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::object_stat(
+                            spellwake_engine::program::ValueObjectRef::SacrificedCreature,
+                            spellwake_engine::program::ObjectStatKind::Toughness,
+                        ),
+                    ),
+                ],
             ));
             return Some(program);
         }
@@ -1918,7 +2106,11 @@ pub(super) fn compile(
                 fixed_cost("{1}{R}")?, SourceCost::None,
                 BodyTarget::FilteredPermanent(ObjectFilter::creature().other_than_ability_source()),
                 vec![
-                    Damage { amount: 1.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount(1),
+                        false,
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
@@ -2124,7 +2316,27 @@ pub(super) fn compile(
                 NoTarget,
                 vec![
                     OptionalSequence { chooser: ResolvingPlayer::Controller, instructions: 2 },
-                    SacrificeMatching(spellwake_engine::program::SacrificeSelection::NontokenCreature),
+                    Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::simple(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                ObjectFilter::creature().nontoken().controlled(),
+                            ),
+                            spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                min: Box::new(spellwake_engine::program::ValueExpr::literal(1)),
+                                max: Box::new(spellwake_engine::program::ValueExpr::literal(1)),
+                                constraint: None,
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                hidden: false,
+                            },
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
+                            },
+                        ),
+                    )),
                     tokens("a 2/2 green Wolf creature token", spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::LastSacrificedCreature, spellwake_engine::program::ObjectStatKind::Toughness), false, vocabulary)?,
                 ],
             );
@@ -2147,7 +2359,12 @@ pub(super) fn compile(
                         },
                         destination: 3,
                     },
-                    AdjustControllerLife { adjustment: LifeAdjustment::Gain(2.into()) },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        amount(2),
+                    ),
                 ],
             )]));
         }
@@ -2184,7 +2401,13 @@ pub(super) fn compile(
                         ManaCost::free(),
                         SourceCost::Tap,
                         target,
-                        vec![Damage { amount: damage.into() }],
+                        vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                spellwake_engine::program::ValueExpr::Literal(damage.into()),
+                                false,
+                            ),
+                        ],
                     )))]),
                 )?;
             }
@@ -2217,7 +2440,16 @@ pub(super) fn compile(
                 fixed_cost("{3}{R}")?,
                 SourceCost::None,
                 SingleAnyTarget,
-                vec![mill(ResolvingPlayer::Controller, 3), DamageAmount(spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::MilledCardsManaValueMax))],
+                vec![
+                    mill(ResolvingPlayer::Controller, 3),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::event(
+                            spellwake_engine::program::EventValueKind::MilledCardsManaValueMax,
+                        ),
+                        false,
+                    ),
+                ],
             ));
             return Some(program);
         }
@@ -2342,10 +2574,13 @@ pub(super) fn compile(
                 fixed_cost("{1}")?,
                 SourceCost::None,
                 NoTarget,
-                vec![ChangeAbilitySource {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(change)]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Source,
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(change)]),
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                ],
             ));
             return Some(program);
         }
@@ -2372,7 +2607,14 @@ pub(super) fn compile(
             vec![(
                 spellwake_engine::program::TriggerSpec::self_enters().only_if(spellwake_engine::program::TriggerCondition::Morbid),
                 NoTarget,
-                morbid(GainControllerLife { amount: amount(5) }),
+                morbid(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        amount(5),
+                    ),
+                ),
             )],
         ),
         "Morbid — When this creature enters, if a creature died this turn, target creature gets -4/-4 until end of turn." => {
@@ -2470,7 +2712,17 @@ pub(super) fn compile(
             use spellwake_engine::characteristics::{StaticAbilityId};
             let mut program = aura()?;
             program.continuous = Some(spellwake_engine::characteristics::StaticContinuousAbility::UntapRule { id: StaticAbilityId(0), rule: spellwake_engine::characteristics::StaticUntapRule::EnchantedCreatureSkipsUntap });
-            add_trigger(&mut program, etb, NoTarget, vec![TapEnchantedCreature]);
+            add_trigger(
+                &mut program,
+                etb,
+                NoTarget,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
+                        spellwake_engine::toolbox::ObjectQuery::AttachedHost,
+                        spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                    ),
+                ],
+            );
             return Some(program);
         }
         "When this creature enters, you may have it deal 4 damage to target creature with flying." => {
@@ -2483,7 +2735,11 @@ pub(super) fn compile(
                         OptionalEffect {
                             chooser: ResolvingPlayer::Controller,
                         },
-                        Damage { amount: 4.into() },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            amount(4),
+                            false,
+                        ),
                     ],
                 )],
             )
@@ -2576,10 +2832,13 @@ pub(super) fn compile(
                 fixed_cost("{2}{G}")?,
                 SourceCost::None,
                 NoTarget,
-                vec![ChangeAbilitySource {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(stats(2, 2))]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Source,
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(stats(2, 2))]),
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                ],
             );
             program
                 .activation_restrictions
@@ -2616,10 +2875,18 @@ pub(super) fn compile(
                     spellwake_engine::program::TriggerSpec::dies(ObjectFilter::creature()),
                     SinglePlayer,
                     vec![
-                        AdjustTargetLife {
-                            adjustment: LifeAdjustment::Lose(1.into()),
-                        },
-                        GainControllerLife { amount: amount(1) },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                            amount(1),
+                        ),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            amount(1),
+                        ),
                     ],
                 )],
             )
@@ -2672,7 +2939,13 @@ pub(super) fn compile(
             vec![(
                 spellwake_engine::program::TriggerSpec::dies(ObjectFilter::self_object()),
                 SingleAnyTarget,
-                vec![Damage { amount: 3.into() }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount(3),
+                        false,
+                    ),
+                ],
             )],
         ),
         "Flying\nAt the beginning of your upkeep, target player draws a card and loses 1 life." => {
@@ -2683,9 +2956,12 @@ pub(super) fn compile(
                     SinglePlayer,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(amount(1)),
-                        AdjustTargetLife {
-                            adjustment: LifeAdjustment::Lose(1.into()),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                            amount(1),
+                        ),
                     ],
                 )],
             )

@@ -37,7 +37,16 @@ fn board(name: &str, price: &[(ManaType, i64)], mut extra: Vec<SeedCard>) -> Gam
             8,
             A,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::None, Instruction::AddExperienceCounter),
+            free_instant(
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::add_player_counter(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    CounterKind::Experience,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ),
         ),
     ]);
     prepare(game(vec![A, B], extra, price, Step::PrecombatMain))

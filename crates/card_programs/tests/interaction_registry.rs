@@ -284,9 +284,14 @@ fn assert_complete_programs(registry: &Registry, vocabulary: &CreatureTypeVocabu
                         ),
                         "Divination" => ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::DrawController {
-                                amount: ValueExpr::Literal(2.into()),
-                            }],
+                            vec![spellwake_engine::program::Instruction::DrawCards(Box::new(
+                                spellwake_engine::toolbox::DrawCardsSpec::simple(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                    ValueExpr::Literal(2.into()),
+                                ),
+                            ))],
                         ),
                         _ => panic!("unlisted selected spell"),
                     };

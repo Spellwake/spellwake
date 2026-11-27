@@ -9,7 +9,6 @@ use spellwake_engine::{
     effects::Program,
     game::{GameCommand, GameContext, GameId},
     land::{BasicLandType, LandType},
-    life::LifeAdjustment,
     mana::{ManaAbility, ManaAbilityId, ManaAbilityRef, ManaCost, ManaOutput, ManaType},
     object_identity::ObjectDestination,
     program::{BodyTarget, ExecutableBody, Instruction},
@@ -102,9 +101,14 @@ fn action_state() -> GameState {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                }],
+                vec![Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         card(
@@ -113,7 +117,16 @@ fn action_state() -> GameState {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreatureOrPlayer,
-                vec![Instruction::Damage { amount: 1.into() }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
             ),
         ),
         card(
@@ -140,7 +153,16 @@ fn action_state() -> GameState {
                     source_cost: SourceCost::None,
                     body: ExecutableBody::new(
                         BodyTarget::SingleCreatureOrPlayer,
-                        vec![Instruction::Damage { amount: 1.into() }],
+                        vec![Instruction::DealDamage(Box::new(
+                            spellwake_engine::toolbox::DealDamageSpec {
+                                source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                                recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                                    spellwake_engine::program::ValueExpr::literal(1),
+                                ),
+                                exile_if_dies: false,
+                            },
+                        ))],
                     ),
                 }],
             ),
@@ -411,9 +433,14 @@ fn native_payment_time_mana_color_restores_parent_and_rejects_old_handles() {
                         paid_destination: 1,
                         declined_destination: 2,
                     },
-                    Instruction::AdjustControllerLife {
-                        adjustment: LifeAdjustment::Gain(3.into()),
-                    },
+                    Instruction::AdjustLife(Box::new(
+                        spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(3),
+                        ),
+                    )),
                 ],
             ),
         ),

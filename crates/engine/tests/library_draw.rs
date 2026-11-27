@@ -5,7 +5,7 @@ use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     activated::ActivatedAbilityId,
     draw::{DrawEvent, GameOutcome},
-    effects::{Instruction, Program, SeedCard},
+    effects::{Program, SeedCard},
     game::{
         DecisionId, DecisionReply, GameCommand, GameContext, GameError, GameId, GameInput,
         GameState,
@@ -282,7 +282,16 @@ fn card(id: u64, owner: SeatId, destination: ObjectDestination) -> SeedCard {
             spellwake_engine::mana::ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 1.into() }],
+                vec![spellwake_engine::program::Instruction::DealDamage(
+                    Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                        exile_if_dies: false,
+                    }),
+                )],
             ),
         ),
     }

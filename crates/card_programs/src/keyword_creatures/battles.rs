@@ -1,7 +1,6 @@
 //! Transforming Sieges with a supported entry trigger and keyword creature reverse face.
 use super::*;
 use spellwake_engine::characteristics::Color;
-use spellwake_engine::life::LifeAdjustment;
 use spellwake_engine::program::{
     BodyTarget, CardType, ExecutableBody, Instruction, ProgramKind, TriggerGrouping,
     TriggeredAbility, TriggeredAbilityId,
@@ -70,9 +69,12 @@ pub(super) fn compile(
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::AdjustControllerLife {
-                        adjustment: LifeAdjustment::Gain(i64::from(life).into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(i64::from(life)),
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
                     ),

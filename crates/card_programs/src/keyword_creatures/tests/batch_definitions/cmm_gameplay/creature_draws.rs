@@ -905,7 +905,11 @@ fn cmm_zones_losheel_prevents_damage_only_to_controlled_attackers_that_are_artif
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::Damage { amount: 1.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    false,
+                ),
             ),
         ),
     ];

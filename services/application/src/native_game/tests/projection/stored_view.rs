@@ -341,9 +341,14 @@ fn stored_view_restores_triggered_and_continuous_descriptors_without_activating_
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            }],
+            vec![Instruction::AdjustLife(Box::new(
+                spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ))],
         ),
     }];
     let source = main_state(vec![card(

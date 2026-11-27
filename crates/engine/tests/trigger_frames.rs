@@ -12,9 +12,7 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination},
     occurrence::{RulesRecord, TriggerError},
     priority::{PriorityPhase, SeatId},
-    program::{
-        BodyTarget, ExecutableBody, Instruction, Program, TriggeredAbility, TriggeredAbilityId,
-    },
+    program::{BodyTarget, ExecutableBody, Program, TriggeredAbility, TriggeredAbilityId},
     setup::GameSeed,
     stack_window::WindowPhase,
 };
@@ -33,9 +31,14 @@ fn issued() -> NativeCandidate {
         ),
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![spellwake_engine::program::Instruction::DrawCards(Box::new(
+                spellwake_engine::toolbox::DrawCardsSpec::simple(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         ),
     });
     GameState::initialize(

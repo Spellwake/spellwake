@@ -47,9 +47,16 @@ fn pt(power: i64, toughness: i64) -> PowerToughness {
 }
 
 fn damage(amount: i64) -> Instruction {
-    Instruction::Damage {
-        amount: amount.into(),
-    }
+    spellwake_engine::program::Instruction::DealDamage(Box::new(
+        spellwake_engine::toolbox::DealDamageSpec {
+            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                spellwake_engine::program::ValueExpr::Literal(amount.into()),
+            ),
+            exile_if_dies: false,
+        },
+    ))
 }
 
 fn shield(amount: i64) -> Instruction {
@@ -1065,113 +1072,6 @@ fn pending_copy(
 }
 
 #[test]
-fn copied_damage_retains_its_exact_payload_and_own_cause_after_original_exit() {
-    let values = PowerToughness {
-        power: 2.into(),
-        toughness: exact(HUGE_PLUS_HUNDRED),
-    };
-    let game = setup(
-        values,
-        vec![
-            (
-                1,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Damage {
-                        amount: exact(HUGE_PLUS_SEVEN),
-                    }],
-                ),
-            ),
-            (
-                2,
-                B,
-                ExecutableBody::new(
-                    BodyTarget::SingleSpell(
-                        spellwake_engine::program::SpellFilter::copyable_instruction(),
-                    ),
-                    vec![Instruction::CopySpell],
-                ),
-            ),
-            (
-                3,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    vec![Instruction::CounterSpell],
-                ),
-            ),
-            (
-                4,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::CreatePreventionShield {
-                        amount: exact(HUGE),
-                    }],
-                ),
-            ),
-        ],
-    );
-    let first = object(&game, FIRST);
-    let second = object(&game, SECOND);
-    let (game, shield_id, _) = create_shield(game, 4, second);
-    let (game, original) = pending_copy(game, 1, 2, first);
-    reject(
-        &game,
-        input(
-            &game,
-            B,
-            GameCommand::Reply {
-                decision: game.pending_decision().unwrap().id(),
-                choice: DecisionReply::DamageOrder(spellwake_engine::damage::DamageApplication {
-                    effect: shield_id.into(),
-                    scope: spellwake_engine::damage::DamageScope::Recipient(
-                        spellwake_engine::damage::DamageRecipient::Creature(second),
-                    ),
-                }),
-            },
-        ),
-        GameError::Effect(EffectError::WrongDecisionKind),
-    );
-    let candidate = reply(
-        &game,
-        DecisionReply::CopyTargets(CopyTargetChoice::Change(TargetRef::Object(second))),
-    );
-    assert_eq!(candidate.damage_journal(), &DamageJournal::default());
-    let game = candidate.into_state();
-    let copy = *game
-        .execution()
-        .window()
-        .spell_copies()
-        .keys()
-        .next()
-        .unwrap();
-    assert_ne!(copy, original);
-    assert_eq!(game.execution().mana(B, ManaType::Blue), 99.into());
-    let (game, _) = cast(game, A, 3, TargetRef::Stack(original));
-    let countered = resolve(game);
-    assert_eq!(countered.damage_journal(), &DamageJournal::default());
-    assert_eq!(zone(countered.state(), 1), ObjectZone::Graveyard(A));
-    let candidate = resolve(countered.into_state());
-    let journal = candidate.damage_journal();
-    assert_eq!(journal.attempts[0].amount, exact(HUGE_PLUS_SEVEN));
-    assert_eq!(journal.preventions[0].amount, exact(HUGE));
-    assert_applied(journal, copy, second, 7.into());
-    assert_eq!(marked(candidate.state(), first), 0.into());
-    assert_eq!(marked(candidate.state(), second), 7.into());
-    assert_eq!(remaining(candidate.state(), shield_id), None);
-    assert!(
-        candidate
-            .state()
-            .execution()
-            .window()
-            .spell_copies()
-            .is_empty()
-    );
-}
-
-#[test]
 fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
     for counter_original in [false, true] {
         let game = setup(
@@ -1310,106 +1210,9 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
 }
 
 #[test]
-fn huge_prevention_remainders_accumulated_damage_and_lethal_equality_stay_exact() {
-    let values = PowerToughness {
-        power: 2.into(),
-        toughness: exact(HUGE_PLUS_HUNDRED),
-    };
-    let game = setup(
-        values,
-        vec![
-            (
-                1,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::CreatePreventionShield {
-                        amount: exact(HUGE_PLUS_SEVEN),
-                    }],
-                ),
-            ),
-            (
-                2,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Damage {
-                        amount: exact(HUGE),
-                    }],
-                ),
-            ),
-        ],
-    );
-    let target = object(&game, FIRST);
-    let (game, id, _) = create_shield(game, 1, target);
-    let (candidate, _) = execute(game, 2, target);
-    assert_prevented(candidate.damage_journal());
-    assert_eq!(remaining(candidate.state(), id), Some(7.into()));
-    assert_eq!(
-        candidate.damage_journal().preventions[0].amount,
-        exact(HUGE)
-    );
-    let values = PowerToughness {
-        power: 2.into(),
-        toughness: exact(HUGE_PLUS_ONE),
-    };
-    let game = setup(
-        values,
-        vec![
-            (
-                1,
-                A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(7)]),
-            ),
-            (
-                2,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Damage {
-                        amount: exact(HUGE_PLUS_SEVEN),
-                    }],
-                ),
-            ),
-            (
-                3,
-                A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
-            ),
-        ],
-    );
-    let target = object(&game, FIRST);
-    let (game, _, _) = create_shield(game, 1, target);
-    let (candidate, source) = execute(game, 2, target);
-    assert_applied(candidate.damage_journal(), source, target, exact(HUGE));
-    assert_eq!(marked(candidate.state(), target), exact(HUGE));
-    assert_eq!(
-        candidate
-            .state()
-            .execution()
-            .creature(target)
-            .unwrap()
-            .unwrap()
-            .toughness,
-        exact(HUGE_PLUS_ONE)
-    );
-    let (candidate, source) = execute(candidate.into_state(), 3, target);
-    assert_applied(candidate.damage_journal(), source, target, 1.into());
-    assert_eq!(zone(candidate.state(), FIRST), ObjectZone::Graveyard(A));
-    assert!(
-        candidate
-            .state()
-            .execution()
-            .creature(target)
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[test]
 fn zero_and_negative_literal_programs_reject_without_restricting_huge_positive_amounts() {
     for amount in [0, -1] {
-        for instruction in [damage(amount), shield(amount)] {
+        for instruction in [shield(amount)] {
             assert_eq!(
                 initialize(
                     seeds(

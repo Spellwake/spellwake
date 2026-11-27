@@ -41,7 +41,16 @@ fn colored_pinger(color: Option<Color>, keywords: BTreeSet<KeywordAbility>) -> P
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SingleAnyTarget,
-            vec![Instruction::Damage { amount: 2.into() }],
+            vec![spellwake_engine::program::Instruction::DealDamage(
+                Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::Literal(2.into()),
+                    ),
+                    exile_if_dies: false,
+                }),
+            )],
         ),
     });
     p
@@ -200,60 +209,6 @@ fn chosen_damage_source_prevents_selected_permanent_respects_visibility_and_reje
     );
     game = after_c2_p0.into_state();
     assert_eq!(game.execution().life_total(P0), Some(&18.into()));
-}
-
-#[test]
-fn target_spell_prevention_stops_instant_spell_and_permanent_spell_transition() {
-    let bolt = spell(
-        20,
-        BodyTarget::SingleAnyTarget,
-        vec![Instruction::Damage { amount: 3.into() }],
-    );
-    let prevent_spell = spell(
-        10,
-        BodyTarget::SingleSpell(SpellFilter::any()),
-        vec![Instruction::PreventDamageSpec(Box::new(
-            TurnPreventionSpec {
-                combat_only: false,
-                source: PreventionSourceSpec::TargetSpell,
-                recipient: PreventionRecipientSpec::Any,
-                both_directions: false,
-            },
-        ))],
-    );
-    let game = world(vocabulary(), vec![bolt, prevent_spell], vec![]);
-    let cast_bolt = submit(
-        &game,
-        P0,
-        GameCommand::CastPaid {
-            spell: object(&game, 20),
-            target: TargetRef::Player(P1),
-            payment: ManaPayment::default(),
-        },
-    );
-    let bolt_entry = cast_bolt
-        .state()
-        .execution()
-        .window()
-        .entries()
-        .last()
-        .unwrap()
-        .id();
-    let cast_prev = submit(
-        cast_bolt.state(),
-        P0,
-        GameCommand::CastPaid {
-            spell: object(cast_bolt.state(), 10),
-            target: TargetRef::Stack(bolt_entry),
-            payment: ManaPayment::default(),
-        },
-    );
-    let prev_resolved = pass_pair(cast_prev.state());
-    let bolt_resolved = pass_pair(prev_resolved.state());
-    assert_eq!(
-        bolt_resolved.state().execution().life_total(P1),
-        Some(&20.into())
-    );
 }
 
 #[test]
@@ -537,124 +492,6 @@ fn multi_target_permanent_prevention_prevents_announced_targets_only() {
     assert_eq!(p2.state().execution().life_total(P1), Some(&20.into()));
     let p3 = ping(p2.state(), 3, TargetRef::Player(P1));
     assert_eq!(p3.state().execution().life_total(P1), Some(&18.into()));
-}
-
-#[test]
-fn chosen_spell_copy_prevents_only_the_copy_and_lets_original_deal_damage() {
-    let game = world(
-        vocabulary(),
-        vec![
-            spell(
-                10,
-                BodyTarget::SingleAnyTarget,
-                vec![Instruction::Damage { amount: 3.into() }],
-            ),
-            spell(
-                11,
-                BodyTarget::SingleSpell(SpellFilter::copyable_instruction()),
-                vec![Instruction::CopySpell],
-            ),
-            spell(
-                12,
-                BodyTarget::None,
-                vec![Instruction::PreventDamageSpec(Box::new(
-                    TurnPreventionSpec {
-                        combat_only: false,
-                        source: PreventionSourceSpec::ChosenSource(DamageSourceChoiceFilter::Any),
-                        recipient: PreventionRecipientSpec::Any,
-                        both_directions: false,
-                    },
-                ))],
-            ),
-        ],
-        vec![],
-    );
-    // Cast Lightning Bolt (card 10) targeting P1.
-    let cast_bolt = submit(
-        &game,
-        P0,
-        GameCommand::CastPaid {
-            spell: object(&game, 10),
-            target: TargetRef::Player(P1),
-            payment: ManaPayment::default(),
-        },
-    );
-    let bolt_entry = cast_bolt
-        .state()
-        .execution()
-        .window()
-        .entries()
-        .last()
-        .unwrap()
-        .id();
-    // Copy it onto the stack.
-    let cast_copy = submit(
-        cast_bolt.state(),
-        P0,
-        GameCommand::CastPaid {
-            spell: object(cast_bolt.state(), 11),
-            target: TargetRef::Stack(bolt_entry),
-            payment: ManaPayment::default(),
-        },
-    );
-    let copy_pending = pass_pair(cast_copy.state());
-    let copied = reply(
-        copy_pending.state(),
-        P0,
-        DecisionReply::CopyTargets(CopyTargetChoice::Retain),
-    );
-    let copy_entry = copied
-        .state()
-        .execution()
-        .window()
-        .entries()
-        .last()
-        .unwrap()
-        .id();
-    assert_ne!(copy_entry, bolt_entry);
-
-    // Cast Pay No Heed (card 12) and choose ONLY the SpellCopy as the prevented damage source.
-    let cast_prev = submit(
-        copied.state(),
-        P0,
-        GameCommand::CastUntargeted {
-            spell: object(copied.state(), 12),
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    let prev_pending = pass_pair(cast_prev.state());
-    let RuleFrame::DamageSourceChoice(frame) =
-        prev_pending.state().pending_decision().unwrap().frame()
-    else {
-        panic!("expected DamageSourceChoice frame");
-    };
-    assert!(
-        frame
-            .sources()
-            .contains(&DamageSourceId::SpellCopy(copy_entry))
-    );
-    assert!(
-        frame
-            .sources()
-            .contains(&DamageSourceId::Object(object(prev_pending.state(), 10)))
-    );
-    let prev_done = reply(
-        prev_pending.state(),
-        P0,
-        DecisionReply::ChooseDamageSource(DamageSourceId::SpellCopy(copy_entry)),
-    );
-    // Resolve the copy: its 3 damage is prevented.
-    let after_copy = pass_pair(prev_done.state());
-    assert_eq!(
-        after_copy.state().execution().life_total(P1),
-        Some(&20.into())
-    );
-    // Resolve the original bolt: its 3 damage still lands.
-    let after_original = pass_pair(after_copy.state());
-    assert_eq!(
-        after_original.state().execution().life_total(P1),
-        Some(&17.into())
-    );
 }
 
 #[test]

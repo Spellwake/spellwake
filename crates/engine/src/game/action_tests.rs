@@ -4,7 +4,7 @@ use crate::combat::CombatRules;
 use crate::program::{BodyTarget, ExecutableBody};
 use crate::setup::GameSeed;
 use crate::{
-    effects::{Instruction, Program},
+    effects::Program,
     mana::{ManaAbility, ManaCost, ManaOutput, ManaType},
     object_identity::{CardId, ObjectDestination},
     turn::Step,
@@ -36,7 +36,16 @@ fn fixture() -> GameState {
             ManaCost::one(ManaType::Red),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 1.into() }],
+                vec![crate::program::Instruction::DealDamage(Box::new(
+                    crate::toolbox::DealDamageSpec {
+                        source: crate::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: crate::toolbox::DamageTargetQuery::Targets,
+                        amount: crate::program::DamageAmountSpec::Expr(
+                            crate::program::ValueExpr::Literal(1.into()),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
             ),
         ),
     });

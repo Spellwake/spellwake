@@ -79,7 +79,16 @@ fn tap_ability() -> ActivatedAbility {
         source_cost: SourceCost::Tap,
         body: ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::Damage { amount: 2.into() }],
+            vec![spellwake_engine::program::Instruction::DealDamage(
+                Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::Literal(2.into()),
+                    ),
+                    exile_if_dies: false,
+                }),
+            )],
         ),
     }
 }
@@ -663,7 +672,16 @@ fn seeds() -> Vec<SeedCard> {
         spell(
             10,
             A,
-            Instruction::Damage { amount: 2.into() },
+            spellwake_engine::program::Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::Literal(2.into()),
+                    ),
+                    exile_if_dies: false,
+                },
+            )),
             ManaCost::one(ManaType::Red),
             BodyTarget::SingleCreature,
         ),
@@ -699,7 +717,16 @@ fn seeds() -> Vec<SeedCard> {
                 ManaCost::one(ManaType::Green),
                 ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::Damage { amount: 2.into() }],
+                    vec![spellwake_engine::program::Instruction::DealDamage(
+                        Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                                spellwake_engine::program::ValueExpr::Literal(2.into()),
+                            ),
+                            exile_if_dies: false,
+                        }),
+                    )],
                 ),
             ),
         },

@@ -47,7 +47,11 @@ pub(super) fn compile(
         ),
         "It deals 2 damage to target creature." => (
             BodyTarget::SingleCreature,
-            Instruction::Damage { amount: 2.into() },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(2),
+                false,
+            ),
         ),
         _ => return None,
     };

@@ -381,103 +381,50 @@ pub(super) fn lower_control_misc_instruction(
                 )?,
                 builder,
             );
-            match (player, *gain, expr) {
-                (PlayerRefAst::You, true, ValueExpr::Literal(n)) => {
-                    builder
-                        .instructions
-                        .push(Instruction::AdjustControllerLife {
-                            adjustment: LifeAdjustment::Gain(n),
-                        });
-                    Ok(())
-                }
-                (PlayerRefAst::You, true, expr) => {
-                    builder
-                        .instructions
-                        .push(Instruction::GainControllerLife { amount: expr });
-                    Ok(())
-                }
-                (PlayerRefAst::You, false, ValueExpr::Literal(n)) => {
-                    builder
-                        .instructions
-                        .push(Instruction::AdjustControllerLife {
-                            adjustment: LifeAdjustment::Lose(n),
-                        });
-                    Ok(())
-                }
-                (PlayerRefAst::TargetPlayer, g, ValueExpr::Literal(n)) => {
+            let selector = match player {
+                PlayerRefAst::You => spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    ResolvingPlayer::Controller,
+                ),
+                PlayerRefAst::TargetPlayer => {
                     builder.bind_target(BodyTarget::SinglePlayer)?;
-                    builder.instructions.push(Instruction::AdjustTargetLife {
-                        adjustment: if g {
-                            LifeAdjustment::Gain(n)
-                        } else {
-                            LifeAdjustment::Lose(n)
-                        },
-                    });
-                    Ok(())
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer,
+                    )
                 }
-                (PlayerRefAst::TargetOpponent, g, ValueExpr::Literal(n)) => {
+                PlayerRefAst::TargetOpponent => {
                     builder.bind_target(BodyTarget::SingleOpponent)?;
-                    builder.instructions.push(Instruction::AdjustTargetLife {
-                        adjustment: if g {
-                            LifeAdjustment::Gain(n)
-                        } else {
-                            LifeAdjustment::Lose(n)
-                        },
-                    });
-                    Ok(())
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer,
+                    )
                 }
-                (PlayerRefAst::ThatPlayer, g, ValueExpr::Literal(n))
+                PlayerRefAst::ThatPlayer
                     if matches!(
                         builder.target,
                         BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
                     ) =>
                 {
-                    builder.instructions.push(Instruction::AdjustTargetLife {
-                        adjustment: if g {
-                            LifeAdjustment::Gain(n)
-                        } else {
-                            LifeAdjustment::Lose(n)
-                        },
-                    });
-                    Ok(())
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer,
+                    )
                 }
-                (PlayerRefAst::EachOpponent, g, ValueExpr::Literal(n)) => {
-                    builder
-                        .instructions
-                        .push(Instruction::AdjustEachOpponentLife {
-                            adjustment: if g {
-                                LifeAdjustment::Gain(n)
-                            } else {
-                                LifeAdjustment::Lose(n)
-                            },
-                            controller_adjustment: None,
-                        });
-                    Ok(())
+                PlayerRefAst::EachOpponent => {
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent)
                 }
-                (PlayerRefAst::EachPlayer, g, ValueExpr::Literal(n)) => {
-                    let adj = if g {
-                        LifeAdjustment::Gain(n)
-                    } else {
-                        LifeAdjustment::Lose(n)
-                    };
-                    builder
-                        .instructions
-                        .push(Instruction::AdjustEachOpponentLife {
-                            adjustment: adj.clone(),
-                            controller_adjustment: Some(adj),
-                        });
-                    Ok(())
+                PlayerRefAst::EachPlayer => {
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer)
                 }
-                (p, g, dynamic_expr) => {
+                p => {
                     let players = lower_affected_players_in_context(*p, builder, in_trigger)?;
-                    builder.instructions.push(Instruction::AdjustPlayersLife {
-                        players,
-                        gain: g,
-                        amount: dynamic_expr,
-                    });
-                    Ok(())
+                    spellwake_engine::toolbox::PlayerSelector::Group(players)
                 }
-            }
+            };
+            let op = if *gain {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(selector, expr)
+            } else {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(selector, expr)
+            };
+            builder.instructions.push(op);
+            Ok(())
         }
         InstructionAst::SetLifeTotal { player, value } => {
             let resolved_value = resolve_x(value, bound_x);
@@ -517,49 +464,24 @@ pub(super) fn lower_control_misc_instruction(
             let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
             let amount =
                 lower_value_expr_in_context(resolved_value, builder, in_trigger, vocabulary)?;
-            match (player, amount) {
-                (PlayerRefAst::You, ValueExpr::Literal(n)) => {
-                    builder
-                        .instructions
-                        .push(Instruction::AdjustControllerLife {
-                            adjustment: LifeAdjustment::Set(n),
-                        });
-                    Ok(())
+            let selector = match players {
+                AffectedPlayers::One(rp) => {
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(rp)
                 }
-                (
-                    PlayerRefAst::TargetPlayer | PlayerRefAst::TargetOpponent,
-                    ValueExpr::Literal(n),
-                ) => {
-                    builder.instructions.push(Instruction::AdjustTargetLife {
-                        adjustment: LifeAdjustment::Set(n),
-                    });
-                    Ok(())
-                }
-                (PlayerRefAst::ThatPlayer, ValueExpr::Literal(n))
-                    if players == AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
-                        && matches!(
-                            builder.target,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        ) =>
-                {
-                    builder.instructions.push(Instruction::AdjustTargetLife {
-                        adjustment: LifeAdjustment::Set(n),
-                    });
-                    Ok(())
-                }
-                (_, dynamic_or_group_amount) => {
-                    builder.instructions.push(Instruction::SetPlayersLife {
-                        players,
-                        amount: dynamic_or_group_amount,
-                    });
-                    Ok(())
-                }
-            }
+                other => spellwake_engine::toolbox::PlayerSelector::Group(other),
+            };
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::set_life(selector, amount),
+            );
+            Ok(())
         }
-        InstructionAst::BecomeMonarch {
-            player: PlayerRefAst::You,
-        } => {
-            builder.instructions.push(Instruction::BecomeMonarch(None));
+        InstructionAst::BecomeMonarch { player } => {
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                ),
+            );
             Ok(())
         }
         InstructionAst::PayCost(cost) => {
@@ -2700,17 +2622,8 @@ pub(super) fn try_desugar_for_each_object_single(
 pub(super) fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
     matches!(
         op,
-        Instruction::DamageGroup { .. }
-            | Instruction::DamageGroupAmount { .. }
-            | Instruction::DamageOpponentsAmount(_)
-            | Instruction::DealDamageFrom { .. }
-            | Instruction::PayLife { .. }
-            | Instruction::PayEnergy { .. }
-            | Instruction::PayControllerLife(_)
-            | Instruction::PayControllerEnergy(_)
-            | Instruction::AdjustPlayersLife { .. }
-            | Instruction::SetPlayersLife { .. }
-            | Instruction::AdjustControllerLife { .. }
+        Instruction::DealDamage(_)
+            | Instruction::AdjustLife(_)
             | Instruction::Discard {
                 players: AffectedPlayers::One(_),
                 ..
@@ -2721,15 +2634,20 @@ pub(super) fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
             }
             | Instruction::ZoneOp(_)
             | Instruction::ForEachPlayerQuery { .. }
-            | Instruction::SacrificeMatching(_)
             | Instruction::Mill { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::MutateObject(_)
-            | Instruction::MoveCounters { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::Blight { .. }
             | Instruction::CollectEvidence { .. }
+    ) || matches!(
+        op,
+        Instruction::MutatePlayer(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::PayCounter { .. }
+            )
     )
 }
 
@@ -3052,10 +2970,12 @@ fn lower_hybrid_mana_payment_instruction(payer: ResolvingPlayer, raw: &str) -> O
                     declined_destination: 1,
                 }]
             } else if cost == ManaCost::free() {
-                vec![Instruction::PayLife {
-                    player: payer,
-                    amount: ValueExpr::literal(i64::from(life)),
-                }]
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(payer),
+                        ValueExpr::literal(i64::from(life)),
+                    ),
+                ]
             } else {
                 vec![
                     Instruction::OfferManaPayment {
@@ -3064,10 +2984,10 @@ fn lower_hybrid_mana_payment_instruction(payer: ResolvingPlayer, raw: &str) -> O
                         paid_destination: 1,
                         declined_destination: 2,
                     },
-                    Instruction::PayLife {
-                        player: payer,
-                        amount: ValueExpr::literal(i64::from(life)),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(payer),
+                        ValueExpr::literal(i64::from(life)),
+                    ),
                 ]
             };
             ChooseOptionBranch {
@@ -3132,10 +3052,13 @@ fn lower_extra_pay_cost_instruction(
                 declined_destination: base_idx + 1,
             }))
         }
-        CostAtomAst::PayEnergy(n) if *n > 0 => Ok(Some(Instruction::PayEnergy {
-            player: payer,
-            amount: ValueExpr::literal(i64::from(*n)),
-        })),
+        CostAtomAst::PayEnergy(n) if *n > 0 => Ok(Some(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_player_counter(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(payer),
+                CounterKind::Energy,
+                ValueExpr::literal(i64::from(*n)),
+            ),
+        )),
         CostAtomAst::PayEnergyExpr(expr) => {
             let amount = lower_value_expr_in_context(
                 resolve_x(expr, bound_x),
@@ -3143,10 +3066,13 @@ fn lower_extra_pay_cost_instruction(
                 in_trigger,
                 vocabulary,
             )?;
-            Ok(Some(Instruction::PayEnergy {
-                player: payer,
-                amount,
-            }))
+            Ok(Some(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_player_counter(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(payer),
+                    CounterKind::Energy,
+                    amount,
+                ),
+            ))
         }
         _ => Ok(None),
     }
@@ -4577,22 +4503,108 @@ pub(super) fn rewrite_chosen_to_loop_rule(rule: &mut TemporaryRuleKind) {
 pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
     for op in ops {
         match op {
-            Instruction::AdjustPlayersLife {
-                players, amount, ..
-            }
-            | Instruction::SetPlayersLife { players, amount }
-            | Instruction::Discard { players, amount }
+            Instruction::Discard { players, amount }
             | Instruction::Sacrifice {
                 players, amount, ..
             }
             | Instruction::TapOrUntapControlled {
                 players, amount, ..
-            }
-            | Instruction::AddPlayerCounter {
-                players, amount, ..
             } => {
                 rewrite_chosen_to_loop_ap(players);
                 rewrite_chosen_to_loop_ve(amount);
+            }
+            Instruction::AdjustLife(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.players,
+                    &rewrite_chosen_to_loop_rp,
+                    &rewrite_chosen_to_loop_ap,
+                    &rewrite_chosen_to_loop_ve,
+                );
+                match &mut spec.op {
+                    spellwake_engine::toolbox::LifeOp::Gain(amount)
+                    | spellwake_engine::toolbox::LifeOp::Lose(amount)
+                    | spellwake_engine::toolbox::LifeOp::Set(amount)
+                    | spellwake_engine::toolbox::LifeOp::Pay(amount) => {
+                        rewrite_chosen_to_loop_ve(amount);
+                    }
+                    spellwake_engine::toolbox::LifeOp::Drain {
+                        amount, gain_to, ..
+                    } => {
+                        rewrite_chosen_to_loop_ve(amount);
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            gain_to,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+                }
+            }
+            Instruction::DealDamage(spec) => {
+                if let spellwake_engine::toolbox::DamageSourceQuery::Objects(q) = &mut spec.source {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                        q,
+                        &rewrite_chosen_to_loop_rp,
+                        &rewrite_chosen_to_loop_ap,
+                        &rewrite_chosen_to_loop_ve,
+                    );
+                }
+                match &mut spec.recipients {
+                    spellwake_engine::toolbox::DamageTargetQuery::Objects(q) => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            q,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Players(p) => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            p,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Both { objects, players } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            objects,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            players,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Relative(rel) => {
+                        if let DamageRecipientsRef::Group(g) = rel.as_mut() {
+                            rewrite_chosen_to_loop_dg(g);
+                        }
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets => {}
+                }
+                if let DamageAmountSpec::Expr(e) = &mut spec.amount {
+                    rewrite_chosen_to_loop_ve(e);
+                }
+            }
+            Instruction::MutatePlayer(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.players,
+                    &rewrite_chosen_to_loop_rp,
+                    &rewrite_chosen_to_loop_ap,
+                    &rewrite_chosen_to_loop_ve,
+                );
+                if let spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
+                | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. } =
+                    &mut spec.op
+                {
+                    rewrite_chosen_to_loop_ve(amount);
+                }
             }
             Instruction::AddMana(yield_kind) => {
                 rewrite_chosen_to_loop_mana_yield(yield_kind);
@@ -4608,9 +4620,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             } => {
                 rewrite_chosen_to_loop_ve(count);
                 rewrite_chosen_to_loop_ap(library_owner);
-            }
-            Instruction::LoseGame(players) => {
-                rewrite_chosen_to_loop_ap(players);
             }
             Instruction::ZoneOp(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
@@ -4755,8 +4764,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             Instruction::Scry { player, amount }
             | Instruction::Surveil { player, amount }
             | Instruction::Mill { player, amount }
-            | Instruction::PayLife { player, amount }
-            | Instruction::PayEnergy { player, amount }
             | Instruction::ManifestTop { player, amount }
             | Instruction::Blight { player, amount } => {
                 rewrite_chosen_to_loop_rp(player);
@@ -4838,8 +4845,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_chosen_to_loop_ops(&mut br.body.instructions);
                 }
             }
-            Instruction::WinGame(rp)
-            | Instruction::VentureIntoDungeon { player: rp, .. }
+            Instruction::VentureIntoDungeon { player: rp, .. }
             | Instruction::TakeInitiative { player: rp } => {
                 rewrite_chosen_to_loop_rp(rp);
             }
@@ -4895,24 +4901,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_chosen_to_loop_rp(rp);
                 }
             }
-            Instruction::DamageGroup { group, .. } => {
-                rewrite_chosen_to_loop_dg(group);
-            }
-            Instruction::DamageGroupAmount { group, amount } => {
-                rewrite_chosen_to_loop_dg(group);
-                rewrite_chosen_to_loop_ve(amount);
-            }
-            Instruction::DealDamageFrom {
-                recipients, amount, ..
-            } => {
-                if let DamageRecipientsRef::Group(g) = recipients.as_mut() {
-                    rewrite_chosen_to_loop_dg(g);
-                }
-                if let DamageAmountSpec::Expr(e) = amount.as_mut() {
-                    rewrite_chosen_to_loop_ve(e);
-                }
-            }
-
             Instruction::BranchIfFalse { condition, .. } => {
                 rewrite_chosen_to_loop_cond(condition);
             }
@@ -4965,15 +4953,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_chosen_to_loop_ops(&mut lb.instructions);
                 }
             }
-            Instruction::GainControllerLife { amount }
-            | Instruction::DamageAmount(amount)
-            | Instruction::DamageOpponentsAmount(amount)
-            | Instruction::DamageRelatedPlayerAmount(amount)
-            | Instruction::DrainOpponents(amount)
-            | Instruction::DrainTargetAndGain(amount)
-            | Instruction::OpponentsLoseAndControllerGains(amount)
-            | Instruction::RemoveCountersFromPermanent { amount, .. }
-            | Instruction::DealDamageToAnnouncedTargets { amount, .. }
+            Instruction::DealDamageToAnnouncedTargets { amount, .. }
             | Instruction::Earthbend { amount }
             | Instruction::BindResolutionX(amount) => {
                 rewrite_chosen_to_loop_ve(amount);

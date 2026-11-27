@@ -910,26 +910,19 @@ impl EffectWindow {
                                 | Instruction::ControlledSubtypeDamagesAttacker(_)
                                 | Instruction::DamageCapturedBlocker(_)
                                 | Instruction::DamageDamagedPlayersCreatures
-                                | Instruction::DamageOpponentsAmount(_)
-                                | Instruction::DamageRelatedPlayerAmount(_)
-                                | Instruction::DamageGroupAmount { .. }
-                                | Instruction::DealDamageFrom { .. }
                                 | Instruction::DivideDamageAmongTargets { .. }
                                 | Instruction::DivideDamageExprAmongTargets { .. }
                                 | Instruction::DivideThreeDamageAmongTargets
                                 | Instruction::DamageOrderedTargets { .. }
                                 | Instruction::DamageFromPower(_)
                                 | Instruction::CreatureDealsPowerDamageToOther { .. }
-                                | Instruction::DamageAmount(_)
-                                | Instruction::DamageAmountThenExileIfDies(_)
+                                | Instruction::DealDamage(_)
                                 | Instruction::DamageCreatureAtSpellMastery { .. }
-                                | Instruction::Damage { .. }
                                 | Instruction::DamagePlayersHalfLife
                                 | Instruction::TargetDamagesItsControllersOtherCreatures
                                 | Instruction::OtherCreaturesReturnPowerDamage
                                 | Instruction::ReflectAttachedCreatureDamage
                                 | Instruction::AddCounterAndDischargeOnResolution(_)
-                                | Instruction::DamageGroup { .. }
                                 | Instruction::DamageTargetControllersCreatures { .. }
                                 | Instruction::DrawAndDamageOpponents { .. }
                         )
@@ -1708,13 +1701,17 @@ impl EffectWindow {
         self.validate_damage_origin_context(origin)?;
         let (applied, completions) = self.damage_state.finish_batch(batch)?;
         let exile_if_dies = match origin {
-            DamageOrigin::Resolution { entry, instruction } => matches!(
-                self.payloads
+            DamageOrigin::Resolution { entry, instruction } => {
+                match self
+                    .payloads
                     .get(&entry)
                     .and_then(StackPayload::instructions)
-                    .and_then(|body| body.get(instruction)),
-                Some(Instruction::DamageAmountThenExileIfDies(_))
-            ),
+                    .and_then(|body| body.get(instruction))
+                {
+                    Some(Instruction::DealDamage(spec)) => spec.exile_if_dies,
+                    _ => false,
+                }
+            }
             _ => false,
         };
         let attacks_if_damaged = match origin {

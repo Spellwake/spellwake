@@ -150,9 +150,12 @@ fn land_instruction(text: &str) -> Option<Instruction> {
                 },
             )
         }
-        "you gain 1 life." => Instruction::AdjustControllerLife {
-            adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-        },
+        "you gain 1 life." => crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+            ),
+            spellwake_engine::program::ValueExpr::literal(1),
+        ),
         "surveil 1." | "Surveil 1." => Instruction::Surveil { player, amount },
         "scry 1." | "Scry 1." => Instruction::Scry { player, amount },
         "Draw a card." => {

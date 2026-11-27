@@ -167,7 +167,16 @@ fn spell_body(
         }
         "Each opponent loses X life. You gain life equal to the life lost this way." => (
             BodyTarget::None,
-            Instruction::DrainOpponents(ValueExpr::chosen_x()),
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::drain_life(
+                spellwake_engine::toolbox::PlayerSelector::Group(
+                    spellwake_engine::program::AffectedPlayers::EachOpponent,
+                ),
+                ValueExpr::chosen_x(),
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                ),
+                true,
+            ),
         ),
         "All creatures get -X/-X until end of turn." => (
             BodyTarget::None,
@@ -206,7 +215,14 @@ fn spell_body(
                     "target player or planeswalker" => BodyTarget::SinglePlayerOrPlaneswalker,
                     _ => return None,
                 };
-                (target, Instruction::DamageAmount(ValueExpr::chosen_x()))
+                (
+                    target,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        ValueExpr::chosen_x(),
+                        false,
+                    ),
+                )
             } else {
                 let template = other.strip_prefix("Create X ")?.strip_suffix('.')?;
                 let Instruction::CreateTokens { mut creations } =

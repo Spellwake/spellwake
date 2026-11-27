@@ -384,7 +384,14 @@ pub(super) fn compile_rules(
                         true,
                     ),
                     BodyTarget::None,
-                    vec![Instruction::RelatedPlayerLosesHalfLife],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_half_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::UniqueRelatedPlayer,
+                            ),
+                            true,
+                        ),
+                    ],
                 )
             }
             "Whenever equipped creature is dealt damage, it deals damage equal to its power to target player or planeswalker." => {
@@ -426,7 +433,13 @@ pub(super) fn compile_rules(
                     BodyTarget::FilteredPermanent(
                         spellwake_engine::program::ObjectFilter::creature().of_related_player(),
                     ),
-                    vec![Instruction::Damage { amount: 1.into() }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            spellwake_engine::program::ValueExpr::literal(1),
+                            false,
+                        ),
+                    ],
                 )
             }
             "Whenever equipped creature attacks, look at the top card of your library. If it's a land card, you may put it onto the battlefield tapped." => {

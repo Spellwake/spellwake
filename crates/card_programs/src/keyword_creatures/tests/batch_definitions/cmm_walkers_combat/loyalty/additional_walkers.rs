@@ -41,7 +41,11 @@ fn cmm_gideon_jura_requires_attacks_on_him_destroys_only_tapped_creatures_and_pr
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SingleAnyTarget,
-                    Instruction::Damage { amount: 8.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(8),
+                        false,
+                    ),
                 ),
             ),
         ],

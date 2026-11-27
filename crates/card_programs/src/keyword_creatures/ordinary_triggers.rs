@@ -150,8 +150,30 @@ pub(super) fn compile(
                 Instruction::OptionalEffect {chooser:ResolvingPlayer::Controller},crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_battlefield(false),
             ])));
         } else if line == "Whenever the final chapter ability of a Saga you control resolves, each opponent loses X life and you gain X life, where X is that Saga's mana value." {
-            triggers.push((spellwake_engine::program::TriggerSpec::player_action(spellwake_engine::program::PlayerRelation::Controller, spellwake_engine::program::PlayerTriggerAction::SagaFinalChapterResolved),
-                ExecutableBody::new(BodyTarget::None, vec![Instruction::OpponentsLoseAndControllerGains(spellwake_engine::program::ValueExpr::object_stat(spellwake_engine::program::ValueObjectRef::FinalSaga, spellwake_engine::program::ObjectStatKind::ManaValue))])));
+            triggers.push((
+                spellwake_engine::program::TriggerSpec::player_action(
+                    spellwake_engine::program::PlayerRelation::Controller,
+                    spellwake_engine::program::PlayerTriggerAction::SagaFinalChapterResolved,
+                ),
+                ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::drain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Group(
+                                AffectedPlayers::EachOpponent,
+                            ),
+                            spellwake_engine::program::ValueExpr::object_stat(
+                                spellwake_engine::program::ValueObjectRef::FinalSaga,
+                                spellwake_engine::program::ObjectStatKind::ManaValue,
+                            ),
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            false,
+                        ),
+                    ],
+                ),
+            ));
         } else if line == "Whenever a planeswalker you control enters, if this artifact has loyalty counters on it, you may move a loyalty counter from this artifact onto that planeswalker." {
             triggers.push((spellwake_engine::program::TriggerSpec::enters(spellwake_engine::program::ObjectFilter::any_types(spellwake_engine::program::CardTypeMask::from_card_type(CardType::Planeswalker)).controlled()).only_if(spellwake_engine::program::TriggerCondition::SourceHasLoyalty),
                 ExecutableBody::new(BodyTarget::None, vec![
@@ -208,7 +230,18 @@ pub(super) fn compile(
             let gain=gain.strip_suffix(" life.")?.parse::<u8>().ok().filter(|n|*n>0)?;
             triggers.push((spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::PutIntoGraveyard { subject: spellwake_engine::program::ObjectFilter::any(), player: spellwake_engine::program::PlayerRelation::Opponent, from_library: false, own_turn_only: false }).only_if(spellwake_engine::program::TriggerCondition::SourceCounterAtLeast { kind: spellwake_engine::effects::CounterKind::Quest, minimum: threshold }),ExecutableBody::new(BodyTarget::None,vec![
                 Instruction::RequireCondition(spellwake_engine::program::InterveningCondition::SourceQuestCounters(threshold)),Instruction::OptionalSequence {chooser:ResolvingPlayer::Controller,instructions:2},
-                Instruction::RelatedPlayerLosesLife(lose),Instruction::AdjustControllerLife {adjustment:spellwake_engine::life::LifeAdjustment::Gain(i64::from(gain).into())}
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(i64::from(lose)),
+                ),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(i64::from(gain)),
+                ),
             ])));
         } else if let Some((minimum,amount))=line.strip_prefix("When there are ").and_then(|text|text.split_once(" or more page counters on this artifact, exile it. If you do, you gain ")) {
             let minimum=u8::try_from(super::ordinary_text::amount(minimum)?).ok().filter(|value|*value>0)?;
@@ -314,11 +347,43 @@ pub(super) fn compile(
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::instant_sorcery_or_subtype(vocabulary.resolve_label(kind)?)),
                 body(action,&card.name,vocabulary)?));
         } else if line == "When this creature enters, it deals X damage to target creature an opponent controls, where X is the number of instant and sorcery cards in your graveyard." {
-            triggers.push((spellwake_engine::program::TriggerSpec::enters(spellwake_engine::program::ObjectFilter::self_object()),ExecutableBody::new(BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
-                vec![Instruction::DamageAmount(spellwake_engine::program::ValueExpr::count_graveyard(spellwake_engine::program::ResolvingPlayer::Controller, spellwake_engine::program::ObjectFilter::instant_or_sorcery()))])));
+            triggers.push((
+                spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
+                ExecutableBody::new(
+                    BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            spellwake_engine::program::ValueExpr::count_graveyard(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                                spellwake_engine::program::ObjectFilter::instant_or_sorcery(),
+                            ),
+                            false,
+                        ),
+                    ],
+                ),
+            ));
         } else if line == "When this creature enters, it deals 1 damage to target opponent for each creature card in your graveyard." {
-            triggers.push((spellwake_engine::program::TriggerSpec::enters(spellwake_engine::program::ObjectFilter::self_object()), ExecutableBody::new(BodyTarget::SingleOpponent,
-                vec![Instruction::DamageAmount(spellwake_engine::program::ValueExpr::count_graveyard(spellwake_engine::program::ResolvingPlayer::Controller, spellwake_engine::program::ObjectFilter::creature()))])));
+            triggers.push((
+                spellwake_engine::program::TriggerSpec::enters(
+                    spellwake_engine::program::ObjectFilter::self_object(),
+                ),
+                ExecutableBody::new(
+                    BodyTarget::SingleOpponent,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            spellwake_engine::program::ValueExpr::count_graveyard(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                                spellwake_engine::program::ObjectFilter::creature(),
+                            ),
+                            false,
+                        ),
+                    ],
+                ),
+            ));
         } else if let Some(action) = line.strip_prefix("Whenever you cast an artifact spell, you may pay ") {
             let (price, action) = action.split_once(". If you do, create ")?;
             let creation = create_tokens(action.strip_suffix('.')?,vocabulary)?;
@@ -1488,9 +1553,12 @@ pub(super) fn body(
         && let Some(instructions) = super::ordinary_text::amass(effect, vocabulary)
     {
         let amount = life.parse::<i64>().ok().filter(|value| *value > 0)?;
-        let mut body = vec![Instruction::AdjustControllerLife {
-            adjustment: spellwake_engine::life::LifeAdjustment::Lose(amount.into()),
-        }];
+        let mut body = vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::literal(amount),
+            ),
+        ];
         body.extend(instructions);
         return Some(ExecutableBody::new(BodyTarget::None, body));
     }
@@ -1536,9 +1604,12 @@ pub(super) fn body(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
-                Instruction::AdjustControllerLife {
-                    adjustment: spellwake_engine::life::LifeAdjustment::Lose(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
             ],
         ));
     }
@@ -1647,7 +1718,15 @@ pub(super) fn body(
     if text == "you get an experience counter." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AddExperienceCounter],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::add_player_counter(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::effects::CounterKind::Experience,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ],
         ));
     }
     if let Some(rest) = text
@@ -1695,10 +1774,17 @@ pub(super) fn body(
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DamageGroup {
-                group: spellwake_engine::program::DamageGroup::RelatedPlayer,
-                amount: ordinary_text::amount(amount)?.into(),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                        spellwake_engine::program::DamageRecipientsRef::Group(
+                            spellwake_engine::program::DamageGroup::RelatedPlayer,
+                        ),
+                    )),
+                    spellwake_engine::program::ValueExpr::literal(ordinary_text::amount(amount)?),
+                    false,
+                ),
+            ],
         ));
     }
     if let Some((template, cost)) = text
@@ -1838,10 +1924,15 @@ pub(super) fn body(
                 Instruction::OptionalEffect {
                     chooser: ResolvingPlayer::Controller,
                 },
-                Instruction::DamageGroup {
-                    group: spellwake_engine::program::DamageGroup::Creatures,
-                    amount: amount(damage)?.into(),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                        spellwake_engine::program::DamageRecipientsRef::Group(
+                            spellwake_engine::program::DamageGroup::Creatures,
+                        ),
+                    )),
+                    spellwake_engine::program::ValueExpr::literal(amount(damage)?),
+                    false,
+                ),
             ],
         ));
     }
@@ -2040,12 +2131,15 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::GainControllerLife {
-                    amount: spellwake_engine::program::ValueExpr::object_stat(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::object_stat(
                         spellwake_engine::program::ValueObjectRef::DyingSource,
                         spellwake_engine::program::ObjectStatKind::Power,
                     ),
-                },
+                ),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::object_stat(
                         spellwake_engine::program::ValueObjectRef::DyingSource,
@@ -2097,10 +2191,13 @@ pub(super) fn body(
         ]);
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::ChangeAbilitySource {
-                parts,
-                duration: ResolvedDuration::UntilEndOfTurn,
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Source,
+                    parts,
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            ],
         ));
     }
     if let Some(subtype) = text
@@ -2151,9 +2248,12 @@ pub(super) fn body(
                 BodyTarget::None,
                 vec![
                     first,
-                    Instruction::AdjustControllerLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Gain(gain.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(gain),
+                    ),
                 ],
             ));
         }
@@ -2300,11 +2400,15 @@ pub(super) fn body(
         };
         return Some(ExecutableBody::new(
             target,
-            vec![Instruction::DamageAmount(
-                spellwake_engine::program::ValueExpr::event(
-                    spellwake_engine::program::EventValueKind::DamageReceived,
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::event(
+                        spellwake_engine::program::EventValueKind::DamageReceived,
+                    ),
+                    false,
                 ),
-            )],
+            ],
         ));
     }
     if text
@@ -2458,19 +2562,48 @@ pub(super) fn body(
         } else {
             (rest.strip_suffix(" life")?, None)
         };
-        let controller_adjustment = match gain {
-            Some(gain) => Some(spellwake_engine::life::LifeAdjustment::Gain(
-                amount(gain.strip_suffix(" life")?)?.into(),
-            )),
-            None => None,
+        let loss_amt = amount(loss)?;
+        let ops = match gain {
+            Some(gain) => {
+                let gain_amt = amount(gain.strip_suffix(" life")?)?;
+                if gain_amt == loss_amt {
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::drain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Group(
+                                AffectedPlayers::EachOpponent,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(loss_amt),
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            false,
+                        ),
+                    ]
+                } else {
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                            spellwake_engine::toolbox::PlayerSelector::Group(
+                                AffectedPlayers::EachOpponent,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(loss_amt),
+                        ),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(gain_amt),
+                        ),
+                    ]
+                }
+            }
+            None => vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent),
+                    spellwake_engine::program::ValueExpr::literal(loss_amt),
+                ),
+            ],
         };
-        (
-            BodyTarget::None,
-            vec![Instruction::AdjustEachOpponentLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Lose(amount(loss)?.into()),
-                controller_adjustment,
-            }],
-        )
+        (BodyTarget::None, ops)
     } else if let Some(rest) = raw
         .strip_prefix("this creature deals ")
         .or_else(|| raw.strip_prefix("it deals "))
@@ -2487,16 +2620,28 @@ pub(super) fn body(
         } else {
             (rest.strip_suffix(" damage to each opponent")?, None)
         };
-        let mut instructions = vec![Instruction::DamageGroup {
-            group: spellwake_engine::program::DamageGroup::Opponents,
-            amount: amount(damage)?.into(),
-        }];
+        let mut instructions = vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                    spellwake_engine::program::DamageRecipientsRef::Group(
+                        spellwake_engine::program::DamageGroup::Opponents,
+                    ),
+                )),
+                spellwake_engine::program::ValueExpr::literal(amount(damage)?),
+                false,
+            ),
+        ];
         if let Some(gain) = gain {
-            instructions.push(Instruction::AdjustControllerLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Gain(
-                    amount(gain.strip_suffix(" life")?)?.into(),
+            instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(amount(
+                        gain.strip_suffix(" life")?,
+                    )?),
                 ),
-            });
+            );
         }
         (BodyTarget::None, instructions)
     } else if raw == "put a +1/+1 counter on this creature"
@@ -2614,8 +2759,6 @@ fn modal_body(
     name: &str,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<ExecutableBody> {
-    use spellwake_engine::life::LifeAdjustment;
-
     let one = || spellwake_engine::program::ValueExpr::Literal(1.into());
     let creature = || PermanentTypeFilter {
         required_types: [CardType::Creature].into(),
@@ -2650,10 +2793,10 @@ fn modal_body(
         "Each player loses 1 life and draws a card." => (
             BodyTarget::None,
             vec![
-                Instruction::AdjustEachOpponentLife {
-                    adjustment: LifeAdjustment::Lose(1.into()),
-                    controller_adjustment: Some(LifeAdjustment::Lose(1.into())),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer),
+                    one(),
+                ),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(one()),
             ],
         ),
@@ -2674,9 +2817,14 @@ fn modal_body(
         ),
         "Target opponent loses 5 life." => (
             BodyTarget::SingleOpponent,
-            vec![Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Lose(5.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(5),
+                ),
+            ],
         ),
         _ => {
             let mut lower = effect.to_owned();

@@ -1374,12 +1374,84 @@ fn rewrite_instructions_unique_related_player(
                     }
                 }
             }
-            Instruction::AdjustPlayersLife { players, .. }
-            | Instruction::Discard { players, .. }
+            Instruction::Discard { players, .. }
             | Instruction::Sacrifice { players, .. }
-            | Instruction::AddPlayerCounter { players, .. }
             | Instruction::TapOrUntapControlled { players, .. } => {
                 rewrite_affected_players_if_unique(players, replacement);
+            }
+            Instruction::AdjustLife(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.players,
+                    &|p| rewrite_resolving_player_if_unique(p, replacement),
+                    &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                    &|_| {},
+                );
+                if let spellwake_engine::toolbox::LifeOp::Drain { gain_to, .. } = &mut spec.op {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                        gain_to,
+                        &|p| rewrite_resolving_player_if_unique(p, replacement),
+                        &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                        &|_| {},
+                    );
+                }
+            }
+            Instruction::DealDamage(spec) => {
+                if let spellwake_engine::toolbox::DamageSourceQuery::Objects(q) = &mut spec.source {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                        q,
+                        &|p| rewrite_resolving_player_if_unique(p, replacement),
+                        &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                        &|_| {},
+                    );
+                }
+                match &mut spec.recipients {
+                    spellwake_engine::toolbox::DamageTargetQuery::Objects(q) => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            q,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Players(p) => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            p,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Both { objects, players } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            objects,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            players,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Relative(rel) => {
+                        if let DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(ap)) =
+                            rel.as_mut()
+                        {
+                            rewrite_affected_players_if_unique(ap, replacement);
+                        }
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets => {}
+                }
+            }
+            Instruction::MutatePlayer(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.players,
+                    &|p| rewrite_resolving_player_if_unique(p, replacement),
+                    &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                    &|_| {},
+                );
             }
             Instruction::ZoneOp(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
@@ -1480,8 +1552,6 @@ fn rewrite_instructions_unique_related_player(
             | Instruction::Scry { player, .. }
             | Instruction::Surveil { player, .. }
             | Instruction::AddManaForPlayer { player, .. }
-            | Instruction::PayLife { player, .. }
-            | Instruction::PayEnergy { player, .. }
             | Instruction::Blight { player, .. }
             | Instruction::CollectEvidence { player, .. }
             | Instruction::LookTopChoose {

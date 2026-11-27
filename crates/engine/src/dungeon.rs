@@ -2,7 +2,6 @@
 use crate::{
     activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
     characteristics::{Color, DungeonId, KeywordAbility},
-    life::LifeAdjustment,
     mana::{ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaSacrificeCost},
     program::{
         AffectedPlayers, ArtifactSubtype, BodyTarget, CardType, EntryCounterAbility,
@@ -144,7 +143,14 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[6],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DrainOpponents(ValueExpr::literal(1))],
+                    vec![Instruction::AdjustLife(Box::new(
+                        crate::toolbox::AdjustLifeSpec::drain(
+                            crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent),
+                            ValueExpr::literal(1),
+                            crate::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                            false,
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -163,9 +169,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DrawController {
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![Instruction::DrawCards(Box::new(
+                        crate::toolbox::DrawCardsSpec::simple(
+                            crate::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                        ),
+                    ))],
                 ),
             },
         ],
@@ -175,9 +184,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[1],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::GainControllerLife {
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![Instruction::AdjustLife(Box::new(
+                        crate::toolbox::AdjustLifeSpec::gain(
+                            crate::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -264,9 +276,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DrawController {
-                        amount: ValueExpr::literal(3),
-                    }],
+                    vec![Instruction::DrawCards(Box::new(
+                        crate::toolbox::DrawCardsSpec::simple(
+                            crate::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                            ValueExpr::literal(3),
+                        ),
+                    ))],
                 ),
             },
         ],
@@ -276,11 +291,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[1, 2],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AdjustPlayersLife {
-                        players: AffectedPlayers::EachPlayer,
-                        gain: false,
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![Instruction::AdjustLife(Box::new(
+                        crate::toolbox::AdjustLifeSpec::lose(
+                            crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer),
+                            ValueExpr::literal(1),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -288,11 +304,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[3],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AdjustPlayersLife {
-                        players: AffectedPlayers::EachPlayer,
-                        gain: false,
-                        amount: ValueExpr::literal(2),
-                    }],
+                    vec![Instruction::AdjustLife(Box::new(
+                        crate::toolbox::AdjustLifeSpec::lose(
+                            crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer),
+                            ValueExpr::literal(2),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -328,11 +345,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[4],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AdjustPlayersLife {
-                        players: AffectedPlayers::EachPlayer,
-                        gain: false,
-                        amount: ValueExpr::literal(2),
-                    }],
+                    vec![Instruction::AdjustLife(Box::new(
+                        crate::toolbox::AdjustLifeSpec::lose(
+                            crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer),
+                            ValueExpr::literal(2),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -381,10 +399,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[6],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AdjustEachOpponentLife {
-                        adjustment: LifeAdjustment::Lose(5.into()),
-                        controller_adjustment: None,
-                    }],
+                    vec![Instruction::AdjustLife(Box::new(
+                        crate::toolbox::AdjustLifeSpec::lose(
+                            crate::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent),
+                            ValueExpr::literal(5),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -417,9 +437,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[8],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DrawController {
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![Instruction::DrawCards(Box::new(
+                        crate::toolbox::DrawCardsSpec::simple(
+                            crate::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {

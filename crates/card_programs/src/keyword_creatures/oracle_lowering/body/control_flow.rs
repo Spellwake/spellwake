@@ -1142,11 +1142,13 @@ pub(super) fn lower_look_top_intermediate_grant(
         } if is_moved_anaphora(subject) => {
             let ab = lower_ability_change(keywords, vocabulary).ok()?;
             let dur = lower_duration(duration).ok()?;
-            Some(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::LastMoved),
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab)]),
-                duration: dur,
-            })
+            Some(super::super::toolbox_emit::apply_continuous_parts(
+                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                    EffectSubject::LastMoved,
+                )),
+                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab)]),
+                dur,
+            ))
         }
         InstructionAst::ModifyPT {
             subject,
@@ -1158,14 +1160,16 @@ pub(super) fn lower_look_top_intermediate_grant(
             let px: i64 = dx.trim().replace('\u{2212}', "-").parse().ok()?;
             let py: i64 = dy.trim().replace('\u{2212}', "-").parse().ok()?;
             let dur = lower_duration(duration).ok()?;
-            Some(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::LastMoved),
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPTExpr {
+            Some(super::super::toolbox_emit::apply_continuous_parts(
+                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                    EffectSubject::LastMoved,
+                )),
+                ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPTExpr {
                     power: Box::new(ValueExpr::literal(px)),
                     toughness: Box::new(ValueExpr::literal(py)),
                 }]),
-                duration: dur,
-            })
+                dur,
+            ))
         }
         InstructionAst::PutCounters {
             subject,
@@ -1989,11 +1993,15 @@ pub(super) fn lower_multi_target_fixed_clauses(
                             parts,
                             duration,
                         } => {
-                            normalized_ops.push(Instruction::ChangeGroup {
-                                group: Box::new(EffectSubject::TargetObject),
-                                parts,
-                                duration,
-                            });
+                            normalized_ops.push(
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(
+                                        Box::new(EffectSubject::TargetObject),
+                                    ),
+                                    parts,
+                                    duration,
+                                ),
+                            );
                         }
                         spellwake_engine::program::PermanentTargetAction::RequireCombatAction(
                             kind,
@@ -2011,7 +2019,11 @@ pub(super) fn lower_multi_target_fixed_clauses(
                         spellwake_engine::program::PermanentTargetAction::Damage(amount)
                             if single_instruction =>
                         {
-                            normalized_ops.push(Instruction::DamageAmount(amount));
+                            normalized_ops.push(super::super::toolbox_emit::deal_damage(
+                                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                amount,
+                                false,
+                            ));
                         }
                         other => {
                             normalized_ops.push(Instruction::AffectPermanentTargets {
@@ -2026,7 +2038,11 @@ pub(super) fn lower_multi_target_fixed_clauses(
                         min_targets: 1,
                         max_targets: 1,
                     } if single_instruction => {
-                        normalized_ops.push(Instruction::DamageAmount(amount));
+                        normalized_ops.push(super::super::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            amount,
+                            false,
+                        ));
                     }
                     other => normalized_ops.push(other),
                 }
@@ -2399,7 +2415,17 @@ pub(super) fn lower_bound_x_for_resolution(
     if !is_object_body_target(builder.target, false) {
         let replacement = builder.instructions.iter().rev().find_map(|op| match op {
             Instruction::Amass { .. } => Some(ValueObjectRef::LastAmassedArmy),
-            Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_) => {
+            Instruction::Sacrifice { .. } => Some(ValueObjectRef::LastSacrificedCreature),
+            Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
+                if super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                    matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                        }
+                    )
+                }) =>
+            {
                 Some(ValueObjectRef::LastSacrificedCreature)
             }
             Instruction::LookTopChoose {
@@ -6715,13 +6741,20 @@ pub(in super::super) fn lower_instruction_seq(
                     && probe.instructions.len() == prev_len + 1
                 {
                     let upgraded = match probe.instructions.last() {
-                        Some(Instruction::DamageAmount(amt)) => {
-                            Some(Instruction::DamageAmountThenExileIfDies(amt.clone()))
-                        }
-                        Some(Instruction::Damage { amount }) => {
-                            Some(Instruction::DamageAmountThenExileIfDies(
-                                ValueExpr::Literal(amount.clone()),
-                            ))
+                        Some(Instruction::DealDamage(spec))
+                            if !spec.exile_if_dies
+                                && matches!(
+                                    spec.source,
+                                    spellwake_engine::toolbox::DamageSourceQuery::EntrySource
+                                )
+                                && matches!(
+                                    spec.recipients,
+                                    spellwake_engine::toolbox::DamageTargetQuery::Targets
+                                ) =>
+                        {
+                            let mut next = (**spec).clone();
+                            next.exile_if_dies = true;
+                            Some(Instruction::DealDamage(Box::new(next)))
                         }
                         _ => None,
                     };
@@ -6787,9 +6820,7 @@ pub(in super::super) fn lower_instruction_seq(
                     }
                     _ => {}
                 },
-                Some(Instruction::ChangeAbilitySource { parts, .. })
-                | Some(Instruction::ChangeGroup { parts, .. })
-                | Some(Instruction::ModifyAnyNumberOfPermanents { parts, .. })
+                Some(Instruction::ModifyAnyNumberOfPermanents { parts, .. })
                 | Some(Instruction::AffectPermanentTargets {
                     action: PermanentTargetAction::Modify { parts, .. },
                     ..
@@ -7612,10 +7643,10 @@ pub(in super::super) fn lower_instruction_seq(
             }
             if let Some(life_amt) = life_opt {
                 let mut branch_ops = Vec::new();
-                branch_ops.push(Instruction::PayLife {
-                    player: payer,
-                    amount: life_amt,
-                });
+                branch_ops.push(super::super::toolbox_emit::pay_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(payer),
+                    life_amt,
+                ));
                 if paid_ops.is_empty() && else_ops.is_empty() {
                     // PayLife alone suffices when no follow-up branch exists.
                 } else if else_ops.is_empty() {
@@ -8679,14 +8710,9 @@ pub(in super::super) fn lower_instruction_seq(
                     op,
                     Instruction::CollectEvidence { .. }
                         | Instruction::Behold { .. }
-                        | Instruction::PayLife { .. }
-                        | Instruction::PayEnergy { .. }
-                        | Instruction::PayControllerLife(_)
-                        | Instruction::PayControllerEnergy(_)
                         | Instruction::ZoneOp(_)
                         | Instruction::ForEachPlayerQuery { .. }
                         | Instruction::Sacrifice { .. }
-                        | Instruction::SacrificeMatching(_)
                         | Instruction::Discard { .. }
                         | Instruction::ExileTopPlay { .. }
                         | Instruction::LookTopChoose { .. }
@@ -8701,6 +8727,17 @@ pub(in super::super) fn lower_instruction_seq(
                         | Instruction::UntapOrTapSelect { .. }
                         | Instruction::Mill { .. }
                         | Instruction::CounterTriggeringStackObject
+                ) || matches!(
+                    op,
+                    Instruction::AdjustLife(spec)
+                        if matches!(spec.op, spellwake_engine::toolbox::LifeOp::Pay(_))
+                ) || matches!(
+                    op,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::PlayerMutation::PayCounter { .. }
+                        )
                 ) || matches!(
                     op,
                     Instruction::ApplyContinuous(spec)
@@ -9539,9 +9576,7 @@ pub(in super::super) fn lower_instruction_seq(
                             | Instruction::Jump { .. }
                             | Instruction::BindResolutionX(_)
                             | Instruction::ChooseValue { .. }
-                            | Instruction::AdjustControllerLife { .. }
-                            | Instruction::AdjustPlayersLife { .. }
-                            | Instruction::GainControllerLife { .. }
+                            | Instruction::AdjustLife(_)
                             | Instruction::AddMana(_)
                             | Instruction::AddManaForPlayer { .. } => continue,
                             Instruction::ApplyContinuous(spec)
@@ -9771,7 +9806,16 @@ pub(in super::super) fn lower_instruction_seq(
                 PlayerRefAst::EachOpponent => {
                     builder
                         .instructions
-                        .push(Instruction::OpponentsLoseAndControllerGains(amt));
+                        .push(super::super::toolbox_emit::drain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Group(
+                                AffectedPlayers::EachOpponent,
+                            ),
+                            amt,
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            false,
+                        ));
                     i += 2;
                     continue;
                 }
@@ -9779,7 +9823,16 @@ pub(in super::super) fn lower_instruction_seq(
                     builder.bind_target(BodyTarget::SinglePlayer)?;
                     builder
                         .instructions
-                        .push(Instruction::DrainTargetAndGain(amt));
+                        .push(super::super::toolbox_emit::drain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                            amt,
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            true,
+                        ));
                     i += 2;
                     continue;
                 }
@@ -9787,7 +9840,16 @@ pub(in super::super) fn lower_instruction_seq(
                     builder.bind_target(BodyTarget::SingleOpponent)?;
                     builder
                         .instructions
-                        .push(Instruction::DrainTargetAndGain(amt));
+                        .push(super::super::toolbox_emit::drain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                            amt,
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            true,
+                        ));
                     i += 2;
                     continue;
                 }

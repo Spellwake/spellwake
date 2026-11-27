@@ -129,9 +129,14 @@ impl TriggerState {
                             controller: watch.controller,
                             body: ExecutableBody::new(
                                 crate::program::BodyTarget::None,
-                                vec![crate::program::Instruction::DrawController {
-                                    amount: crate::program::ValueExpr::Literal(count),
-                                }],
+                                vec![crate::program::Instruction::DrawCards(Box::new(
+                                    crate::toolbox::DrawCardsSpec::simple(
+                                        crate::toolbox::PlayerSelector::Resolving(
+                                            crate::program::ResolvingPlayer::Controller,
+                                        ),
+                                        crate::program::ValueExpr::Literal(count),
+                                    ),
+                                ))],
                             ),
                         };
                         self.waiting.insert(instance, waiting.clone());

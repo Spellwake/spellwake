@@ -6682,7 +6682,12 @@ fn lower_inline_replacement_instructions(
                 if !amount.is_world_evaluable() || amount.validate_world_expr(vocabulary).is_err() {
                     return Err("oracle:unsupported-replacement");
                 }
-                instructions.push(Instruction::SetPlayersLife { players, amount });
+                instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_life(
+                        spellwake_engine::toolbox::PlayerSelector::Group(players),
+                        amount,
+                    ),
+                );
             }
             other => {
                 let sub =
@@ -9305,8 +9310,8 @@ fn rewrite_remove_counters_subject_prior_result(
     replacement: EventValueKind,
 ) {
     for op in &mut body.instructions {
-        match op {
-            Instruction::MutateObject(spec) => match &mut spec.op {
+        if let Instruction::MutateObject(spec) = op {
+            match &mut spec.op {
                 spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. }
                 | spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. } => {
                     rewrite_value_expr_prior_result(amount, replacement);
@@ -9318,11 +9323,7 @@ fn rewrite_remove_counters_subject_prior_result(
                     rewrite_value_expr_prior_result(amount, replacement);
                 }
                 _ => {}
-            },
-            Instruction::RemoveCountersFromPermanent { amount, .. } => {
-                rewrite_value_expr_prior_result(amount, replacement);
             }
-            _ => {}
         }
     }
 }
@@ -9510,9 +9511,14 @@ fn parse_prevent_followup(
     ) {
         let body = ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::GainControllerLife {
-                amount: ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    ValueExpr::EventValue(EventValueKind::DamagePreventedThisWay),
+                ),
+            ],
         );
         if validate_inline_followup_body(&body, vocabulary) {
             return Some(DamagePreventFollowup::InlineBody(Box::new(body)));

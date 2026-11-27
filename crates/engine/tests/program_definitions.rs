@@ -26,14 +26,26 @@ fn body(target: BodyTarget, instructions: Vec<Instruction>) -> ExecutableBody {
     ExecutableBody::new(target, instructions)
 }
 fn draw(amount: i64) -> Instruction {
-    Instruction::DrawController {
-        amount: spellwake_engine::program::ValueExpr::Literal(amount.into()),
-    }
+    spellwake_engine::program::Instruction::DrawCards(Box::new(
+        spellwake_engine::toolbox::DrawCardsSpec::simple(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+            ),
+            spellwake_engine::program::ValueExpr::Literal(amount.into()),
+        ),
+    ))
 }
 fn damage(amount: i64) -> Instruction {
-    Instruction::Damage {
-        amount: amount.into(),
-    }
+    spellwake_engine::program::Instruction::DealDamage(Box::new(
+        spellwake_engine::toolbox::DealDamageSpec {
+            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                spellwake_engine::program::ValueExpr::Literal(amount.into()),
+            ),
+            exile_if_dies: false,
+        },
+    ))
 }
 fn trigger(condition: TriggerSpec) -> TriggeredAbility {
     TriggeredAbility {

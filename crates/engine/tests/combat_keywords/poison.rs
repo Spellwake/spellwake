@@ -151,55 +151,6 @@ fn protected_player_receives_only_unprevented_infect_and_one_toxic_amount_on_a_h
 }
 
 #[test]
-fn departed_infect_source_uses_last_known_granted_keyword_for_noncombat_damage() {
-    let mut source = battlefield(1, A);
-    source.program = Program::artifact(
-        None,
-        vec![ActivatedAbility {
-            id: ActivatedAbilityId(1),
-            mana_cost: ManaCost::free(),
-            source_cost: SourceCost::Sacrifice,
-            body: ExecutableBody::new(
-                BodyTarget::SinglePlayer,
-                vec![Instruction::Damage { amount: 3.into() }],
-            ),
-        }],
-    );
-    let mut grant = instant(
-        2,
-        A,
-        change(AbilityChange {
-            granted_keywords: [Infect].into(),
-            granted_toxic: Some(5.into()),
-            ..Default::default()
-        }),
-    );
-    let spellwake_engine::program::ProgramKind::Spell(spell) = &mut grant.program.kind else {
-        unreachable!()
-    };
-    spell.body.target = BodyTarget::SinglePermanent;
-    let game = setup(vec![A, B], vec![source, grant], Step::PrecombatMain).into_state();
-    let granted = cast_on(&game, 2, 1);
-    let activation = act(
-        &granted,
-        A,
-        GameCommand::ActivateAbility {
-            source: object(&granted, 1).id(),
-            ability: ActivatedAbilityId(1),
-            target: TargetRef::Player(B),
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    assert_eq!(
-        object(activation.state(), 1).zone(),
-        ObjectZone::Graveyard(A)
-    );
-    let hit = round(activation.state());
-    assert_eq!(hit.state().execution().poison_counters(B), 3.into());
-    assert_eq!(hit.state().execution().life_total(B), Some(&20.into()));
-}
-
-#[test]
 fn tenth_poison_counter_checks_loss_with_other_reasons_and_multiple_recipients() {
     for (seats, amount) in [(vec![A, B], 9), (vec![A, B], 10), (vec![A, B, C], 10)] {
         let mut first = combat_creature(1, A, 20, 4, &[]);

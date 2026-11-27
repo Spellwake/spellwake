@@ -333,9 +333,14 @@ fn cmm_experiment_kraj_gains_and_loses_other_creatures_activated_abilities() {
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ],
         ),
     });
     donor
@@ -759,9 +764,12 @@ fn cmm_kykar_creates_a_flying_spirit_on_cast_and_sacrifices_it_for_red_mana() {
         ObjectDestination::Hand,
         free_instant(
             BodyTarget::None,
-            Instruction::AdjustControllerLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                ),
+                spellwake_engine::program::ValueExpr::literal(1),
+            ),
         ),
     );
     let state = game(

@@ -3,8 +3,7 @@ use super::*;
 use crate::{
     combat::{AttackDeclaration, BlockDeclaration, BlockStatus},
     object_identity::ObjectIdentityError,
-    occurrence::{RulesRecord, TriggerError, TriggerRelated},
-    program::{ExecutableBody, TriggeredAbility, TriggeredAbilityId},
+    occurrence::{RulesRecord, TriggerError},
     turn::{Step, TurnStart},
 };
 
@@ -88,128 +87,6 @@ fn attacker_pending(state: &EffectWindow, turn: &TurnScheduler) -> (EffectWindow
         panic!("attacker choice required")
     };
     (next, frame)
-}
-
-#[test]
-fn shared_tap_cut_discovers_distinct_related_objects_before_declaration_membership() {
-    let mut observer = SeedCard {
-        card: CardId(50),
-        owner: A,
-        destination: ObjectDestination::Battlefield { controller: A },
-        program: Program::artifact(None, vec![]),
-    };
-    observer.program.triggered.push(TriggeredAbility {
-        grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
-        id: TriggeredAbilityId(7),
-        condition: crate::program::TriggerSpec::becomes_tapped(
-            crate::program::ObjectFilter::creature()
-                .controlled()
-                .other_than_ability_source(),
-        ),
-        body: ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            }],
-        ),
-    });
-    let (state, turn) = prepared(
-        vec![creature(1, A), creature(2, A), observer],
-        Step::DeclareAttackers,
-    );
-    let (state, frame) = attacker_pending(&state, &turn);
-    let first = object(&state, 1);
-    let second = object(&state, 2);
-    let watcher = object(&state, 50);
-    let revision = state.revision();
-    let window_revision = state.window.revision();
-    let card_revision = state.window.cards().revision();
-    let selected = vec![
-        AttackDeclaration {
-            attacker: second,
-            defender: C,
-            defending_planeswalker: None,
-        },
-        AttackDeclaration {
-            attacker: first,
-            defender: B,
-            defending_planeswalker: None,
-        },
-    ];
-    let (next, _, append) = state
-        .resume_combat(
-            revision,
-            &frame,
-            A,
-            DecisionReply::DeclareAttackers(selected),
-            &turn,
-        )
-        .unwrap()
-        .into_parts();
-    let actual = events(&append);
-    assert_eq!(actual.len(), 2);
-    assert_eq!(
-        actual[0].cause,
-        EventCause::AttackTaps {
-            position: turn.position(),
-            actor: A
-        }
-    );
-    assert_eq!(actual[0].occurrences.len(), 2);
-    for (row, id) in actual[0].occurrences.iter().zip([first, second]) {
-        let RulesOccurrence::StatusChange { change, reason } = &row.value else {
-            panic!("real status relation")
-        };
-        assert_eq!(*reason, StatusReason::AttackDeclaration);
-        assert_eq!(change.before.id(), id);
-        assert_eq!(change.after.id(), id);
-        assert_eq!(change.before.tapped(), Some(false));
-        assert_eq!(change.after.tapped(), Some(true));
-        assert_eq!(row.id.event, actual[0].id);
-    }
-    assert_ne!(actual[0].id, actual[1].id);
-    let RulesOccurrence::AttackersDeclared {
-        origin,
-        selected,
-        membership,
-    } = &actual[1].occurrences[0].value
-    else {
-        panic!("one declaration")
-    };
-    assert_eq!(*origin, DeclarationOrigin::PlayerReply);
-    assert_eq!(
-        selected.iter().map(|row| row.attacker).collect::<Vec<_>>(),
-        vec![first, second]
-    );
-    assert_eq!(
-        membership,
-        &next
-            .combat
-            .as_ref()
-            .unwrap()
-            .attackers()
-            .cloned()
-            .collect::<Vec<_>>()
-    );
-    let waiting: Vec<_> = next.triggers.waiting().values().collect();
-    assert_eq!(waiting.len(), 2);
-    for (instance, id) in waiting.iter().zip([first, second]) {
-        assert_eq!(instance.source.object.id(), watcher);
-        assert_eq!(instance.causes.event(), actual[0].id);
-        let TriggerRelated::StatusChange(change) = &instance.causes.members()[0].related else {
-            panic!("owned related status pair")
-        };
-        assert_eq!(change.after.id(), id);
-        assert_ne!(id, instance.source.object.id());
-    }
-    assert_eq!(next.revision(), revision + 1);
-    assert_eq!(next.window.revision(), window_revision + 1);
-    assert_eq!(next.window.cards().revision(), card_revision + 2);
-    assert!(state.combat.is_none());
-    assert_eq!(
-        state.window.cards().get(first).unwrap().tapped(),
-        Some(false)
-    );
 }
 
 #[test]

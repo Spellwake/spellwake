@@ -511,9 +511,14 @@ fn watcher(condition: TriggerSpec) -> Program {
         condition,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            }],
+            vec![spellwake_engine::program::Instruction::AdjustLife(
+                Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                )),
+            )],
         ),
     });
     program

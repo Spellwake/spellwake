@@ -85,10 +85,17 @@ pub(super) fn compile(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DamageGroup {
-                        group: DamageGroup::Opponents,
-                        amount: 2.into(),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                                spellwake_engine::program::DamageRecipientsRef::Group(
+                                    DamageGroup::Opponents,
+                                ),
+                            )),
+                            spellwake_engine::program::ValueExpr::literal(2),
+                            false,
+                        ),
+                    ],
                 ),
             });
         } else if line
@@ -129,7 +136,12 @@ pub(super) fn compile(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 2,
                         },
-                        Instruction::PayControllerLife(2),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(2),
+                        ),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                             spellwake_engine::program::ValueExpr::Literal(1.into()),
                         ),

@@ -189,9 +189,12 @@ pub(super) fn compile(
         });
     }
     if gain_life {
-        instructions.push(Instruction::AdjustControllerLife {
-            adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-        });
+        instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::literal(1),
+            ),
+        );
     }
     instructions.push(
         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(

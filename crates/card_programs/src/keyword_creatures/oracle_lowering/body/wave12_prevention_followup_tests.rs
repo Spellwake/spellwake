@@ -72,9 +72,15 @@ fn wave12_prevention_rejects_dependent_life_but_preserves_independent_life() {
     )
     .unwrap();
     assert!(matches!(builder.instructions.as_slice(), [
-        Instruction::PreventDamageThisTurn(TurnPreventionFilter::Creatures),
-        Instruction::AdjustControllerLife { adjustment: LifeAdjustment::Gain(amount) },
-    ] if *amount == 3.into()));
+        Instruction::ApplyContinuous(prev_spec),
+        Instruction::AdjustLife(life_spec),
+    ] if matches!(
+        prev_spec.payload,
+        spellwake_engine::toolbox::ContinuousPayload::PreventDamage(_)
+    ) && matches!(
+        &life_spec.op,
+        spellwake_engine::toolbox::LifeOp::Gain(amount) if *amount == ValueExpr::literal(3)
+    )));
 }
 
 #[test]

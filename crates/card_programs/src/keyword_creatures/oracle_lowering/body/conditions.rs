@@ -272,9 +272,7 @@ pub(super) fn resolve_prev_anaphora_ref(
                 },
             }
         }
-        Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_) => {
-            Some(MatchObjectRef::LastMovedToGraveyard)
-        }
+        Instruction::Sacrifice { .. } => Some(MatchObjectRef::LastMovedToGraveyard),
         Instruction::SearchLibrary { .. } => Some(MatchObjectRef::LastAffected),
         _ => None,
     })
@@ -439,17 +437,20 @@ pub(super) fn resolve_match_object_ref(
             ) {
                 if matches!(
                     builder.instructions.last(),
-                    Some(Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_))
-                ) || matches!(
-                    builder.instructions.last(),
-                    Some(Instruction::ZoneOp(spec))
-                        if matches!(
+                    Some(Instruction::Sacrifice { .. })
+                ) || builder
+                    .instructions
+                    .last()
+                    .and_then(super::super::toolbox_emit::unwrap_zone_op)
+                    .is_some_and(|spec| {
+                        matches!(
                             spec.destination,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
                                 semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
                             }
                         )
-                ) {
+                    })
+                {
                     return Some(MatchObjectRef::LastMovedToGraveyard);
                 }
                 return Some(MatchObjectRef::SacrificedCreature);

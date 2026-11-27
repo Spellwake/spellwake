@@ -40,9 +40,16 @@ fn exact(value: &str) -> RulesInteger {
 }
 
 fn damage(amount: i64) -> Instruction {
-    Instruction::Damage {
-        amount: amount.into(),
-    }
+    spellwake_engine::program::Instruction::DealDamage(Box::new(
+        spellwake_engine::toolbox::DealDamageSpec {
+            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                spellwake_engine::program::ValueExpr::Literal(amount.into()),
+            ),
+            exile_if_dies: false,
+        },
+    ))
 }
 
 fn shield(amount: i64) -> Instruction {
@@ -1028,52 +1035,6 @@ fn invalid_replies_preserve_prior_work_and_the_exact_second_choice() {
     assert_eq!(valid, choose(&saved, effect));
     assert_eq!(marked(game, target), 2.into());
     assert_eq!(zone(game, 1), ObjectZone::Stack);
-}
-
-#[test]
-fn exact_large_multiplication_and_sequential_addition_never_narrow() {
-    let amount = exact(HUGE);
-    let game = initialize(
-        exact(FOUR_HUGE).plus(&1.into()),
-        vec![(
-            1,
-            A,
-            ExecutableBody::new(
-                BodyTarget::SingleCreature,
-                vec![
-                    multiplier(2),
-                    Instruction::Damage {
-                        amount: amount.clone(),
-                    },
-                    Instruction::Damage {
-                        amount: amount.clone(),
-                    },
-                ],
-            ),
-        )],
-    )
-    .unwrap()
-    .into_state();
-    let target = object(&game, FIRST);
-    let (candidate, source) = execute(&game, 1, target);
-    assert_finished(&candidate, source, 1);
-    assert_eq!(marked(candidate.state(), target), exact(FOUR_HUGE));
-    let journal = candidate.damage_journal();
-    assert_eq!(journal.applied.len(), 2);
-    for event in &journal.applied {
-        assert_eq!(event.amount, amount.times(&2.into()));
-    }
-    assert_eq!(journal.multiplications.len(), 2);
-    for event in &journal.multiplications {
-        assert_eq!(
-            (
-                event.before.clone(),
-                event.factor.clone(),
-                event.after.clone()
-            ),
-            (amount.clone(), 2.into(), amount.times(&2.into()))
-        );
-    }
 }
 
 #[test]

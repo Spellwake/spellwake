@@ -4,7 +4,6 @@ use super::*;
 use crate::{
     combat::CombatRules,
     effects::SeedCard,
-    life::LifeAdjustment,
     mana::ManaCost,
     object_identity::{CardId, ObjectDestination},
     program::{Comparison, CreatureTypeSlot, Instruction, Program, ResolutionCondition},
@@ -23,8 +22,11 @@ use std::{collections::BTreeSet, sync::Arc};
 const A: SeatId = SeatId(0);
 const B: SeatId = SeatId(1);
 fn before_resolution() -> GameState {
-    let gain = |n: i64| Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(n.into()),
+    let gain = |n: i64| {
+        crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+            crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+            crate::program::ValueExpr::Literal(n.into()),
+        )))
     };
     let ops = vec![
         Instruction::BranchIfFalse {

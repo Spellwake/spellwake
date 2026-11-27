@@ -210,10 +210,22 @@ impl EffectWindow {
         frame: &crate::day_night::TransformOrder,
         objects: Vec<ObjectId>,
     ) -> Result<(), EffectError> {
-        let Instruction::TransformSubtype(kind) = self.current_instruction()? else {
+        let Instruction::MutateObject(spec) = self.current_instruction()? else {
             return Err(EffectError::WrongResolutionFrame);
         };
-        if self.resolution_transform_order(*kind)?.as_ref() != Some(frame)
+        if !matches!(spec.op, crate::toolbox::ObjectMutation::Transform) {
+            return Err(EffectError::WrongResolutionFrame);
+        }
+        let crate::toolbox::ObjectQuery::ZoneScan { filter, .. } = &spec.source else {
+            return Err(EffectError::WrongResolutionFrame);
+        };
+        let crate::program::ObjectFilter::Clause(clause) = filter.as_ref() else {
+            return Err(EffectError::WrongResolutionFrame);
+        };
+        let crate::program::SubtypeFilter::Has(kind) = clause.subtypes else {
+            return Err(EffectError::WrongResolutionFrame);
+        };
+        if self.resolution_transform_order(kind)?.as_ref() != Some(frame)
             || objects.len() != frame.objects.len()
             || objects.iter().collect::<BTreeSet<_>>() != frame.objects.iter().collect()
         {
@@ -221,51 +233,6 @@ impl EffectWindow {
         }
         self.transform_orders.insert(frame.controller, objects);
         Ok(())
-    }
-
-    pub(super) fn transform_subtype(
-        &mut self,
-        entry: &crate::stack_window::StackEntry,
-        instruction: usize,
-        kind: spellwake_contracts::creature_types::CreatureTypeId,
-        append: &mut crate::occurrence::RulesJournal,
-    ) -> Result<(), EffectError> {
-        let mut groups = self.subtype_transform_groups(kind)?;
-        let mut orders = std::mem::take(&mut self.transform_orders);
-        let mut subjects = Vec::new();
-        for player in self.window.apnap_players()? {
-            let Some(group) = groups.remove(&player) else {
-                continue;
-            };
-            if group.len() > 1 {
-                subjects.extend(
-                    orders
-                        .remove(&player)
-                        .ok_or(EffectError::TransformTimestampOrderRequired)?,
-                );
-            } else {
-                subjects.extend(group);
-            }
-        }
-        if subjects.is_empty() {
-            return Ok(());
-        }
-        let before = self.rules_snapshot(None)?;
-        self.characteristics.restamp_transformations(&subjects)?;
-        for object in subjects.iter().copied() {
-            self.window.transform(object)?;
-        }
-        let clock = self.day_night();
-        self.emit_from(
-            crate::occurrence::EventCause::Instruction {
-                entry: entry.id(),
-                instruction,
-            },
-            &before,
-            None,
-            append,
-            |old, new, _| Self::day_change_occurrences(clock, clock, &subjects, old, new),
-        )
     }
 
     pub fn day_night(&self) -> DayNight {

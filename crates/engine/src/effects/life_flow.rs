@@ -737,49 +737,6 @@ impl EffectWindow {
         self.adjust_players_at_cut(entry, instruction, adjustments, append)
     }
 
-    pub(super) fn drain_target_and_gain(
-        &mut self,
-        entry: &StackEntry,
-        instruction: usize,
-        player: SeatId,
-        amount: RulesInteger,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        use crate::life::LifeChangeKind;
-        let before = self.rules_snapshot(None)?;
-        let controller = entry.controller();
-        let gain = (self.window.participants().contains(&controller)
-            && !self
-                .life_gain_prohibitions(&before.view().evaluated)?
-                .contains(&controller))
-        .then(|| (controller, LifeChangeKind::Gain, None, amount.clone()));
-        let loss = self.window.participants().contains(&player).then_some((
-            player,
-            LifeChangeKind::Loss,
-            None,
-            amount,
-        ));
-        let changes = self
-            .life
-            .apply_life_components(loss.into_iter().chain(gain))
-            .map_err(|_| EffectError::InconsistentProgram)?;
-        self.emit_from(
-            EventCause::Instruction {
-                entry: entry.id(),
-                instruction,
-            },
-            &before,
-            None,
-            append,
-            |_, _, _| {
-                Ok(changes
-                    .into_iter()
-                    .map(RulesOccurrence::LifeChanged)
-                    .collect())
-            },
-        )
-    }
-
     pub(super) fn exchange_life_with_source_toughness(
         &mut self,
         entry: &StackEntry,

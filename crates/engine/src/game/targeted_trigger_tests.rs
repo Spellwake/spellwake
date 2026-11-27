@@ -4,10 +4,9 @@ use super::*;
 use crate::{
     combat::CombatRules,
     effects::SeedCard,
-    life::LifeAdjustment,
     object_identity::{CardId, ObjectDestination},
     occurrence::RulesRecord,
-    program::{Instruction, Program, TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
+    program::{Program, TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
     test_support::{
         creature_types,
         current_profile::{
@@ -30,9 +29,14 @@ fn same_source_pending() -> GameState {
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            }],
+            vec![crate::program::Instruction::AdjustLife(Box::new(
+                crate::toolbox::AdjustLifeSpec::gain(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::TargetPlayer,
+                    ),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         ),
     });
     let mut cards = vec![SeedCard {
@@ -260,14 +264,28 @@ fn cleanup_pending(no_targets: bool) -> GameState {
     let (target, body) = if no_targets {
         (
             BodyTarget::SingleCreature,
-            vec![Instruction::Damage { amount: 1.into() }],
+            vec![crate::program::Instruction::DealDamage(Box::new(
+                crate::toolbox::DealDamageSpec {
+                    source: crate::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: crate::toolbox::DamageTargetQuery::Targets,
+                    amount: crate::program::DamageAmountSpec::Expr(
+                        crate::program::ValueExpr::Literal(1.into()),
+                    ),
+                    exile_if_dies: false,
+                },
+            ))],
         )
     } else {
         (
             BodyTarget::SinglePlayer,
-            vec![Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            }],
+            vec![crate::program::Instruction::AdjustLife(Box::new(
+                crate::toolbox::AdjustLifeSpec::gain(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::TargetPlayer,
+                    ),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         )
     };
     watcher.triggered.push(TriggeredAbility {

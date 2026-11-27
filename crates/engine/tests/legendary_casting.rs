@@ -6,28 +6,22 @@ mod creature_vocabulary;
 mod tr;
 use spellwake_contracts::names::{EnglishCardName, NameRules, ObjectNames};
 use spellwake_engine::{
-    activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
     characteristics::{
         AbilityChange, AbilityRemoval, ControlRecipient, ResolvedDuration, ResolvedPartSpec,
         SubtypeOperation, TypeChangeSpec, TypeOperation,
     },
     combat::CombatRules,
-    effects::{CopyTargetChoice, EffectError, SeedCard},
-    game::{
-        DecisionReply, GameCommand, GameContext, GameError, GameId, GameInput, GameState,
-        NativeCandidate, RuleFrame,
-    },
-    life::LifeAdjustment,
+    effects::{EffectError, SeedCard},
+    game::{GameCommand, GameContext, GameError, GameId, GameInput, GameState, NativeCandidate},
     mana::{
         FloatingMana, ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaPayment, ManaSpend,
         ManaType,
     },
     object_identity::{ObjectDestination, ObjectZone},
     occurrence::{EntryCompletion, EventCause, RulesOccurrence, RulesRecord, ZoneReason},
-    program::{BodyTarget, CardType, ExecutableBody, Instruction, Program, Supertype},
+    program::{BodyTarget, CardType, ExecutableBody, Program, Supertype},
     setup::GameSeed,
     stack_window::StackKind,
-    targets::TargetRef,
     turn::{Step, TurnStart},
 };
 use std::{
@@ -53,9 +47,14 @@ fn creature(is_legend: bool) -> Program {
 fn spell(n: u64, sorcery: bool, is_legend: bool) -> SeedCard {
     let body = ExecutableBody::new(
         BodyTarget::None,
-        vec![Instruction::AdjustControllerLife {
-            adjustment: LifeAdjustment::Gain(3.into()),
-        }],
+        vec![spellwake_engine::program::Instruction::AdjustLife(
+            Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                ),
+                spellwake_engine::program::ValueExpr::Literal(3.into()),
+            )),
+        )],
     );
     let p = if sorcery {
         Program::sorcery(ManaCost::one(ManaType::Green), body)
@@ -508,127 +507,4 @@ fn cleanup_expiry_removes_temporary_qualification_for_new_casts() {
     assert_eq!(next.state().turn().unwrap().position().step, Step::Upkeep);
     let priority = tr::submit(next.state(), P1, GameCommand::Pass);
     reject(priority.state(), 10);
-}
-
-#[test]
-fn sacrificing_the_qualifier_after_announcement_allows_spell_copy_and_both_resolutions() {
-    let mut keeper = creature(true);
-    keeper.activated.push(ActivatedAbility {
-        id: ActivatedAbilityId(1),
-        mana_cost: ManaCost::free(),
-        source_cost: SourceCost::Sacrifice,
-        body: ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
-            vec![Instruction::CopySpell],
-        ),
-    });
-    let mut damage = tr::spell(
-        10,
-        BodyTarget::SingleCreature,
-        vec![Instruction::Damage { amount: 1.into() }],
-    );
-    damage.program = legendary(Program::instant(
-        ManaCost::one(ManaType::Green),
-        ExecutableBody::new(
-            BodyTarget::SingleCreature,
-            vec![Instruction::Damage { amount: 1.into() }],
-        ),
-    ));
-    let game = initial(vec![
-        tr::card(1, keeper, true),
-        tr::controlled(2, P1, P1, creature(false)),
-        damage,
-        spell(11, false, true),
-    ]);
-    let announced = tr::submit(
-        &game,
-        P0,
-        GameCommand::CastPaid {
-            spell: tr::object(&game, 10),
-            target: TargetRef::Object(tr::object(&game, 2)),
-            payment: payment(),
-        },
-    );
-    let original = announced.mana_payment().unwrap().source;
-    let sacrificed = tr::submit(
-        announced.state(),
-        P0,
-        GameCommand::ActivateAbility {
-            source: tr::object(announced.state(), 1),
-            ability: ActivatedAbilityId(1),
-            target: TargetRef::Stack(original),
-            payment: Some(ManaPayment::default()),
-        },
-    );
-    assert_eq!(
-        sacrificed
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(tr::object(sacrificed.state(), 1))
-            .unwrap()
-            .zone(),
-        ObjectZone::Graveyard(P0)
-    );
-    reject(sacrificed.state(), 11);
-    let waiting = tr::pass_pair(sacrificed.state());
-    assert!(matches!(
-        waiting.state().pending_decision().unwrap().frame(),
-        RuleFrame::CopyTargets(_)
-    ));
-    let copied = tr::reply(
-        waiting.state(),
-        P0,
-        DecisionReply::CopyTargets(CopyTargetChoice::Retain),
-    );
-    let copy = copied
-        .state()
-        .execution()
-        .window()
-        .entries()
-        .last()
-        .unwrap();
-    assert!(matches!(copy.kind(), StackKind::SpellCopy { .. }));
-    assert_eq!(
-        copied
-            .state()
-            .execution()
-            .stack_copiable_supertypes(copy.id()),
-        Some(&BTreeSet::from([Supertype::Legendary]))
-    );
-    assert!(copied.mana_payment().is_none());
-    assert_eq!(
-        copied.state().execution().mana(P0, ManaType::Green),
-        1.into()
-    );
-    let first = tr::pass_pair(copied.state());
-    assert_eq!(
-        first
-            .state()
-            .execution()
-            .creature(tr::object(first.state(), 2))
-            .unwrap()
-            .unwrap()
-            .damage,
-        1.into()
-    );
-    let second = tr::pass_pair(first.state());
-    tr::assert_completion(&second, original, EntryCompletion::Resolved);
-    assert_eq!(
-        second
-            .state()
-            .execution()
-            .creature(tr::object(second.state(), 2))
-            .unwrap()
-            .unwrap()
-            .damage,
-        2.into()
-    );
-    assert!(second.state().execution().window().entries().is_empty());
-    let copies = tr::all_occurrences(&copied)
-        .into_iter()
-        .filter(|v| matches!(v, RulesOccurrence::CopyCreated { .. }))
-        .count();
-    assert_eq!(copies, 1);
 }

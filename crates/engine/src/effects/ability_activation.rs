@@ -1749,9 +1749,14 @@ impl EffectWindow {
                 if granting_damage_source.is_none() {
                     return Err(EffectError::InconsistentProgram);
                 }
-                *instruction = Instruction::Damage {
-                    amount: amount.clone(),
-                };
+                *instruction = Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
+                    source: crate::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: crate::toolbox::DamageTargetQuery::Targets,
+                    amount: crate::program::DamageAmountSpec::Expr(ValueExpr::Literal(
+                        amount.clone(),
+                    )),
+                    exile_if_dies: false,
+                }));
             }
             if let Instruction::SearchLibrary { filter } = instruction
                 && filter.is_transfigure()

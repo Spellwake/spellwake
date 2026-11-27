@@ -1629,9 +1629,14 @@ impl EffectWindow {
                     DelayedCopyAction::ReturnExiledWithCounters(objects) => {
                         vec![Instruction::ReturnDelayedExileWithCounters(objects.clone())]
                     }
-                    DelayedCopyAction::Draw(amount, _) => vec![Instruction::DrawController {
-                        amount: ValueExpr::Literal(amount.clone()),
-                    }],
+                    DelayedCopyAction::Draw(amount, _) => vec![Instruction::DrawCards(Box::new(
+                        crate::toolbox::DrawCardsSpec::simple(
+                            crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::Literal(amount.clone()),
+                        ),
+                    ))],
                     DelayedCopyAction::Sacrifice(objects) => {
                         vec![Instruction::SacrificeDelayedObjects(objects.clone())]
                     }
@@ -1691,9 +1696,14 @@ impl EffectWindow {
         } else if let Some((_, beneficiary)) = self.triggers.take_monarch(placement.instance) {
             let instruction = match beneficiary {
                 Some(player) => Instruction::BecomeMonarch(Some(player)),
-                None => Instruction::DrawController {
-                    amount: crate::program::ValueExpr::Literal(1.into()),
-                },
+                None => crate::program::Instruction::DrawCards(Box::new(
+                    crate::toolbox::DrawCardsSpec::simple(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        crate::program::ValueExpr::Literal(1.into()),
+                    ),
+                )),
             };
             self.payloads.insert(
                 placement.entry,

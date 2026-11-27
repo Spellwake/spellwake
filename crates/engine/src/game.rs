@@ -3344,7 +3344,16 @@ mod tests {
                                 source_cost,
                                 body: ExecutableBody::new(
                                     BodyTarget::SingleCreature,
-                                    vec![Instruction::Damage { amount: 1.into() }],
+                                    vec![Instruction::DealDamage(Box::new(
+                                        crate::toolbox::DealDamageSpec {
+                                            source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                            recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                            amount: crate::program::DamageAmountSpec::Expr(
+                                                crate::program::ValueExpr::Literal(1.into()),
+                                            ),
+                                            exile_if_dies: false,
+                                        },
+                                    ))],
                                 ),
                             }],
                         ),
@@ -3866,7 +3875,16 @@ mod tests {
                             ManaCost::one(ManaType::Red),
                             ExecutableBody::new(
                                 BodyTarget::SingleCreature,
-                                vec![Instruction::Damage { amount: 1.into() }],
+                                vec![Instruction::DealDamage(Box::new(
+                                    crate::toolbox::DealDamageSpec {
+                                        source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                        recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                        amount: crate::program::DamageAmountSpec::Expr(
+                                            crate::program::ValueExpr::Literal(1.into()),
+                                        ),
+                                        exile_if_dies: false,
+                                    },
+                                ))],
                             ),
                         ),
                     },
@@ -3969,10 +3987,28 @@ mod tests {
                             ExecutableBody::new(
                                 BodyTarget::SingleCreature,
                                 vec![
-                                    Instruction::Damage { amount: 2.into() },
+                                    Instruction::DealDamage(Box::new(
+                                        crate::toolbox::DealDamageSpec {
+                                            source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                            recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                            amount: crate::program::DamageAmountSpec::Expr(
+                                                crate::program::ValueExpr::Literal(2.into()),
+                                            ),
+                                            exile_if_dies: false,
+                                        },
+                                    )),
                                     Instruction::CreatePreventionShield { amount: 3.into() },
                                     Instruction::CreatePreventionShield { amount: 4.into() },
-                                    Instruction::Damage { amount: 5.into() },
+                                    Instruction::DealDamage(Box::new(
+                                        crate::toolbox::DealDamageSpec {
+                                            source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                            recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                            amount: crate::program::DamageAmountSpec::Expr(
+                                                crate::program::ValueExpr::Literal(5.into()),
+                                            ),
+                                            exile_if_dies: false,
+                                        },
+                                    )),
                                 ],
                             ),
                         ),
@@ -4061,7 +4097,14 @@ mod tests {
             Instruction::CreatePreventionShield { amount: 1.into() },
             Instruction::CreateDamageMultiplier { factor: 2.into() },
             Instruction::CreateDamageMultiplier { factor: 3.into() },
-            Instruction::Damage { amount: 5.into() },
+            Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
+                source: crate::toolbox::DamageSourceQuery::EntrySource,
+                recipients: crate::toolbox::DamageTargetQuery::Targets,
+                amount: crate::program::DamageAmountSpec::Expr(crate::program::ValueExpr::Literal(
+                    5.into(),
+                )),
+                exile_if_dies: false,
+            })),
         ];
         let mut cards: Vec<_> = instructions
             .into_iter()
@@ -4303,7 +4346,16 @@ mod tests {
                         1,
                         a,
                         ManaType::Red,
-                        vec![Instruction::Damage { amount: 3.into() }],
+                        vec![Instruction::DealDamage(Box::new(
+                            crate::toolbox::DealDamageSpec {
+                                source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                amount: crate::program::DamageAmountSpec::Expr(
+                                    crate::program::ValueExpr::Literal(3.into()),
+                                ),
+                                exile_if_dies: false,
+                            },
+                        ))],
                         BodyTarget::SingleCreature,
                     ),
                     instant(
@@ -4481,7 +4533,16 @@ mod combat_tests {
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::Damage { amount: 1.into() }],
+                    vec![Instruction::DealDamage(Box::new(
+                        crate::toolbox::DealDamageSpec {
+                            source: crate::toolbox::DamageSourceQuery::EntrySource,
+                            recipients: crate::toolbox::DamageTargetQuery::Targets,
+                            amount: crate::program::DamageAmountSpec::Expr(
+                                crate::program::ValueExpr::Literal(1.into()),
+                            ),
+                            exile_if_dies: false,
+                        },
+                    ))],
                 ),
             ),
         });

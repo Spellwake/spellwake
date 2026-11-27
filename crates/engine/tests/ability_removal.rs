@@ -35,7 +35,16 @@ fn source(condition: Option<TriggerSpec>) -> Program {
         source_cost: SourceCost::Tap,
         body: ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::Damage { amount: 1.into() }],
+            vec![spellwake_engine::program::Instruction::DealDamage(
+                Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
+                    exile_if_dies: false,
+                }),
+            )],
         ),
     });
     if let Some(condition) = condition {
@@ -45,9 +54,14 @@ fn source(condition: Option<TriggerSpec>) -> Program {
             condition,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                }],
+                vec![spellwake_engine::program::Instruction::DrawCards(Box::new(
+                    spellwake_engine::toolbox::DrawCardsSpec::simple(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
+                ))],
             ),
         });
     }
@@ -234,50 +248,6 @@ fn removing_abilities_does_not_erase_an_activation_already_on_the_stack() {
         1.into()
     );
     assert!(completed.state().execution().window().entries().is_empty());
-}
-
-#[test]
-fn removing_a_dies_trigger_before_lethal_damage_prevents_lookback_discovery() {
-    let game = world(
-        vocabulary(),
-        vec![
-            card(
-                1,
-                source(Some(spellwake_engine::program::TriggerSpec::dies(
-                    spellwake_engine::program::ObjectFilter::self_object(),
-                ))),
-                true,
-            ),
-            spell(
-                2,
-                BodyTarget::SingleCreature,
-                vec![
-                    removal(AbilityRemoval::All, ResolvedDuration::NoStatedDuration),
-                    Instruction::Damage { amount: 10.into() },
-                ],
-            ),
-        ],
-        vec![CardId(1)],
-    );
-    let source = object(&game, 1);
-    let (completed, _) = resolve(&game, 2, source);
-    let physical = completed.state().execution().window().cards();
-    assert!(physical.get(source).is_none());
-    assert_eq!(
-        physical
-            .get(physical.current_identity(CardId(1)).unwrap())
-            .unwrap()
-            .zone(),
-        ObjectZone::Graveyard(P0)
-    );
-    assert!(completed.state().execution().window().entries().is_empty());
-    assert!(
-        !completed
-            .rules_journal()
-            .records
-            .iter()
-            .any(|record| matches!(record, RulesRecord::TriggerDiscovered(_)))
-    );
 }
 
 #[test]

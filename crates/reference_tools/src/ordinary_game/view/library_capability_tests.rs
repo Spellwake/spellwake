@@ -4,7 +4,6 @@ use super::*;
 use spellwake_engine::{
     combat::CombatRules,
     effects::{LibraryActionKind, LibraryTopReply, SeedCard},
-    life::LifeAdjustment,
     object_identity::ObjectDestination,
     priority::SeatId,
     program::{
@@ -16,9 +15,10 @@ use spellwake_engine::{
 };
 const DENIED: &str = "ordinary predecessor projection excludes unrepresented native capabilities";
 fn gain() -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(1.into()),
-    }
+    Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+        spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+        spellwake_engine::program::ValueExpr::literal(1),
+    )))
 }
 fn library(kind: LibraryActionKind, amount: i64) -> Instruction {
     let player = ResolvingPlayer::Controller;

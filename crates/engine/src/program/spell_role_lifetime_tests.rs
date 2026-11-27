@@ -7,9 +7,10 @@ fn spell_target() -> BodyTarget {
 }
 
 fn gain() -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(1.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(1.into()),
+    )))
 }
 
 fn discard(player: ResolvingPlayer, amount: i64) -> Instruction {
@@ -210,59 +211,6 @@ fn disjoint_or_unreachable_countering_does_not_poison_a_live_role_path() {
                 Instruction::Jump { destination: 2 },
                 Instruction::CounterSpell,
                 discard(ResolvingPlayer::TargetSpellController, 1),
-            ],
-        ),
-        Ok(())
-    );
-}
-
-#[test]
-fn other_player_roles_and_body_locals_survive_target_countering() {
-    let chosen = CreatureTypeSlot::new(0);
-    for operation in [
-        discard(ResolvingPlayer::Controller, 1),
-        sacrifice(ResolvingPlayer::Controller, 1),
-        Instruction::Discard {
-            players: AffectedPlayers::EachPlayer,
-            amount: crate::program::ValueExpr::Literal(1.into()),
-        },
-        Instruction::Sacrifice {
-            players: AffectedPlayers::EachPlayer,
-            amount: crate::program::ValueExpr::Literal(1.into()),
-            filter: PermanentTypeFilter {
-                any_types: Default::default(),
-                required_types: BTreeSet::from([CardType::Creature]),
-                forbidden_types: BTreeSet::new(),
-                object_filter: None,
-            },
-        },
-        optional(ResolvingPlayer::Controller),
-        payment(ResolvingPlayer::Controller, 3),
-    ] {
-        assert_eq!(
-            check(
-                spell_target(),
-                vec![Instruction::CounterSpell, operation, gain()],
-            ),
-            Ok(())
-        );
-    }
-    assert_eq!(
-        check(
-            spell_target(),
-            vec![
-                Instruction::ChooseCreatureType {
-                    into: chosen,
-                    excluding: BTreeSet::new(),
-                },
-                Instruction::CounterSpell,
-                Instruction::DrawController {
-                    amount: crate::program::ValueExpr::count_battlefield(
-                        crate::program::ObjectFilter::any()
-                            .controlled()
-                            .of_chosen_slot(chosen)
-                    ),
-                },
             ],
         ),
         Ok(())

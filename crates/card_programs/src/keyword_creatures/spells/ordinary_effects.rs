@@ -1,11 +1,8 @@
 //! Literal Oracle effects sharing one target and resolving in printed order.
 use super::*;
-use spellwake_engine::{
-    life::LifeAdjustment,
-    program::{
-        CardTypeMask, EffectSubject, ManaValueFilter, ObjectClause, ObjectFilter, PowerFilter,
-        ResolvingPlayer,
-    },
+use spellwake_engine::program::{
+    CardTypeMask, EffectSubject, ManaValueFilter, ObjectClause, ObjectFilter, PowerFilter,
+    ResolvingPlayer,
 };
 
 /// These forms describe resolving spells. In particular, a permanent's fixed
@@ -97,7 +94,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(
                     spellwake_engine::program::ValueExpr::Literal(7.into()),
                 ),
-                Instruction::EndControllerTurn,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::end_turn(),
             ],
         ));
     }
@@ -594,7 +591,19 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
     if let Some(rest) = text.strip_prefix(name).and_then(|s|s.strip_prefix(" deals ")) &&
         let Some((normal,enhanced)) = rest.split_once(" damage to each creature and each player. If you cast this spell during your main phase, ") &&
         let Some(enhanced) = enhanced.strip_prefix(name).and_then(|s|s.strip_prefix(" deals ")).and_then(|s|s.strip_suffix(" damage to each creature and each player instead.")) {
-        let damage=|value:&str| Some(Instruction::DamageGroup {group:spellwake_engine::program::DamageGroup::CreaturesAndPlayers,amount:number(value)?.into()});
+        let damage = |value: &str| {
+            Some(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                        spellwake_engine::program::DamageRecipientsRef::Group(
+                            spellwake_engine::program::DamageGroup::CreaturesAndPlayers,
+                        ),
+                    )),
+                    spellwake_engine::program::ValueExpr::literal(number(value)?),
+                    false,
+                ),
+            )
+        };
         return Some(ExecutableBody::new(BodyTarget::None,vec![Instruction::BranchIfFalse {condition:ResolutionCondition {left:spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::CastDuringOwnMain),
             comparison:Comparison::Equal,right:spellwake_engine::program::ValueExpr::Literal(1.into())},destination:3},damage(enhanced)?,Instruction::Jump {destination:4},damage(normal)?]));
     }
@@ -899,7 +908,20 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             }
             target = operand;
         }
-        if gain.is_some() && matches!(effect, Instruction::DamageGroup { .. }) {
+        if gain.is_some()
+            && matches!(
+                &effect,
+                Instruction::DealDamage(spec)
+                    if matches!(
+                        &spec.recipients,
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(rel)
+                            if matches!(
+                                rel.as_ref(),
+                                spellwake_engine::program::DamageRecipientsRef::Group(_)
+                            )
+                    )
+            )
+        {
             return None;
         }
         instructions.push(effect);
@@ -1031,15 +1053,16 @@ fn number(text: &str) -> Option<i64> {
 }
 
 fn controller_life(text: &str, gain: bool) -> Option<(BodyTarget, Instruction)> {
-    let amount = number(text.strip_suffix(" life")?)?.into();
+    let amount =
+        spellwake_engine::program::ValueExpr::literal(number(text.strip_suffix(" life")?)?);
+    let controller =
+        spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller);
     Some((
         BodyTarget::None,
-        Instruction::AdjustControllerLife {
-            adjustment: if gain {
-                LifeAdjustment::Gain(amount)
-            } else {
-                LifeAdjustment::Lose(amount)
-            },
+        if gain {
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(controller, amount)
+        } else {
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(controller, amount)
         },
     ))
 }
@@ -1405,18 +1428,43 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         ));
     }
     if line == "take an extra turn after this one" {
-        return Some((NoTarget, Instruction::TakeExtraTurn));
+        return Some((
+            NoTarget,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::take_extra_turn(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            ),
+        ));
     }
     if let Some(damage) = line.strip_prefix("prevent all ") {
-        use spellwake_engine::damage::TurnPreventionFilter;
-        let filter = match damage {
-            "combat damage that would be dealt this turn" => TurnPreventionFilter::Combat,
+        use spellwake_engine::damage::{
+            PreventionRecipientSpec, PreventionSourceFilter, PreventionSourceSpec,
+            TurnPreventionSpec,
+        };
+        let spec = match damage {
+            "combat damage that would be dealt this turn" => TurnPreventionSpec {
+                combat_only: true,
+                source: PreventionSourceSpec::Any,
+                recipient: PreventionRecipientSpec::Any,
+                both_directions: false,
+            },
             "damage that would be dealt this turn by creatures your opponents control" => {
-                TurnPreventionFilter::CreaturesControlledByOpponents
+                TurnPreventionSpec {
+                    combat_only: false,
+                    source: PreventionSourceSpec::Filter(PreventionSourceFilter {
+                        creatures_only: true,
+                        controller: spellwake_engine::program::ControllerFilter::Opponent,
+                        ..Default::default()
+                    }),
+                    recipient: PreventionRecipientSpec::Any,
+                    both_directions: false,
+                }
             }
             _ => return None,
         };
-        return Some((NoTarget, Instruction::PreventDamageThisTurn(filter)));
+        return Some((
+            NoTarget,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(spec),
+        ));
     }
     if line == "you may choose new targets for target spell or ability" {
         return Some((BodyTarget::SingleStackEntry, Instruction::ChooseNewTargets));
@@ -1631,10 +1679,13 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         if let Some(group) = group {
             return Some((
                 NoTarget,
-                Instruction::DamageGroup {
-                    group,
-                    amount: number(amount)?.into(),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                        spellwake_engine::program::DamageRecipientsRef::Group(group),
+                    )),
+                    spellwake_engine::program::ValueExpr::literal(number(amount)?),
+                    false,
+                ),
             ));
         }
         let target = match recipient {
@@ -1646,9 +1697,11 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         };
         return Some((
             target,
-            Instruction::Damage {
-                amount: number(amount)?.into(),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(number(amount)?),
+                false,
+            ),
         ));
     }
     if line == "put a +1/+1 counter on this creature" {
@@ -1763,9 +1816,10 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     if let Some(rest) = line.strip_prefix("target player loses ") {
         return Some((
             SinglePlayer,
-            Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Lose(number(rest.strip_suffix(" life")?)?.into()),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
+                spellwake_engine::program::ValueExpr::literal(number(rest.strip_suffix(" life")?)?),
+            ),
         ));
     }
     let amount = |value: &str| {
@@ -1938,7 +1992,13 @@ mod tests {
         assert_eq!(damage.target, BodyTarget::SingleAnyTarget);
         assert_eq!(
             damage.instructions,
-            [Instruction::Damage { amount: 3.into() }]
+            [
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(3),
+                    false,
+                )
+            ]
         );
         for text in [
             "Target creature gets +2/+2 until end of turn. Destroy target creature.",

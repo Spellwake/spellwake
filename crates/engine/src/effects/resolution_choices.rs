@@ -349,20 +349,13 @@ impl EffectWindow {
                     token_offer: work.cursor.tempting_token_offer.clone(),
                 }))
             }
-            Some(PendingWork::Resolution(_)) => match self.current_instruction().ok()? {
-                Instruction::TransformSubtype(kind) => self
-                    .resolution_transform_order(*kind)
-                    .ok()
-                    .flatten()
-                    .map(EffectDecision::TransformOrder),
-                _ => None,
-            },
             Some(PendingWork::ResolutionPayment(work)) => {
                 Some(EffectDecision::ResolutionPayment(work.frame(self.revision)))
             }
             None
             | Some(
-                PendingWork::TokenEntry(_)
+                PendingWork::Resolution(_)
+                | PendingWork::TokenEntry(_)
                 | PendingWork::PermanentEntry(_)
                 | PendingWork::BattlefieldEntry(_)
                 | PendingWork::SearchEntry(_)
@@ -989,13 +982,16 @@ impl EffectWindow {
                 .resolving()
                 .ok_or(EffectError::WrongResolutionFrame)?
                 .controller();
-            let unpaid_cost = matches!(
-                self.optional_following_instruction(&work.cursor)?,
-                Instruction::PayControllerLife(_)
-                    | Instruction::PayControllerEnergy(_)
-                    | Instruction::PayLife { .. }
-                    | Instruction::PayEnergy { .. }
-            ) && !self.window.participants().contains(&controller);
+            let next_instr = self.optional_following_instruction(&work.cursor)?;
+            let is_payment = matches!(
+                next_instr,
+                Instruction::AdjustLife(spec) if matches!(spec.op, crate::toolbox::LifeOp::Pay(_))
+            ) || matches!(
+                next_instr,
+                Instruction::MutatePlayer(spec)
+                    if matches!(spec.op, crate::toolbox::PlayerMutation::PayCounter { .. })
+            );
+            let unpaid_cost = is_payment && !self.window.participants().contains(&controller);
             if !unpaid_cost {
                 return Ok(());
             }
@@ -1136,26 +1132,6 @@ impl EffectWindow {
                     self.resolving_player_identity_at(ResolvingPlayer::Controller, None)?;
                 Ok(!self.window.cards().library(player).is_empty())
             }
-            Instruction::SacrificeMatching(filter) => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let controller = entry.controller();
-                let source = match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    _ => None,
-                };
-                let evaluated = self.evaluated_characteristics()?;
-                Ok(evaluated.objects.values().any(|permanent| {
-                    permanent.zone == ObjectZone::Battlefield
-                        && permanent.controller == Some(controller)
-                        && filter.matches(permanent, source)
-                        && !evaluated.sacrifice_prohibited(permanent.object)
-                }))
-            }
-
             Instruction::AffectPermanentTargets { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::ReturnOneNonlandPerOpponent
@@ -1164,17 +1140,6 @@ impl EffectWindow {
             Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource => Ok(true),
-            Instruction::ChangeAbilitySource { .. } | Instruction::GiveControlOfAbilitySource => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                Ok(
-                    matches!(entry.kind(), StackKind::TriggeredAbility { source } | StackKind::ActivatedAbility { source }
-                    if self.window.cards().get(source.id()).is_some_and(|card| card.zone() == ObjectZone::Battlefield)),
-                )
-            }
-
             Instruction::ReturnDelayedGraveyardToHand(_)
             | Instruction::LoseLifeAndScryForSubtype(_)
             | Instruction::ExileForBlackToken { .. }
@@ -1182,10 +1147,7 @@ impl EffectWindow {
             | Instruction::DamageFromGrantingPermanent { .. }
             | Instruction::CopyEntrantAsArtifact
             | Instruction::ReplaceSourceCreatedTokens => Err(EffectError::InconsistentProgram),
-            Instruction::ChooseTypeThenDestroyUnchosen
-            | Instruction::ChooseCreatureTypeForPlayer { .. } => {
-                Err(EffectError::InconsistentProgram)
-            }
+            Instruction::ChooseTypeThenDestroyUnchosen => Err(EffectError::InconsistentProgram),
             Instruction::MoveLoyaltyCounterToEnteringPermanent => {
                 let entry = self
                     .window
@@ -1211,7 +1173,6 @@ impl EffectWindow {
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ExileRelatedPermanents(_)
-            | Instruction::TransformSubtype(_)
             | Instruction::TapTargetWhileControllingSource
             | Instruction::GrantFlashback(_)
             | Instruction::DestroyAttachedEnchantmentSubtype(_)
@@ -1224,14 +1185,6 @@ impl EffectWindow {
             }
             Instruction::ExileOrderedPermanent(position) => {
                 Ok(self.ordered_permanent(*position)?.is_some())
-            }
-            Instruction::DamageGroup { group, .. } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                Ok(!self.group_damage_recipients(*group, controller)?.is_empty())
             }
             Instruction::TransformSourceAndAttachToTarget => Ok(self
                 .available_transform_source(
@@ -1248,50 +1201,86 @@ impl EffectWindow {
                         && self.attachment_permitted(object, Some(host), &current)
                 }))
             }
-            Instruction::PayControllerLife(n) => {
-                let actor = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                Ok(self
-                    .life
-                    .get(actor)
-                    .is_some_and(|total| *total >= i64::from(*n).into()))
+            Instruction::AdjustLife(spec) => {
+                if let crate::toolbox::LifeOp::Pay(amount) = &spec.op {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    let controller = entry.controller();
+                    let evaluated = self.evaluated_characteristics()?;
+                    let cost = self.resolve_value_expr(controller, amount)?.max(0.into());
+                    if !cost.is_positive() {
+                        return Ok(true);
+                    }
+                    if evaluated.life_and_creature_costs_prohibited() {
+                        return Ok(false);
+                    }
+                    let seats = self.eval_player_selector_at(
+                        controller,
+                        Some(entry),
+                        &spec.players,
+                        self.resolution_cursor(),
+                    )?;
+                    Ok(!seats.is_empty()
+                        && seats
+                            .iter()
+                            .all(|s| self.life.get(*s).is_some_and(|total| *total >= cost)))
+                } else if spec.players.uses_target() {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    let controller = entry.controller();
+                    let seats = self.eval_player_selector_at(
+                        controller,
+                        Some(entry),
+                        &spec.players,
+                        self.resolution_cursor(),
+                    )?;
+                    Ok(seats.iter().any(|s| self.window.participants().contains(s)))
+                } else if matches!(
+                    spec.players,
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::UniqueRelatedPlayer
+                    ) | crate::toolbox::PlayerSelector::Group(
+                        crate::program::AffectedPlayers::One(
+                            crate::program::ResolvingPlayer::UniqueRelatedPlayer
+                        )
+                    )
+                ) {
+                    Ok(self
+                        .window
+                        .participants()
+                        .contains(&self.captured_related_player()?))
+                } else {
+                    Ok(true)
+                }
             }
-            Instruction::PayControllerEnergy(n) => {
-                let actor = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                Ok(
-                    self.player_counters_of_kind(actor, CounterKind::Energy)
-                        >= i64::from(*n).into(),
-                )
-            }
-            Instruction::PayLife { player, amount } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let actor = self.resolving_player_identity_at(*player, None)?;
-                let cost = self.resolve_value_expr(controller, amount)?.max(0.into());
-                let evaluated = self.evaluated_characteristics()?;
-                Ok(!cost.is_positive()
-                    || (!evaluated.life_and_creature_costs_prohibited()
-                        && self.life.get(actor).is_some_and(|total| *total >= cost)))
-            }
-            Instruction::PayEnergy { player, amount } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let actor = self.resolving_player_identity_at(*player, None)?;
-                let cost = self.resolve_value_expr(controller, amount)?.max(0.into());
-                Ok(self.player_counters_of_kind(actor, CounterKind::Energy) >= cost)
+            Instruction::MutatePlayer(spec) => {
+                if let crate::toolbox::PlayerMutation::PayCounter { kind, amount } = &spec.op {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    let controller = entry.controller();
+                    let cost = self.resolve_value_expr(controller, amount)?.max(0.into());
+                    if !cost.is_positive() {
+                        return Ok(true);
+                    }
+                    let seats = self.eval_player_selector_at(
+                        controller,
+                        Some(entry),
+                        &spec.players,
+                        self.resolution_cursor(),
+                    )?;
+                    Ok(!seats.is_empty()
+                        && seats
+                            .iter()
+                            .all(|s| self.player_counters_of_kind(*s, *kind) >= cost))
+                } else {
+                    Ok(true)
+                }
             }
             Instruction::TapOrUntapControlled {
                 players: crate::program::AffectedPlayers::One(role),
@@ -1382,12 +1371,10 @@ impl EffectWindow {
                     .count();
                 Ok(!requested.is_positive() || RulesInteger::from_usize(hand_count) >= requested)
             }
-            Instruction::EndControllerTurn
-            | Instruction::ChooseNewTargets
+            Instruction::ChooseNewTargets
             | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::FixedTargetClause(_)
-            | Instruction::Ascend => Ok(true),
+            | Instruction::FixedTargetClause(_) => Ok(true),
             Instruction::FightSourceWithTarget => {
                 let entry = self
                     .window
@@ -1438,24 +1425,19 @@ impl EffectWindow {
             | Instruction::Proliferate
             | Instruction::AddMana(_)
             | Instruction::ExileTopForPlay { .. }
-            | Instruction::ChangeGroup { .. }
             | Instruction::Bolster(_)
             | Instruction::Amass { .. }
             | Instruction::ExploreSource
             | Instruction::ManifestTop { .. }
-            | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
-            | Instruction::WinGame(_)
-            | Instruction::LoseGame(_)
             | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
@@ -1482,7 +1464,6 @@ impl EffectWindow {
             | Instruction::Demonstrate
             | Instruction::Enlist
             | Instruction::ChooseOneLastMoved { .. }
-            | Instruction::ZoneOp(_)
             | Instruction::DrawCards(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -1495,13 +1476,101 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::CreateTokenCopy { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::RevealUntilMatch { .. }
-            | Instruction::MillEachPlayer(_) => Ok(true),
+            | Instruction::RevealUntilMatch { .. } => Ok(true),
+            Instruction::ZoneOp(spec) => {
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Graveyard {
+                        semantics: crate::toolbox::GraveyardSemantics::Sacrifice
+                    }
+                ) && let crate::toolbox::ObjectQuery::ZoneScan {
+                    zone: crate::toolbox::QueryZone::BattlefieldControlledBy(player_sel),
+                    filter,
+                    ..
+                } = &spec.source
+                    && let crate::toolbox::ZoneSelection::Prompt { min, .. } = &spec.selection
+                {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    let controller = entry.controller();
+                    let requested = self.resolve_value_expr(controller, min)?;
+                    if !requested.is_positive() {
+                        return Ok(true);
+                    }
+                    let seats = self.eval_player_selector_at(
+                        controller,
+                        Some(entry),
+                        player_sel,
+                        self.resolution_cursor(),
+                    )?;
+                    let source = match entry.kind() {
+                        StackKind::ActivatedAbility { source }
+                        | StackKind::TriggeredAbility { source } => Some(source.id()),
+                        _ => None,
+                    };
+                    let evaluated = self.evaluated_characteristics()?;
+                    let excluded = BTreeSet::new();
+                    Ok(!seats.is_empty()
+                        && seats.iter().all(|player| {
+                            let matching_count = evaluated
+                                .objects
+                                .values()
+                                .filter(|permanent| {
+                                    permanent.zone == ObjectZone::Battlefield
+                                        && permanent.controller == Some(*player)
+                                        && self
+                                            .window
+                                            .cards()
+                                            .phased_out_under(permanent.object)
+                                            .is_none()
+                                        && self.matches_object_filter(
+                                            **filter, permanent, controller, source, &excluded,
+                                            &evaluated,
+                                        )
+                                        && !evaluated.sacrifice_prohibited(permanent.object)
+                                })
+                                .count();
+                            RulesInteger::from_usize(matching_count) >= requested
+                        }))
+                } else {
+                    Ok(true)
+                }
+            }
+            Instruction::DealDamage(spec) => match &spec.recipients {
+                crate::toolbox::DamageTargetQuery::Targets => {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    let evaluated = self.evaluated_characteristics()?;
+                    Ok(match self.instruction_target(entry)?.choice().target {
+                        TargetRef::Player(player) => self.window.participants().contains(&player),
+                        TargetRef::Object(card) => evaluated
+                            .get(card)
+                            .and_then(ObjectCharacteristics::damage_recipient)
+                            .is_some(),
+                        TargetRef::Stack(_) => false,
+                    })
+                }
+                crate::toolbox::DamageTargetQuery::Relative(rel) => match rel.as_ref() {
+                    crate::program::DamageRecipientsRef::Group(group) => {
+                        let controller = self
+                            .window
+                            .resolving()
+                            .ok_or(EffectError::WrongResolutionFrame)?
+                            .controller();
+                        Ok(!self.group_damage_recipients(*group, controller)?.is_empty())
+                    }
+                    _ => Ok(true),
+                },
+                _ => Ok(true),
+            },
             Instruction::MutateObject(spec) => {
                 if matches!(spec.source, crate::toolbox::ObjectQuery::Targets) {
                     let entry = self
@@ -1509,13 +1578,36 @@ impl EffectWindow {
                         .resolving()
                         .ok_or(EffectError::WrongResolutionFrame)?;
                     Ok(match self.instruction_target(entry)?.choice().target {
-                        TargetRef::Object(card) => self
-                            .window
-                            .cards()
-                            .get(card)
-                            .is_some_and(|v| v.zone() == ObjectZone::Battlefield),
+                        TargetRef::Object(card) => {
+                            if matches!(spec.op, crate::toolbox::ObjectMutation::RemoveFromCombat) {
+                                self.combat.as_ref().is_some_and(|combat| {
+                                    combat.attacker(card).is_some()
+                                        || combat.blocker(card).is_some()
+                                })
+                            } else {
+                                self.window
+                                    .cards()
+                                    .get(card)
+                                    .is_some_and(|v| v.zone() == ObjectZone::Battlefield)
+                            }
+                        }
                         _ => true,
                     })
+                } else if matches!(spec.source, crate::toolbox::ObjectQuery::Source) {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?;
+                    Ok(matches!(
+                        entry.kind(),
+                        StackKind::TriggeredAbility { source }
+                            | StackKind::ActivatedAbility { source }
+                            if self
+                                .window
+                                .cards()
+                                .get(source.id())
+                                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                    ))
                 } else {
                     Ok(true)
                 }
@@ -1539,9 +1631,6 @@ impl EffectWindow {
                     | crate::program::AffectedPlayers::EachOtherPlayer,
                 ..
             }
-            | Instruction::TakeExtraTurn
-            | Instruction::CreateEmblem(_)
-            | Instruction::CreateOpponentEmblems(_)
             | Instruction::UntapUpTo { .. }
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
@@ -1553,15 +1642,10 @@ impl EffectWindow {
             | Instruction::PutCounterOnRelatedPermanent
             | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
             | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-            | Instruction::OpponentsLoseAndControllerGains(_)
-            | Instruction::AdjustEachOpponentLife { .. }
-            | Instruction::AdjustPlayersLife { .. }
-            | Instruction::SetPlayersLife { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::IncreaseSpeed
             | Instruction::BecomeMonarch(_)
-            | Instruction::TapEnchantedCreature
             | Instruction::RequireCondition(_)
             | Instruction::RequireAttackSourceNextTurn
             | Instruction::ChooseAttackDirection
@@ -1571,9 +1655,6 @@ impl EffectWindow {
             | Instruction::PhaseOutObjects(_)
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::DamageOpponentsAmount(_)
-            | Instruction::DamageRelatedPlayerAmount(_)
-            | Instruction::DamageGroupAmount { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::Cascade
@@ -1600,12 +1681,10 @@ impl EffectWindow {
             | Instruction::ReturnDelayedExileWithCounters(_)
             | Instruction::ReturnDelayedExile(_)
             | Instruction::ExileUnearthed(_)
-            | Instruction::DrainOpponents(_)
             | Instruction::SacrificeStateTriggerSource
             | Instruction::CounterWardSource
             | Instruction::CounterTriggeringStackObject
-            | Instruction::BoostSourceByCastManaValue
-            | Instruction::BoostLoneAttacker => Ok(true),
+            | Instruction::BoostSourceByCastManaValue => Ok(true),
             Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers => Ok(true),
             Instruction::PutLibraryCohortIntoGraveyard(_)
@@ -1638,13 +1717,6 @@ impl EffectWindow {
                     Ok(self.resolving_player(filter.searcher).is_ok())
                 }
             }
-            Instruction::AbilitySourceControllerLosesLife(_) => {
-                Err(EffectError::InconsistentProgram)
-            }
-            Instruction::RelatedPlayerLosesLife(_) => Ok(self
-                .window
-                .participants()
-                .contains(&self.captured_related_player()?)),
             Instruction::OfferVariablePayment { .. }
             | Instruction::DrawEachPlayerForPayments
             | Instruction::CreateReflexiveGraveyardReturn
@@ -1667,19 +1739,13 @@ impl EffectWindow {
             | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
             | Instruction::DrawControllerAndTarget { .. }
             | Instruction::DrawPlayersControllingName(_)
-            | Instruction::DrawController { .. }
-            | Instruction::GainControllerLife { .. }
-            | Instruction::DrainTargetAndGain(_)
-            | Instruction::AdjustControllerLife { .. }
             | Instruction::ExchangeLifeWithSourceToughness
             | Instruction::BoostSaddledAttacker { .. }
             | Instruction::SetControlledCreatureSizeToHand
-            | Instruction::AddExperienceCounter
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::ResolvePowerAbility(_)
             | Instruction::Adapt(_)
             | Instruction::UnattachEquipmentAndProtectHost
-            | Instruction::Unattach
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokensToFight(_)
             | Instruction::FightPairedCreatures(_)
@@ -1697,7 +1763,6 @@ impl EffectWindow {
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
-            | Instruction::DrawGame
             | Instruction::EmpowerJace { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. } => Ok(true),
@@ -1731,25 +1796,18 @@ impl EffectWindow {
                         }),
                 )
             }
-            Instruction::AdjustTargetLife { .. }
-            | Instruction::DamageTargetControllersCreatures { .. }
+            Instruction::DamageTargetControllersCreatures { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
-            | Instruction::DamageAmount(_)
-            | Instruction::DamageAmountThenExileIfDies(_)
             | Instruction::DamageCreatureAtSpellMastery { .. }
-            | Instruction::Damage { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
-            | Instruction::DisallowDamagePreventionThisTurn
-            | Instruction::PutOwnHandCardOnLibraryBottom
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
             | Instruction::LinkedPlayerLosesDamageAmount
-            | Instruction::RelatedPlayerLosesHalfLife
             | Instruction::ExileCombatDamagedCreature
             | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
@@ -1837,8 +1895,6 @@ impl EffectWindow {
             | Instruction::SacrificeEvoked
             | Instruction::SacrificeUpkeepSource(_)
             | Instruction::Attach(_)
-            | Instruction::RemoveTargetFromCombat
-            | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::DestroyTarget
             | Instruction::ReturnUpToOneRecentGraveyardCard
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
@@ -2358,7 +2414,6 @@ impl EffectWindow {
             | Instruction::Jump { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::AffectPermanentTargets { .. }
-            | Instruction::MillEachPlayer(_)
             | Instruction::PutLibraryCohortIntoGraveyard(_)
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::AttachControlledToSource { .. }
@@ -2394,24 +2449,18 @@ impl EffectWindow {
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
             | Instruction::SacrificeToContinue { .. }
-            | Instruction::SacrificeMatching(_)
             | Instruction::Discard { .. }
             | Instruction::BoostSaddledAttacker { .. }
             | Instruction::SetControlledCreatureSizeToHand
-            | Instruction::AddExperienceCounter
-            | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
-            | Instruction::WinGame(_)
-            | Instruction::LoseGame(_)
             | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
@@ -2441,6 +2490,9 @@ impl EffectWindow {
             | Instruction::ZoneOp(_)
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
+            | Instruction::AdjustLife(_)
+            | Instruction::DealDamage(_)
+            | Instruction::MutatePlayer(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
             | Instruction::BranchCondition { .. }
@@ -2452,13 +2504,10 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::CreateTokenCopy { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::PayLife { .. }
-            | Instruction::PayEnergy { .. }
             | Instruction::TapOrUntapControlled { .. }
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
@@ -2467,36 +2516,24 @@ impl EffectWindow {
             | Instruction::ResolvePowerAbility(_)
             | Instruction::Adapt(_)
             | Instruction::UnattachEquipmentAndProtectHost
-            | Instruction::Unattach
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokensToFight(_)
             | Instruction::FightPairedCreatures(_)
             | Instruction::CreateTokens { .. }
             | Instruction::CreateAttackingTokens { .. }
-            | Instruction::GainControllerLife { .. }
-            | Instruction::DrainTargetAndGain(_)
-            | Instruction::AdjustControllerLife { .. }
             | Instruction::ExchangeLifeWithSourceToughness
-            | Instruction::AdjustTargetLife { .. }
             | Instruction::ChooseTypeThenDestroyUnchosen
-            | Instruction::ChooseCreatureTypeForPlayer { .. }
             | Instruction::ChooseCreatureType { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
-            | Instruction::DamageAmount(_)
-            | Instruction::DamageAmountThenExileIfDies(_)
             | Instruction::DamageCreatureAtSpellMastery { .. }
-            | Instruction::Damage { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
-            | Instruction::TakeExtraTurn
-            | Instruction::DisallowDamagePreventionThisTurn
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::PreventDamageSpec(_)
-            | Instruction::PutOwnHandCardOnLibraryBottom
             | Instruction::ExileCapturedGraveyardCard
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
@@ -2505,14 +2542,10 @@ impl EffectWindow {
             | Instruction::PutCounterOnRelatedPermanent
             | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
             | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-            | Instruction::AbilitySourceControllerLosesLife(_)
-            | Instruction::RelatedPlayerLosesLife(_)
             | Instruction::LinkedPlayerLosesDamageAmount
-            | Instruction::RelatedPlayerLosesHalfLife
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
-            | Instruction::TransformSubtype(_)
             | Instruction::ExileCombatDamagedCreature
             | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
@@ -2522,18 +2555,12 @@ impl EffectWindow {
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::DamageCapturedBlocker(_)
             | Instruction::ChangeControlledPlaneswalkers { .. }
-            | Instruction::ChangeGroup { .. }
             | Instruction::UntapAndControlCreatures
             | Instruction::Proliferate
             | Instruction::DamagePlayersHalfLife
-            | Instruction::DamageGroup { .. }
             | Instruction::DamageTargetControllersCreatures { .. }
             | Instruction::DrawAndDamageOpponents { .. }
             | Instruction::RepeatOpponentLifeLoss
-            | Instruction::OpponentsLoseAndControllerGains(_)
-            | Instruction::AdjustEachOpponentLife { .. }
-            | Instruction::AdjustPlayersLife { .. }
-            | Instruction::SetPlayersLife { .. }
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
@@ -2549,7 +2576,6 @@ impl EffectWindow {
             | Instruction::ExileUntilOtherTargetLeaves
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
-            | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
@@ -2591,10 +2617,7 @@ impl EffectWindow {
             | Instruction::LookTopTakeOne { .. }
             | Instruction::IncreaseSpeed
             | Instruction::BecomeMonarch(_)
-            | Instruction::TapEnchantedCreature
             | Instruction::RequireCondition(_)
-            | Instruction::PayControllerLife(_)
-            | Instruction::PayControllerEnergy(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
             | Instruction::EquipNewToken
             | Instruction::Encore
@@ -2605,8 +2628,6 @@ impl EffectWindow {
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
             | Instruction::MoveLoyaltyCounterToEnteringPermanent
-            | Instruction::CreateEmblem(_)
-            | Instruction::CreateOpponentEmblems(_)
             | Instruction::SacrificeCombatContributor
             | Instruction::RevealCreatureOfSacrificedType
             | Instruction::ExileNonlandForFormerControllers
@@ -2657,9 +2678,6 @@ impl EffectWindow {
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::DamageDamagedPlayersCreatures
-            | Instruction::DamageOpponentsAmount(_)
-            | Instruction::DamageRelatedPlayerAmount(_)
-            | Instruction::DamageGroupAmount { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::EndStepCast { .. }
@@ -2676,7 +2694,6 @@ impl EffectWindow {
             | Instruction::ReturnDelayedExile(_)
             | Instruction::ExileUnearthed(_)
             | Instruction::ResolveTransfer(_)
-            | Instruction::DrainOpponents(_)
             | Instruction::ExtortDrain
             | Instruction::ResolveGrowth(_)
             | Instruction::ResolveCounterKeyword(_)
@@ -2686,10 +2703,7 @@ impl EffectWindow {
             | Instruction::CounterWardSource
             | Instruction::CounterTriggeringStackObject
             | Instruction::BoostSourceByCastManaValue
-            | Instruction::BoostLoneAttacker
             | Instruction::Attach(_)
-            | Instruction::RemoveTargetFromCombat
-            | Instruction::RemoveSubjectFromCombat(_)
             | Instruction::DestroyTarget
             | Instruction::ReturnUpToOneRecentGraveyardCard
             | Instruction::ExileUpToTwoGraveyardTargetsGainLife
@@ -2742,12 +2756,8 @@ impl EffectWindow {
             | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
             | Instruction::DrawControllerAndTarget { .. }
             | Instruction::DrawPlayersControllingName(_)
-            | Instruction::ChangeAbilitySource { .. }
-            | Instruction::GiveControlOfAbilitySource
             | Instruction::TransformSourceAndAttachToTarget
             | Instruction::RemoveCountersFromPermanent { .. }
-            | Instruction::EndControllerTurn
-            | Instruction::DrawController { .. }
             | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
@@ -2758,7 +2768,6 @@ impl EffectWindow {
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
-            | Instruction::DrawGame
             | Instruction::EmpowerJace { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }

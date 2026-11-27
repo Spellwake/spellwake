@@ -153,45 +153,6 @@ impl EffectWindow {
         }
         Ok(())
     }
-    /// Apply the normal continuous effect to the captured incarnation, even if the
-    /// trigger source left or the attacking permanent changed controllers.
-    pub(super) fn boost_lone_attacker(
-        &mut self,
-        entry: StackEntryId,
-        instruction: usize,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        use crate::characteristics::PowerToughness;
-        use crate::occurrence::TriggerRelated;
-        let trigger = self
-            .execution_bindings(entry)
-            .and_then(|bindings| bindings.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let [cause] = trigger.causes.members() else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let TriggerRelated::AttackedAlone(attacker) = cause.related else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        if !self
-            .window
-            .cards()
-            .get(attacker)
-            .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-        {
-            return Ok(());
-        }
-        self.modify_combat_objects(
-            entry,
-            instruction,
-            BTreeSet::from([attacker]),
-            PowerToughness {
-                power: 1.into(),
-                toughness: 1.into(),
-            },
-            append,
-        )
-    }
 
     pub(super) fn resolve_keyword_trigger(
         &mut self,

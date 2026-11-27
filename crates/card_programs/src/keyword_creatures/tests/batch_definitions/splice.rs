@@ -86,10 +86,10 @@ fn splice_orders_revealed_cards_preserves_host_and_reuses_hand_cards() {
             .unwrap()
             .instructions;
         assert_eq!(ops.len(), 3);
-        assert!(matches!(ops[0], Instruction::Damage { .. }));
+        assert!(matches!(ops[0], Instruction::DealDamage(_)));
         assert!(matches!(
             ops[if ray_first { 1 } else { 2 }],
-            Instruction::Damage { .. }
+            Instruction::DealDamage(_)
         ));
         assert!(matches!(
             ops[if ray_first { 2 } else { 1 }],

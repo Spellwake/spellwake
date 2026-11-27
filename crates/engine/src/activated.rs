@@ -863,9 +863,14 @@ impl ActivatedAbility {
             source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Cycling),
             body: ExecutableBody::new(
                 crate::program::BodyTarget::None,
-                vec![crate::program::Instruction::DrawController {
-                    amount: crate::program::ValueExpr::Literal(1.into()),
-                }],
+                vec![crate::program::Instruction::DrawCards(Box::new(
+                    crate::toolbox::DrawCardsSpec::simple(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        crate::program::ValueExpr::Literal(1.into()),
+                    ),
+                ))],
             ),
         }
     }
@@ -959,11 +964,6 @@ impl ActivatedAbility {
         }
         match self.body.instructions.as_slice() {
             [Instruction::SearchLibrary { filter }] => filter.is_typecycling_compatible(),
-            [
-                Instruction::DrawController {
-                    amount: crate::program::ValueExpr::Literal(amount),
-                },
-            ] => amount == &1.into(),
             [Instruction::DrawCards(spec)] => spec.amount == crate::program::ValueExpr::literal(1),
             _ => false,
         }

@@ -267,7 +267,16 @@ fn cast(game: &GameState, actor: SeatId, card: u64, target: TargetRef) -> Native
 }
 
 fn damage() -> Instruction {
-    Instruction::Damage { amount: 2.into() }
+    spellwake_engine::program::Instruction::DealDamage(Box::new(
+        spellwake_engine::toolbox::DealDamageSpec {
+            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                spellwake_engine::program::ValueExpr::Literal(2.into()),
+            ),
+            exile_if_dies: false,
+        },
+    ))
 }
 
 fn count(game: &GameState) -> &RulesInteger {

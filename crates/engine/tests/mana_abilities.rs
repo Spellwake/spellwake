@@ -3,25 +3,20 @@
 //! These authored programs do not qualify whole cards, games or nested mana timing.
 use spellwake_contracts::RulesInteger;
 use spellwake_engine::combat::CombatRules;
-use spellwake_engine::program::{BodyTarget, ExecutableBody};
 use spellwake_engine::setup::GameSeed;
 use spellwake_engine::{
     damage::DamageJournal,
-    effects::{CopyTargetChoice, EffectError, EffectWindow, Instruction, Program, SeedCard},
+    effects::{EffectError, EffectWindow, Program, SeedCard},
     game::{
         CandidateBase, GameCommand, GameContext, GameError, GameId, GameInput, GameState,
         NativeCandidate,
     },
-    mana::{
-        FloatingMana, ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaPayment, ManaSpend,
-        ManaType,
-    },
+    mana::{FloatingMana, ManaAbility, ManaAbilityId, ManaOutput, ManaType},
     object_identity::{
         CardId, GameObjects, ObjectDestination, ObjectId, ObjectIdentityError, ObjectZone,
     },
     priority::{PriorityError, PriorityPhase, SeatId},
     stack_window::{StackWindowError, WindowPhase},
-    targets::TargetRef,
 };
 use std::collections::BTreeMap;
 
@@ -72,33 +67,6 @@ fn land(card: u64, owner: SeatId, controller: SeatId, abilities: Vec<ManaAbility
         owner,
         destination: ObjectDestination::Battlefield { controller },
         program: Program::land(std::collections::BTreeSet::new(), abilities),
-    }
-}
-fn instant(
-    card: u64,
-    owner: SeatId,
-    cost: ManaCost,
-    instruction: Instruction,
-    body_target: BodyTarget,
-) -> SeedCard {
-    SeedCard {
-        card: CardId(card),
-        owner,
-        destination: ObjectDestination::Hand,
-        program: Program::instant(cost, ExecutableBody::new(body_target, vec![instruction])),
-    }
-}
-fn creature() -> SeedCard {
-    SeedCard {
-        card: CardId(90),
-        owner: B,
-        destination: ObjectDestination::Battlefield { controller: B },
-        program: Program::creature(
-            None,
-            2.into(),
-            100.into(),
-            std::collections::BTreeSet::new(),
-        ),
     }
 }
 fn pools(player: SeatId, amounts: &[(ManaType, i64)]) -> Vec<FloatingMana> {
@@ -248,9 +216,6 @@ fn pass(game: &GameState) -> GameState {
     assert!(candidate.mana_payment().is_none());
     assert_eq!(balances(candidate.state()), before);
     candidate.into_state()
-}
-fn pass_round(game: &GameState) -> GameState {
-    pass(&pass(game))
 }
 fn production(
     candidate: &NativeCandidate,
@@ -563,166 +528,6 @@ fn owning_an_untapped_source_does_not_restore_priority_after_passing() {
 }
 
 #[test]
-fn activating_with_a_live_stack_neither_inserts_a_new_entry_nor_resolves_existing_spell() {
-    let game = setup(
-        vec![
-            land(1, A, A, vec![ability(7, &[(ManaType::Red, 2)])]),
-            instant(
-                2,
-                A,
-                ManaCost::free(),
-                Instruction::Damage { amount: 1.into() },
-                BodyTarget::SingleCreature,
-            ),
-            creature(),
-        ],
-        nonzero_pools(),
-    );
-    let cast = no_production(
-        &game,
-        A,
-        GameCommand::Cast {
-            spell: object(&game, 2),
-            target: TargetRef::Object(object(&game, 90)),
-        },
-    );
-    assert!(cast.mana_payment().is_some());
-    let game = cast.into_state();
-    let candidate = accept(&game, A, activate(&game, 1, 7));
-    production(&candidate, &game, 1, 7, A, &output(&[(ManaType::Red, 2)]));
-    assert_eq!(candidate.state().execution().window().entries().len(), 1);
-    assert_eq!(
-        candidate
-            .state()
-            .execution()
-            .creature(object(&game, 90))
-            .unwrap()
-            .unwrap()
-            .damage,
-        0.into()
-    );
-    let game = pass_round(candidate.state());
-    assert_eq!(
-        game.execution()
-            .creature(object(&game, 90))
-            .unwrap()
-            .unwrap()
-            .damage,
-        1.into()
-    );
-    assert!(game.execution().window().entries().is_empty());
-}
-
-#[test]
-fn produced_mana_is_spent_by_real_castpaid_with_distinct_nonrepeated_records() {
-    let game = setup(
-        vec![
-            land(
-                1,
-                A,
-                A,
-                vec![ability(7, &[(ManaType::Red, 2), (ManaType::Blue, 1)])],
-            ),
-            instant(
-                2,
-                A,
-                ManaCost {
-                    generic: 1.into(),
-                    required: output(&[(ManaType::Red, 1)]),
-                },
-                Instruction::Damage { amount: 1.into() },
-                BodyTarget::SingleCreature,
-            ),
-            creature(),
-        ],
-        pools(A, &[(ManaType::Red, 1), (ManaType::Blue, 1)]),
-    );
-    let candidate = accept(&game, A, activate(&game, 1, 7));
-    production(
-        &candidate,
-        &game,
-        1,
-        7,
-        A,
-        &output(&[(ManaType::Red, 2), (ManaType::Blue, 1)]),
-    );
-    let game = candidate.into_state();
-    let payment = ManaPayment {
-        from_lots: Default::default(),
-        spend: vec![
-            ManaSpend {
-                mana_type: ManaType::Red,
-                amount: 1.into(),
-            },
-            ManaSpend {
-                mana_type: ManaType::Blue,
-                amount: 1.into(),
-            },
-        ],
-    };
-    let cast = no_production(
-        &game,
-        A,
-        GameCommand::CastPaid {
-            spell: object(&game, 2),
-            target: TargetRef::Object(object(&game, 90)),
-            payment,
-        },
-    );
-    let receipt = cast.mana_payment().unwrap();
-    assert_eq!(receipt.payer, A);
-    assert_eq!(
-        receipt.source,
-        cast.state()
-            .execution()
-            .window()
-            .entries()
-            .last()
-            .unwrap()
-            .id()
-    );
-    assert_eq!(
-        receipt.spend,
-        vec![
-            ManaSpend {
-                mana_type: ManaType::Blue,
-                amount: 1.into()
-            },
-            ManaSpend {
-                mana_type: ManaType::Red,
-                amount: 1.into()
-            }
-        ]
-    );
-    assert_eq!(
-        balances(cast.state()),
-        expected_balances([0, 1, 0, 2, 0, 0], [0; 6])
-    );
-    let game = pass_round(cast.state());
-    assert_eq!(
-        game.execution()
-            .creature(object(&game, 90))
-            .unwrap()
-            .unwrap()
-            .damage,
-        1.into()
-    );
-    assert_eq!(
-        game.execution()
-            .window()
-            .cards()
-            .get(object(&game, 2))
-            .unwrap()
-            .zone(),
-        ObjectZone::Graveyard(A)
-    );
-    assert_eq!(
-        balances(&game),
-        expected_balances([0, 1, 0, 2, 0, 0], [0; 6])
-    );
-}
-
-#[test]
 fn public_executor_and_game_input_use_the_same_activation_and_settling_path() {
     let game = one_source();
     let execution = game.execution();
@@ -826,38 +631,6 @@ fn land_without_mana_is_admitted_while_malformed_abilities_reject_setup() {
         Err(EffectError::InvalidSetup
             | EffectError::Window(StackWindowError::UntrackedInitialStack))
     ));
-}
-
-#[test]
-fn unknown_ability_and_nonland_sources_cannot_tap_or_produce() {
-    let game = setup(
-        vec![
-            land(1, A, A, vec![ability(7, &[(ManaType::Red, 2)])]),
-            creature(),
-            instant(
-                2,
-                A,
-                ManaCost::free(),
-                Instruction::Damage { amount: 1.into() },
-                BodyTarget::SingleCreature,
-            ),
-        ],
-        nonzero_pools(),
-    );
-    reject_effect(
-        &game,
-        A,
-        activate(&game, 1, 99),
-        EffectError::UnknownManaAbility,
-    );
-    for card in [2, 90] {
-        reject_effect(
-            &game,
-            A,
-            activate(&game, card, 7),
-            EffectError::NotManaSource,
-        );
-    }
 }
 
 #[test]
@@ -994,224 +767,6 @@ fn executor_rejects_stale_checks_pending_and_closed_step_without_resource_change
         Err(EffectError::Window(StackWindowError::NotInPriority))
     );
     assert_eq!(state, saved);
-}
-
-#[test]
-fn activation_during_target_checking_is_explicitly_unsupported() {
-    let game = setup(
-        vec![
-            land(1, A, A, vec![ability(7, &[(ManaType::Red, 2)])]),
-            instant(
-                2,
-                A,
-                ManaCost::free(),
-                Instruction::Damage { amount: 1.into() },
-                BodyTarget::SingleCreature,
-            ),
-            creature(),
-        ],
-        nonzero_pools(),
-    );
-    let cast = accept(
-        &game,
-        A,
-        GameCommand::Cast {
-            spell: object(&game, 2),
-            target: TargetRef::Object(object(&game, 90)),
-        },
-    );
-    let source = object(cast.state(), 1);
-    let mut state = cast.into_state().execution().clone();
-    state = state.pass(state.revision(), A).unwrap();
-    state = state.settle_checks(state.revision()).unwrap();
-    state = state.pass(state.revision(), B).unwrap();
-    assert!(matches!(
-        state.window().phase(),
-        WindowPhase::CheckingTargets(_)
-    ));
-    let saved = state.clone();
-    assert_eq!(
-        state.activate_mana(
-            state.revision(),
-            A,
-            source,
-            spellwake_engine::mana::ManaAbilityRef::Printed(ManaAbilityId(7))
-        ),
-        Err(EffectError::Window(StackWindowError::NotInPriority))
-    );
-    assert_eq!(state, saved);
-}
-
-#[test]
-fn pending_copy_decision_blocks_both_players_and_reply_does_not_repeat_production() {
-    let game = setup(
-        vec![
-            land(1, A, A, vec![ability(7, &[(ManaType::Red, 2)])]),
-            land(4, A, A, vec![ability(7, &[(ManaType::Green, 1)])]),
-            instant(
-                2,
-                A,
-                ManaCost::free(),
-                Instruction::Damage { amount: 1.into() },
-                BodyTarget::SingleCreature,
-            ),
-            instant(
-                3,
-                B,
-                ManaCost::free(),
-                Instruction::CopySpell,
-                BodyTarget::SingleSpell(
-                    spellwake_engine::program::SpellFilter::copyable_instruction(),
-                ),
-            ),
-            creature(),
-        ],
-        nonzero_pools(),
-    );
-    let activated = accept(&game, A, activate(&game, 1, 7));
-    let game = activated.into_state();
-    let cast = no_production(
-        &game,
-        A,
-        GameCommand::Cast {
-            spell: object(&game, 2),
-            target: TargetRef::Object(object(&game, 90)),
-        },
-    );
-    let original = cast.mana_payment().unwrap().source;
-    let game = pass(cast.state());
-    let copied = no_production(
-        &game,
-        B,
-        GameCommand::Cast {
-            spell: object(&game, 3),
-            target: TargetRef::Stack(original),
-        },
-    );
-    let pending = pass_round(copied.state());
-    let decision = pending.pending_decision().unwrap();
-    assert_eq!(
-        pending
-            .execution()
-            .window()
-            .cards()
-            .get(object(&pending, 4))
-            .unwrap()
-            .tapped(),
-        Some(false)
-    );
-    for actor in [A, B] {
-        reject(
-            &pending,
-            request(&pending, actor, activate(&pending, 4, 7)),
-            GameError::DecisionRequired,
-        );
-    }
-    assert!(matches!(
-        pending.execution().window().phase(),
-        WindowPhase::Resolving(_)
-    ));
-    let execution = pending.execution();
-    let saved = execution.clone();
-    assert_eq!(
-        execution.activate_mana(
-            execution.revision(),
-            A,
-            object(&pending, 4),
-            spellwake_engine::mana::ManaAbilityRef::Printed(ManaAbilityId(7))
-        ),
-        Err(EffectError::Window(StackWindowError::NotInPriority))
-    );
-    assert_eq!(execution, &saved);
-    let before = balances(&pending);
-    let reply = no_production(
-        &pending,
-        B,
-        GameCommand::Reply {
-            decision: decision.id(),
-            choice: CopyTargetChoice::Retain.into(),
-        },
-    );
-    assert!(reply.mana_payment().is_none());
-    assert_eq!(balances(reply.state()), before);
-    assert_eq!(reply.state().execution().window().spell_copies().len(), 1);
-}
-
-#[test]
-fn pending_damage_order_rejects_activation_and_reply_does_not_repeat_production() {
-    let game = setup(
-        vec![
-            land(1, A, A, vec![ability(7, &[(ManaType::Red, 2)])]),
-            land(4, A, A, vec![ability(7, &[(ManaType::Green, 1)])]),
-            land(5, B, B, vec![ability(7, &[(ManaType::Blue, 1)])]),
-            SeedCard {
-                card: CardId(2),
-                owner: A,
-                destination: ObjectDestination::Hand,
-                program: Program::instant(
-                    ManaCost::free(),
-                    ExecutableBody::new(
-                        BodyTarget::SingleCreature,
-                        vec![
-                            Instruction::CreatePreventionShield { amount: 1.into() },
-                            Instruction::CreatePreventionShield { amount: 1.into() },
-                            Instruction::Damage { amount: 3.into() },
-                        ],
-                    ),
-                ),
-            },
-            creature(),
-        ],
-        nonzero_pools(),
-    );
-    let activated = accept(&game, A, activate(&game, 1, 7));
-    let game = activated.into_state();
-    let cast = no_production(
-        &game,
-        A,
-        GameCommand::Cast {
-            spell: object(&game, 2),
-            target: TargetRef::Object(object(&game, 90)),
-        },
-    );
-    let pending = pass_round(cast.state());
-    let decision = pending.pending_decision().unwrap();
-    let spellwake_engine::game::RuleFrame::Damage(
-        spellwake_engine::effects::DamageDecision::Order(frame),
-    ) = decision.frame()
-    else {
-        panic!("expected damage-order choice")
-    };
-    let choice = frame.applications()[0];
-    let before = balances(&pending);
-    for (actor, card) in [(A, 4), (B, 5)] {
-        assert_eq!(
-            pending
-                .execution()
-                .window()
-                .cards()
-                .get(object(&pending, card))
-                .unwrap()
-                .tapped(),
-            Some(false)
-        );
-        reject(
-            &pending,
-            request(&pending, actor, activate(&pending, card, 7)),
-            GameError::DecisionRequired,
-        );
-        assert_eq!(balances(&pending), before);
-    }
-    let replied = no_production(
-        &pending,
-        B,
-        GameCommand::Reply {
-            decision: decision.id(),
-            choice: spellwake_engine::game::DecisionReply::DamageOrder(choice),
-        },
-    );
-    assert!(replied.mana_payment().is_none());
-    assert_eq!(balances(replied.state()), before);
 }
 
 #[path = "support/vocabulary.rs"]

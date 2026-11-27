@@ -991,7 +991,14 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
                     },
-                    Instruction::Damage { amount: 3.into() },
+                    Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
+                        source: crate::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: crate::toolbox::DamageTargetQuery::Targets,
+                        amount: crate::program::DamageAmountSpec::Expr(
+                            crate::program::ValueExpr::Literal(3.into()),
+                        ),
+                        exile_if_dies: false,
+                    })),
                     gain(2),
                 ],
             ),

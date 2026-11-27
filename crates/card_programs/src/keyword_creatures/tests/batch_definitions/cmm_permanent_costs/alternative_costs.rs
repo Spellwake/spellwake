@@ -365,7 +365,13 @@ fn cmm_deflecting_swat_can_retain_or_change_a_spell_or_an_ability_target_and_use
     use spellwake_engine::effects::CopyTargetChoice;
     let bolt = ExecutableBody::new(
         BodyTarget::SinglePlayer,
-        vec![Instruction::Damage { amount: 1.into() }],
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(1),
+                false,
+            ),
+        ],
     );
     let mut pinger = Program::artifact(Some(ManaCost::free()), vec![]);
     pinger.activated.push(ActivatedAbility {
@@ -450,9 +456,14 @@ fn cmm_darksteel_monolith_survives_destruction_and_pays_zero_for_only_one_colorl
             ManaCost::generic(3.into()),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ],
             ),
         )
     };
@@ -529,7 +540,13 @@ fn cmm_obscuring_haze_prevents_damage_only_from_opposing_creatures_and_only_duri
  {
     let bolt = ExecutableBody::new(
         BodyTarget::SinglePlayer,
-        vec![Instruction::Damage { amount: 2.into() }],
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(2),
+                false,
+            ),
+        ],
     );
     let mut pinger = Program::creature(
         Some(ManaCost::free()),
@@ -1062,7 +1079,13 @@ fn cmm_imps_mischief_requires_a_single_target_changes_it_and_costs_life_equal_to
         ManaCost::generic(3.into()),
         ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::Damage { amount: 2.into() }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(2),
+                    false,
+                ),
+            ],
         ),
     );
     let opening = game(
@@ -1350,7 +1373,11 @@ fn cmm_commandeer_pays_the_normal_price_or_exiles_two_blue_hand_cards_takes_cont
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SinglePlayer,
-                    Instruction::Damage { amount: 2.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(2),
+                        false,
+                    ),
                 ),
             ),
             seed(4, B, ObjectDestination::Hand, creature),
@@ -1473,7 +1500,13 @@ fn cmm_abstruse_archaic_copies_controlled_colorless_activated_and_triggered_abil
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::Damage { amount: 1.into() }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    false,
+                ),
+            ],
         ),
     };
     let artifact = Program::artifact(None, vec![ping]);

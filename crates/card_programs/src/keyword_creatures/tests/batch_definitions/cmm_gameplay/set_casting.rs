@@ -290,7 +290,11 @@ fn set_game(
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::Damage { amount: 1.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    false,
+                ),
             ),
         ),
     ];
@@ -392,7 +396,11 @@ fn set_game(
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SinglePlayer,
-                Instruction::Damage { amount: 1.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    false,
+                ),
             ),
         ));
     }
@@ -1429,9 +1437,12 @@ fn innistrad_reuses_morbid_fateful_hour_and_flashback_in_play() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::AdjustControllerLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Lose(15.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(15),
+                    ),
                 ),
             ));
         }
@@ -1967,7 +1978,11 @@ fn innistrad_spiteful_shadows_uses_the_dead_creatures_controller() {
         ObjectDestination::Hand,
         free_instant(
             BodyTarget::SingleCreature,
-            Instruction::Damage { amount: 3.into() },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(3),
+                false,
+            ),
         ),
     );
     let price = [(ManaType::Colourless, 1), (ManaType::Black, 1)];
@@ -2348,7 +2363,11 @@ fn innistrad_entry_counters_use_the_relevant_battlefield_and_graveyard() {
         ObjectDestination::Hand,
         free_instant(
             BodyTarget::SingleCreature,
-            Instruction::Damage { amount: 3.into() },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(3),
+                false,
+            ),
         ),
     );
     let price = [(ManaType::Black, 1), (ManaType::Colourless, 2)];
@@ -4780,9 +4799,12 @@ fn innistrad_fateful_protection_uses_one_color_for_the_player_and_current_perman
                     ObjectDestination::Hand,
                     free_instant(
                         BodyTarget::None,
-                        Instruction::AdjustControllerLife {
-                            adjustment: spellwake_engine::life::LifeAdjustment::Lose(15.into()),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(15),
+                        ),
                     ),
                 ),
                 seed(
@@ -4791,7 +4813,11 @@ fn innistrad_fateful_protection_uses_one_color_for_the_player_and_current_perman
                     ObjectDestination::Hand,
                     red(
                         BodyTarget::SinglePlayer,
-                        Instruction::Damage { amount: 1.into() },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            spellwake_engine::program::ValueExpr::literal(1),
+                            false,
+                        ),
                     ),
                 ),
                 seed(
@@ -4800,10 +4826,15 @@ fn innistrad_fateful_protection_uses_one_color_for_the_player_and_current_perman
                     ObjectDestination::Hand,
                     red(
                         BodyTarget::None,
-                        Instruction::DamageGroup {
-                            group: DamageGroup::Players,
-                            amount: 1.into(),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                                spellwake_engine::program::DamageRecipientsRef::Group(
+                                    DamageGroup::Players,
+                                ),
+                            )),
+                            spellwake_engine::program::ValueExpr::literal(1),
+                            false,
+                        ),
                     ),
                 ),
             ],
@@ -5029,7 +5060,13 @@ fn innistrad_counter_followup_casts_a_matching_hand_spell_even_if_the_target_sur
         ManaCost::generic(9.into()),
         ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::Damage { amount: 2.into() }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(2),
+                    false,
+                ),
+            ],
         ),
     );
     let artifact = Program::artifact(Some(ManaCost::free()), vec![]);
@@ -5037,7 +5074,11 @@ fn innistrad_counter_followup_casts_a_matching_hand_spell_even_if_the_target_sur
     for uncounterable in [false, true] {
         let mut original = free_instant(
             BodyTarget::SinglePlayer,
-            Instruction::Damage { amount: 1.into() },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(1),
+                false,
+            ),
         );
         original.cannot_be_countered = uncounterable;
         let start = game(
@@ -5310,7 +5351,11 @@ fn innistrad_each_other_player_can_copy_and_retarget_the_same_departed_spell() {
         .unwrap();
     let original = free_instant(
         BodyTarget::SinglePlayer,
-        Instruction::Damage { amount: 2.into() },
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            spellwake_engine::program::ValueExpr::literal(2),
+            false,
+        ),
     );
     let counter = free_instant(
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
@@ -5679,7 +5724,11 @@ fn innistrad_nonland_name_choice_blocks_that_spell_until_the_source_leaves() {
     let instant = |name: &str| {
         let mut program = free_instant(
             BodyTarget::SinglePlayer,
-            Instruction::Damage { amount: 2.into() },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(2),
+                false,
+            ),
         );
         program.names = ObjectNames::single(EnglishCardName::new(name.to_owned()).unwrap());
         program
@@ -5777,7 +5826,11 @@ fn innistrad_equipment_unattaches_transforms_and_grows_after_a_player_leaves() {
     let ability = equipment.program.activated[0].id;
     let finisher = free_instant(
         BodyTarget::SinglePlayer,
-        Instruction::Damage { amount: 30.into() },
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            spellwake_engine::program::ValueExpr::literal(30),
+            false,
+        ),
     );
     let mana = [(ManaType::Colourless, 1)];
     let start = game(

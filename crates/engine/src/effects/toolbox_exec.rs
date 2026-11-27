@@ -1,6 +1,7 @@
 //! Execution engine for the Universal Rules Toolbox primitives.
 
 mod eval;
+mod life_damage;
 mod mutate;
 mod prompt;
 mod zone_op;
@@ -72,8 +73,20 @@ impl EffectWindow {
         }
 
         if let Some(emblem_players) = &spec.as_emblem {
-            let ContinuousPayload::Static(rule) = &spec.payload else {
-                return Err(EffectError::InconsistentProgram);
+            let definition = match &spec.payload {
+                ContinuousPayload::Emblem(def) => (**def).clone(),
+                ContinuousPayload::Static(rule) => {
+                    let label = spec
+                        .emblem_label
+                        .clone()
+                        .unwrap_or_else(|| "Emblem".to_owned());
+                    EmblemDefinition::Authored {
+                        label,
+                        continuous: vec![(**rule).clone()],
+                        triggered: Vec::new(),
+                    }
+                }
+                _ => return Err(EffectError::InconsistentProgram),
             };
             let seats = self.eval_player_selector_at(
                 controller,
@@ -81,18 +94,24 @@ impl EffectWindow {
                 emblem_players,
                 self.resolution_cursor(),
             )?;
-            let label = spec
-                .emblem_label
-                .clone()
-                .unwrap_or_else(|| "Emblem".to_owned());
-            for seat in seats {
-                self.characteristics.create_emblem(
-                    seat,
-                    EmblemDefinition::Authored {
-                        label: label.clone(),
-                        continuous: vec![(**rule).clone()],
-                        triggered: Vec::new(),
+            if !seats.is_empty() {
+                let before = self.rules_snapshot(None)?;
+                let mut created = Vec::new();
+                for seat in seats {
+                    let emblem = self
+                        .characteristics
+                        .create_emblem(seat, definition.clone())?;
+                    created.push(crate::occurrence::RulesOccurrence::EmblemCreated { emblem });
+                }
+                self.emit_from(
+                    crate::occurrence::EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
                     },
+                    &before,
+                    None,
+                    ctx.append,
+                    |_, _, _| Ok(created),
                 )?;
             }
             self.advance_instruction()?;
@@ -368,6 +387,9 @@ impl EffectWindow {
                         }
                     }
                 }
+            }
+            ContinuousPayload::Emblem(def) => {
+                self.resolve_create_emblem(entry, index, (**def).clone(), ctx.append)?;
             }
             ContinuousPayload::SkipStep { player, step } => {
                 let seats = self.eval_player_selector_at(
@@ -664,6 +686,9 @@ impl EffectWindow {
             }
             Instruction::DrawCards(spec) => self.execute_draw_cards(ctx, entry, index, &spec),
             Instruction::MutateObject(spec) => self.execute_mutate_object(ctx, entry, index, &spec),
+            Instruction::AdjustLife(spec) => self.execute_adjust_life(ctx, entry, index, &spec),
+            Instruction::DealDamage(spec) => self.execute_deal_damage(ctx, entry, index, &spec),
+            Instruction::MutatePlayer(spec) => self.execute_mutate_player(ctx, entry, index, &spec),
             other => Ok(StepOutcome::Next(other)),
         }
     }

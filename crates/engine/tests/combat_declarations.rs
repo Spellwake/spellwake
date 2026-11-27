@@ -299,7 +299,20 @@ fn cards() -> Vec<SeedCard> {
         },
         instant(30, A, bounce()),
         instant(31, B, bounce()),
-        instant(32, A, Instruction::Damage { amount: 4.into() }),
+        instant(
+            32,
+            A,
+            spellwake_engine::program::Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::Literal(4.into()),
+                    ),
+                    exile_if_dies: false,
+                },
+            )),
+        ),
         creature(40, A, ObjectDestination::Hand),
     ]
 }

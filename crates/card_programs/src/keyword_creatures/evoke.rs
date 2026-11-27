@@ -119,15 +119,14 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
     let (target, op) = match text {
         "you gain 2 life." | "you gain 3 life." => (
             BodyTarget::None,
-            Instruction::AdjustControllerLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Gain(
-                    if text == "you gain 2 life." {
-                        2.into()
-                    } else {
-                        3.into()
-                    },
-                ),
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::literal(if text == "you gain 2 life." {
+                    2
+                } else {
+                    3
+                }),
+            ),
         ),
         "surveil 2." => (
             BodyTarget::None,
@@ -164,7 +163,11 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
         ),
         "it deals 6 damage to target creature." => (
             BodyTarget::SingleCreature,
-            Instruction::Damage { amount: 6.into() },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(6),
+                false,
+            ),
         ),
         "create a 4/4 green Elemental creature token."
         | "create a 4/4 green Rhino Warrior creature token."

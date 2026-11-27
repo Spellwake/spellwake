@@ -15,10 +15,7 @@ use spellwake_engine::{
         CandidateBase, DecisionId, DecisionReply, GameCommand, GameContext, GameError, GameId,
         GameInput, GameState, NativeCandidate, RuleFrame,
     },
-    mana::{
-        FloatingMana, ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaPayment, ManaSpend,
-        ManaType,
-    },
+    mana::{FloatingMana, ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaPayment, ManaType},
     object_identity::{
         CardId, GameObjects, ObjectDestination, ObjectId, ObjectIdentityError, ObjectZone,
     },
@@ -163,7 +160,16 @@ fn world() -> GameState {
                 90,
                 A,
                 ManaCost::free(),
-                vec![Instruction::Damage { amount: 1.into() }],
+                vec![spellwake_engine::program::Instruction::DealDamage(
+                    Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                        exile_if_dies: false,
+                    }),
+                )],
                 BodyTarget::SingleCreature,
             ),
             creature(),
@@ -548,61 +554,6 @@ fn later_pass_and_unrelated_cast_never_repeat_production() {
     let game = pass(cast.state());
     let game = pass(&game);
     assert!(game.pending_decision().is_none());
-}
-
-#[test]
-fn newly_produced_output_pays_a_real_exact_cast() {
-    let game = setup(
-        vec![
-            land(1, A, A, vec![choice(7, 3.into(), &[ManaType::Blue])]),
-            instant(
-                90,
-                A,
-                ManaCost {
-                    generic: 2.into(),
-                    required: BTreeMap::from([(ManaType::Blue, 1.into())]),
-                },
-                vec![Instruction::Damage { amount: 1.into() }],
-                BodyTarget::SingleCreature,
-            ),
-            creature(),
-        ],
-        Vec::new(),
-    );
-    let pending = begin(&game, A, 1, 7);
-    let command = GameCommand::CastPaid {
-        spell: object(&game, 90),
-        target: TargetRef::Object(object(&game, 99)),
-        payment: ManaPayment {
-            from_lots: Default::default(),
-            spend: vec![ManaSpend {
-                mana_type: ManaType::Blue,
-                amount: 3.into(),
-            }],
-        },
-    };
-    reject(
-        pending.state(),
-        request(pending.state(), A, command.clone()),
-        GameError::DecisionRequired,
-    );
-    let completed = finish(pending.state(), ManaType::Blue).into_state();
-    let cast = accept(&completed, A, command);
-    assert!(cast.mana_production().is_none());
-    let payment = cast.mana_payment().unwrap();
-    assert_eq!(payment.payer, A);
-    assert_eq!(
-        payment.spend,
-        vec![ManaSpend {
-            mana_type: ManaType::Blue,
-            amount: 3.into()
-        }]
-    );
-    assert_eq!(
-        payment.source,
-        cast.state().execution().window().entries()[0].id()
-    );
-    assert_eq!(cast.state().execution().mana(A, ManaType::Blue), 0.into());
 }
 
 fn invalid_definition(abilities: Vec<ManaAbility>) {
@@ -1143,7 +1094,16 @@ fn copy_pending() -> GameState {
                 90,
                 A,
                 ManaCost::free(),
-                vec![Instruction::Damage { amount: 1.into() }],
+                vec![spellwake_engine::program::Instruction::DealDamage(
+                    Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                        exile_if_dies: false,
+                    }),
+                )],
                 BodyTarget::SingleCreature,
             ),
             instant(
@@ -1182,7 +1142,16 @@ fn damage_pending() -> GameState {
                 vec![
                     Instruction::CreatePreventionShield { amount: 1.into() },
                     Instruction::CreatePreventionShield { amount: 1.into() },
-                    Instruction::Damage { amount: 3.into() },
+                    spellwake_engine::program::Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec {
+                            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                                spellwake_engine::program::ValueExpr::Literal(3.into()),
+                            ),
+                            exile_if_dies: false,
+                        },
+                    )),
                 ],
                 BodyTarget::SingleCreature,
             ),

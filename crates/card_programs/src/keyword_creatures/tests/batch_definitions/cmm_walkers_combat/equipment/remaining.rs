@@ -150,7 +150,14 @@ fn cmm_fall_from_favor_taps_the_host_grants_monarch_and_allows_untap_only_when_i
             3,
             B,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::None, Instruction::BecomeMonarch(None)),
+            free_instant(
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                ),
+            ),
         ),
     ];
     for n in 10..18 {
@@ -286,7 +293,11 @@ fn cmm_fiendlash_gives_power_and_reach_and_the_equipped_creature_damages_the_cho
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::Damage { amount: 1.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    false,
+                ),
             ),
         ),
     ];

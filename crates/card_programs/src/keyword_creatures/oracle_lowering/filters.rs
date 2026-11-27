@@ -6397,16 +6397,30 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
             }
             _ => None,
         },
-        Instruction::GainControllerLife { amount }
-        | Instruction::AdjustPlayersLife { amount, .. }
-        | Instruction::DamageAmount(amount)
-        | Instruction::DamageAmountThenExileIfDies(amount)
-        | Instruction::DamageGroupAmount { amount, .. }
-        | Instruction::DamageOpponentsAmount(amount)
-        | Instruction::DrainOpponents(amount)
-        | Instruction::DrainTargetAndGain(amount)
-        | Instruction::OpponentsLoseAndControllerGains(amount)
-        | Instruction::Mill { amount, .. }
+        Instruction::AdjustLife(spec) => match &spec.op {
+            spellwake_engine::toolbox::LifeOp::Gain(amount)
+            | spellwake_engine::toolbox::LifeOp::Lose(amount)
+            | spellwake_engine::toolbox::LifeOp::Set(amount)
+            | spellwake_engine::toolbox::LifeOp::Pay(amount)
+            | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
+                find_value_expr_cost_object_ref(amount)
+            }
+            spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => None,
+        },
+        Instruction::DealDamage(spec) => match &spec.amount {
+            spellwake_engine::program::DamageAmountSpec::Expr(amount) => {
+                find_value_expr_cost_object_ref(amount)
+            }
+            _ => None,
+        },
+        Instruction::MutatePlayer(spec) => match &spec.op {
+            spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. } => {
+                find_value_expr_cost_object_ref(amount)
+            }
+            _ => None,
+        },
+        Instruction::Mill { amount, .. }
         | Instruction::Scry { amount, .. }
         | Instruction::Surveil { amount, .. } => find_value_expr_cost_object_ref(amount),
         Instruction::CreateTokens { creations }
@@ -6467,15 +6481,22 @@ fn has_prior_exile_non_target(context: Option<(&BodyBuilder, bool)>) -> bool {
 fn has_prior_single_sacrifice(context: Option<(&BodyBuilder, bool)>) -> bool {
     context.is_some_and(|(b, _)| {
         b.instructions.iter().any(|op| {
-            matches!(op, Instruction::SacrificeMatching(_))
-                || matches!(
-                    op,
-                    Instruction::Sacrifice {
-                        players: AffectedPlayers::One(_),
-                        amount,
-                        ..
-                    } if *amount == ValueExpr::literal(1)
-                )
+            matches!(
+                op,
+                Instruction::Sacrifice {
+                    players: AffectedPlayers::One(_),
+                    amount,
+                    ..
+                } if *amount == ValueExpr::literal(1)
+            ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .is_some_and(|spec| {
+                    matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                        }
+                    )
+                })
         })
     })
 }
@@ -7428,7 +7449,7 @@ fn lower_value_expr_inner(
                         Instruction::UntapOrTapSelect { tap: true, .. },
                     ) | (
                         PriorActionRefKind::SacrificedThisWay,
-                        Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_),
+                        Instruction::Sacrifice { .. },
                     )
                 ) || matches!(
                     (kind, last_ins),

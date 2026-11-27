@@ -479,8 +479,7 @@ fn original_transform_choices_reveal_without_moving_and_use_starting_life() {
     use spellwake_engine::{
         activated::ActivatedAbilityId,
         effects::LibraryTopReply,
-        life::LifeAdjustment,
-        program::{BodyTarget, ExecutableBody, Instruction},
+        program::{BodyTarget, ExecutableBody},
     };
     let (inventory, vocabulary) = dated_sources();
     let names = Arc::new(spellwake_contracts::names::NameRules::literal_names());
@@ -507,9 +506,14 @@ fn original_transform_choices_reveal_without_moving_and_use_starting_life() {
             mana(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(amount),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::Literal(amount),
+                    ),
+                ],
             ),
         )
     };

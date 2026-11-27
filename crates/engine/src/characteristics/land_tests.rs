@@ -92,9 +92,14 @@ fn printed_land() -> Program {
         ),
         body: crate::program::ExecutableBody::new(
             crate::program::BodyTarget::None,
-            vec![crate::program::Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(0.into()),
-            }],
+            vec![crate::program::Instruction::DrawCards(Box::new(
+                crate::toolbox::DrawCardsSpec::simple(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    crate::program::ValueExpr::Literal(0.into()),
+                ),
+            ))],
         ),
     }];
     program.continuous = ability(

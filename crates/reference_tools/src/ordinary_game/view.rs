@@ -2315,11 +2315,25 @@ mod tests {
                             ),
                         )),
                         BodyTarget::SingleOpponent | BodyTarget::SinglePlayer => {
-                            Instruction::AdjustTargetLife {
-                                adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-                            }
+                            Instruction::AdjustLife(Box::new(
+                                spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                                    ),
+                                    spellwake_engine::program::ValueExpr::literal(1),
+                                ),
+                            ))
                         }
-                        BodyTarget::SingleCreature => Instruction::Damage { amount: 1.into() },
+                        BodyTarget::SingleCreature => Instruction::DealDamage(Box::new(
+                            spellwake_engine::toolbox::DealDamageSpec {
+                                source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                                recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                                    spellwake_engine::program::ValueExpr::literal(1),
+                                ),
+                                exile_if_dies: false,
+                            },
+                        )),
                         _ => panic!("unsupported test target family"),
                     }],
                 ),

@@ -295,22 +295,17 @@ native!(ExecutableBody, self, {
     self.instructions.iter().try_for_each(|value| match value {
         Instruction::CopyAbility
         | Instruction::OfferDynamicManaPayment { .. }
-        | Instruction::PayLife { .. }
-        | Instruction::PayEnergy { .. }
         | Instruction::TapOrUntapControlled { .. }
         | Instruction::CollectEvidence { .. }
         | Instruction::Blight { .. }
         | Instruction::Populate
         | Instruction::ChooseObjects { .. }
         | Instruction::ChooseOption { .. }
-        | Instruction::DealDamageFrom { .. }
         | Instruction::DivideDamageAmongTargets { .. }
         | Instruction::DivideDamageExprAmongTargets { .. }
         | Instruction::GiveFixedTargetControl { .. }
         | Instruction::BecomeCopy { .. }
         | Instruction::BecomeCopyFixedTargets { .. }
-        | Instruction::WinGame(_)
-        | Instruction::LoseGame(_)
         | Instruction::DistributeCountersAmongTargets { .. }
         | Instruction::PromptChoice(_)
         | Instruction::BranchCondition { .. }
@@ -322,7 +317,6 @@ native!(ExecutableBody, self, {
         | Instruction::SideDeckOp(_)
         | Instruction::CreateTokenCopy { .. }
         | Instruction::BindResolutionX(_)
-        | Instruction::SetDayNight(_)
         | Instruction::CreateAuraTokenAttached { .. }
         | Instruction::ExploreSubject(_)
         | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -333,7 +327,6 @@ native!(ExecutableBody, self, {
         | Instruction::AdvanceClassLevel(_)
         | Instruction::SolveSourceCase
         | Instruction::BecomePreparedSource
-        | Instruction::TransformSubtype(_)
         | Instruction::ModifyAnyNumberOfPermanents { .. }
         | Instruction::WeakenTargetByChosenX
         | Instruction::OfferSourceCounters { .. }
@@ -372,9 +365,7 @@ native!(ExecutableBody, self, {
         | Instruction::ReturnTokenLinkedExile
         | Instruction::IncreaseSpeed
         | Instruction::BecomeMonarch(_)
-        | Instruction::TapEnchantedCreature
         | Instruction::RequireCondition(_)
-        | Instruction::PayControllerLife(_)
         | Instruction::PutEquipmentFromHandOrGraveyard
         | Instruction::EquipNewToken
         | Instruction::Encore
@@ -422,19 +413,11 @@ native!(ExecutableBody, self, {
         | Instruction::PutCounterOnRelatedPermanent
         | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
         | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-        | Instruction::AbilitySourceControllerLosesLife(_)
-        | Instruction::RelatedPlayerLosesLife(_)
         | Instruction::LinkedPlayerLosesDamageAmount
-        | Instruction::RelatedPlayerLosesHalfLife
-        | Instruction::RemoveTargetFromCombat
-        | Instruction::RemoveSubjectFromCombat(_)
         | Instruction::SetControlledCreatureSizeToHand
         | Instruction::DamageFromPower(_)
         | Instruction::CreatureDealsPowerDamageToOther { .. }
-        | Instruction::DamageAmount(_)
-        | Instruction::DamageAmountThenExileIfDies(_)
         | Instruction::DamageCreatureAtSpellMastery { .. }
-        | Instruction::DrainOpponents(_)
         | Instruction::ExtortDrain
         | Instruction::ResolveGrowth(_)
         | Instruction::ResolveCounterKeyword(_)
@@ -495,7 +478,6 @@ native!(ExecutableBody, self, {
         | Instruction::CopyOtherTargetAsArtifact
         | Instruction::ExileUntilOtherTargetLeaves
         | Instruction::FixedTargetClause(_)
-        | Instruction::Ascend
         | Instruction::DestroyFixedTargets
         | Instruction::DestroyTargetAndAttachedEquipment
         | Instruction::ReturnFixedTargets
@@ -508,10 +490,8 @@ native!(ExecutableBody, self, {
         | Instruction::SearchLibrary { .. }
         | Instruction::Adapt(_)
         | Instruction::BoostSourceByCastManaValue
-        | Instruction::BoostLoneAttacker
         | Instruction::CreateTokenAndAttach { .. }
         | Instruction::BoostSaddledAttacker { .. }
-        | Instruction::AddExperienceCounter
         | Instruction::ControlManaSourceThroughNextTurn
         | Instruction::AddMana(_)
         | Instruction::AbandonSourceScheme
@@ -532,10 +512,6 @@ native!(ExecutableBody, self, {
         | Instruction::EmitReflexiveTrigger { .. }
         | Instruction::RemoveLoyaltyExileTopForPlay
         | Instruction::DamageDamagedPlayersCreatures
-        | Instruction::DamageOpponentsAmount(_)
-        | Instruction::DamageRelatedPlayerAmount(_)
-        | Instruction::CreateEmblem(_)
-        | Instruction::CreateOpponentEmblems(_)
         | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
         | Instruction::DrawHighestEntrantController
         | Instruction::DrawRelatedPlayer
@@ -550,7 +526,6 @@ native!(ExecutableBody, self, {
         | Instruction::ExileTopForFreePlay
         | Instruction::ExileTargetUntilNonlandForFreeCast
         | Instruction::ExileTopRepeatOnPermanentEntry
-        | Instruction::EndControllerTurn
         | Instruction::ShuffleTargetGraveyardCards { .. }
         | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
         | Instruction::CastLinkedSpellMatchingX
@@ -567,19 +542,14 @@ native!(ExecutableBody, self, {
         | Instruction::ControllerLosesRememberedManaValue
         | Instruction::ExiledTargetControllerGainsPower
         | Instruction::RepeatOpponentLifeLoss
-        | Instruction::OpponentsLoseAndControllerGains(_)
-        | Instruction::AdjustEachOpponentLife { .. }
-        | Instruction::AdjustPlayersLife { .. }
         | Instruction::GainControlOfSpell
         | Instruction::ChangeOnlyTarget
         | Instruction::LoseLifeEqualToTargetSpellManaValue
         | Instruction::ChooseNewTargets
         | Instruction::AdditionalCombat { .. }
         | Instruction::AdditionalCombatAfterUntappingAttackers
-        | Instruction::TakeExtraTurn
         | Instruction::PreventDamageThisTurn(_)
         | Instruction::PreventDamageSpec(_)
-        | Instruction::PutOwnHandCardOnLibraryBottom
         | Instruction::ExileCapturedGraveyardCard
         | Instruction::GrantGraveyardCastAndWatchAbilities
         | Instruction::GainCastCardAbilities { .. }
@@ -591,18 +561,13 @@ native!(ExecutableBody, self, {
         | Instruction::RevealTopAndRemoveAttackerIfForest
         | Instruction::DamageCapturedBlocker(_)
         | Instruction::ChangeControlledPlaneswalkers { .. }
-        | Instruction::ChangeGroup { .. }
-        | Instruction::ChangeAbilitySource { .. }
-        | Instruction::GiveControlOfAbilitySource
         | Instruction::UntapAndControlCreatures
         | Instruction::Proliferate
         | Instruction::DamagePlayersHalfLife
-        | Instruction::DamageGroup { .. }
         | Instruction::DamageTargetControllersCreatures { .. }
         | Instruction::DrawAndDamageOpponents { .. }
         | Instruction::ResolvePowerAbility(_)
         | Instruction::UnattachEquipmentAndProtectHost
-        | Instruction::Unattach
         | Instruction::Attach(_)
         | Instruction::DestroyTarget
         | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
@@ -610,7 +575,6 @@ native!(ExecutableBody, self, {
         | Instruction::Surveil { .. }
         | Instruction::Mill { .. }
         | Instruction::AffectPermanentTargets { .. }
-        | Instruction::MillEachPlayer(_)
         | Instruction::PutLibraryCohortIntoGraveyard(_)
         | Instruction::ExileOnePerPlayerUntilSourceLeaves
         | Instruction::AttachControlledToSource { .. }
@@ -645,7 +609,6 @@ native!(ExecutableBody, self, {
         | Instruction::Sacrifice { .. }
         | Instruction::SacrificeRandomUntilLand
         | Instruction::SacrificeToContinue { .. }
-        | Instruction::SacrificeMatching(_)
         | Instruction::Discard { .. } => Err(ApplicabilityError),
         Instruction::CreatePreventionShield { .. }
             if matches!(
@@ -661,8 +624,7 @@ native!(ExecutableBody, self, {
         | Instruction::OfferOpponentsDamage
         | Instruction::TemptWithTokens { .. }
         | Instruction::ChooseTypeThenDestroyUnchosen
-        | Instruction::OrderArtifactCreatureLandSacrifices
-        | Instruction::ChooseCreatureTypeForPlayer { .. } => Err(ApplicabilityError),
+        | Instruction::OrderArtifactCreatureLandSacrifices => Err(ApplicabilityError),
         Instruction::CreateTokens { creations }
         | Instruction::CreateAttackingTokens { creations, .. } => creations
             .iter()
@@ -726,29 +688,19 @@ native!(ExecutableBody, self, {
         | Instruction::Jump { .. }
         | Instruction::OptionalEffect { .. }
         | Instruction::OfferManaPayment { .. }
-        | Instruction::GainControllerLife { .. }
-        | Instruction::DrainTargetAndGain(_)
-        | Instruction::AdjustControllerLife { .. }
         | Instruction::ExchangeLifeWithSourceToughness
-        | Instruction::AdjustTargetLife { .. }
         | Instruction::ChooseCreatureType { .. }
-        | Instruction::Damage { .. }
         | Instruction::CreatePreventionShield { .. }
         | Instruction::CreateReflectingShield
         | Instruction::CreateDamageMultiplier { .. }
         | Instruction::CounterSpell
         | Instruction::CopySpell
         | Instruction::CopyTargetToSource { .. }
-        | Instruction::AddPlayerCounter { .. }
         | Instruction::ExileTopPlay { .. }
         | Instruction::LookTopChoose { .. }
         | Instruction::RepeatLoop { .. }
         | Instruction::RevealUntilMatch { .. }
-        | Instruction::PayControllerEnergy(_)
         | Instruction::RemoveCountersFromPermanent { .. }
-        | Instruction::DamageGroupAmount { .. }
-        | Instruction::DisallowDamagePreventionThisTurn
-        | Instruction::DrawController { .. }
         | Instruction::RollDie { .. }
         | Instruction::FlipCoins { .. }
         | Instruction::ChooseValue { .. }
@@ -785,7 +737,6 @@ native!(ExecutableBody, self, {
         | Instruction::RevealUntilMatchExt { .. }
         | Instruction::CreateTokenCopyExt { .. }
         | Instruction::MoveCounters { .. }
-        | Instruction::DrawGame
         | Instruction::EmpowerJace { .. }
         | Instruction::CounterMatchingStackObjects { .. }
         | Instruction::TransferAllCountersFromTriggeringLki { .. }
@@ -796,9 +747,11 @@ native!(ExecutableBody, self, {
         | Instruction::AttachFixedTargets
         | Instruction::AttachChoosingPermanent { .. }
         | Instruction::ChooseOneLastMoved { .. }
-        | Instruction::SetPlayersLife { .. }
         | Instruction::DrawCards(_)
-        | Instruction::MutateObject(_) => Ok(()),
+        | Instruction::MutateObject(_)
+        | Instruction::AdjustLife(_)
+        | Instruction::DealDamage(_)
+        | Instruction::MutatePlayer(_) => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {

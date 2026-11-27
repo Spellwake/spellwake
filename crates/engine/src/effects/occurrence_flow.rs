@@ -1673,11 +1673,18 @@ impl EffectWindow {
             .any(|entry| matches!(entry.kind(), StackKind::ActivatedAbility { source } if source.id() == object)
                 && self.payloads.get(&entry.id()).and_then(StackPayload::instructions).is_some_and(|body| body.iter().any(|op| matches!(op,
                     Instruction::WatchSmallCreatureCombatDraw(_) | Instruction::PhaseOtherPlaneswalkersNextEndStep | Instruction::WeakenOpposingAttackersUntilNextTurn
-                    | Instruction::AbilitySourceControllerLosesLife(_)
                     | Instruction::CreateReflexiveDiscardDamage
                     | Instruction::ScheduleDelayedStepTrigger { .. }
                     | Instruction::EmitReflexiveTrigger { .. }
                     | Instruction::RegisterTokenLinkedExile
+                ) || matches!(
+                    op,
+                    Instruction::AdjustLife(spec)
+                        if matches!(
+                            &spec.players,
+                            crate::toolbox::PlayerSelector::ControllersOf(q)
+                                if matches!(q.as_ref(), crate::toolbox::ObjectQuery::Source)
+                        )
                 ) || matches!(op, Instruction::SearchLibrary { filter } if filter.is_haste_and_return()))))
     }
 
@@ -1714,8 +1721,13 @@ impl EffectWindow {
                     let kind = match op {
                         Instruction::SearchLibrary { filter } => filter.source_counter_kind(),
                         Instruction::DrawCards(spec) => spec.amount.ability_source_counter_kind(),
-                        Instruction::DamageAmount(amount)
-                        | Instruction::ExileFromHandOrBattlefield(amount) => {
+                        Instruction::DealDamage(spec) => match &spec.amount {
+                            crate::program::DamageAmountSpec::Expr(e) => {
+                                e.ability_source_counter_kind()
+                            }
+                            _ => None,
+                        },
+                        Instruction::ExileFromHandOrBattlefield(amount) => {
                             amount.ability_source_counter_kind()
                         }
                         _ => None,

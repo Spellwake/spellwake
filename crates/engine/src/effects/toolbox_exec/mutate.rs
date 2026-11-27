@@ -642,6 +642,16 @@ impl EffectWindow {
                     succeeded = true;
                 }
             }
+            ObjectMutation::RemoveFromCombat => {
+                if !selected.is_empty() {
+                    let affected: BTreeSet<ObjectId> = selected.iter().copied().collect();
+                    if let Some(combat) = &mut self.combat {
+                        combat.reconcile(|combatant, _| !affected.contains(&combatant.object()));
+                    }
+                    mutated = selected;
+                    succeeded = true;
+                }
+            }
         }
 
         if let Some(cur) = self.resolution_cursor_mut() {

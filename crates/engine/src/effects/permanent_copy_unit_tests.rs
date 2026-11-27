@@ -15,9 +15,14 @@ fn copy_source() -> Program {
                         duration: ResolvedDuration::NoStatedDuration,
                         power_toughness: None,
                     },
-                    Instruction::AdjustControllerLife {
-                        adjustment: crate::life::LifeAdjustment::Gain(5.into()),
-                    },
+                    crate::program::Instruction::AdjustLife(Box::new(
+                        crate::toolbox::AdjustLifeSpec::gain(
+                            crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            crate::program::ValueExpr::Literal(5.into()),
+                        ),
+                    )),
                 ],
             ),
         }],

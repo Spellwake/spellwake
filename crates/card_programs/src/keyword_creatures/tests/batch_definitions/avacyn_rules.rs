@@ -697,7 +697,11 @@ fn avacyn_rules_subtype_protection_prevents_targeting_and_damage_from_kindred_sp
                 ObjectDestination::Hand,
                 vampire_spell(
                     BodyTarget::SingleCreature,
-                    Instruction::Damage { amount: 2.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(2),
+                        false,
+                    ),
                 ),
             ),
             seed(
@@ -706,10 +710,15 @@ fn avacyn_rules_subtype_protection_prevents_targeting_and_damage_from_kindred_sp
                 ObjectDestination::Hand,
                 vampire_spell(
                     BodyTarget::None,
-                    Instruction::DamageGroup {
-                        group: spellwake_engine::program::DamageGroup::Creatures,
-                        amount: 2.into(),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                            spellwake_engine::program::DamageRecipientsRef::Group(
+                                spellwake_engine::program::DamageGroup::Creatures,
+                            ),
+                        )),
+                        spellwake_engine::program::ValueExpr::literal(2),
+                        false,
+                    ),
                 ),
             ),
         ],

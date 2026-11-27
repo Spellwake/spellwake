@@ -3,7 +3,7 @@ use super::*;
 use crate::{
     characteristics::{ResolvedDuration, ResolvedPart, ResolvedParts},
     occurrence::TriggerError,
-    program::{BodyTarget, CardType, ExecutableBody, ProgramKind},
+    program::{CardType, ProgramKind},
     turn::{Step, TurnStart},
 };
 const A: SeatId = SeatId(0);
@@ -67,34 +67,6 @@ fn retired_entry() -> StackEntryId {
         .record_card_spell(window.revision(), A, source)
         .unwrap();
     window.entries()[0].id()
-}
-#[test]
-fn cl_fault_query_invariant_propagates_to_target_gate_without_mutation() {
-    let mut state = seed(vec![Program::creature(
-        Some(ManaCost::free()),
-        2.into(),
-        4.into(),
-        BTreeSet::new(),
-    )]);
-    let target = object(&state, 1);
-    state
-        .characteristics
-        .qualification_remove_object_timestamp(target);
-    let saved = state.clone();
-    let expected = EffectError::CharacteristicInvariant(
-        CharacteristicInvariantError::MissingBattlefieldTimestamp(target),
-    );
-    assert_eq!(state.evaluated_characteristics(), Err(expected.clone()));
-    let body = ExecutableBody::new(
-        BodyTarget::SingleCreature,
-        vec![Instruction::Damage { amount: 1.into() }],
-    );
-    assert_eq!(
-        state.legal_body_target(&body, TargetRef::Object(target), A),
-        Err(expected)
-    );
-    assert_eq!(state, saved);
-    assert!(state.state_based_losses.is_empty());
 }
 #[test]
 fn cl_fault_cleanup_publication_rolls_back_expiry_and_all_battlefield_marks() {

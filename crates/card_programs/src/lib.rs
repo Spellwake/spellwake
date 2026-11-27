@@ -609,7 +609,16 @@ fn definition(id: &OracleId) -> Option<Definition> {
             ManaCost::one(ManaType::Red),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 3.into() }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::literal(3),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
             ),
         ),
     };

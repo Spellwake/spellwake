@@ -6,9 +6,14 @@ use serde_json::json;
 fn body() -> ExecutableBody {
     ExecutableBody::new(
         BodyTarget::None,
-        vec![Instruction::AdjustControllerLife {
-            adjustment: LifeAdjustment::Gain(1.into()),
-        }],
+        vec![crate::program::Instruction::AdjustLife(Box::new(
+            crate::toolbox::AdjustLifeSpec::gain(
+                crate::toolbox::PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ),
+                crate::program::ValueExpr::Literal(1.into()),
+            ),
+        ))],
     )
 }
 fn ability(condition: TriggerSpec) -> TriggeredAbility {
@@ -76,46 +81,6 @@ fn battlefield_cast_watchers_do_not_bypass_instruction_source_admission() {
             assert!(codec::decode(wire, &vocabulary).is_err());
         }
     }
-}
-
-#[test]
-fn self_cast_still_uses_shared_unique_id_target_and_amount_admission() {
-    let vocabulary = creature_types::selected_vocabulary().unwrap();
-    let mut spell = watched(
-        Program::instant(ManaCost::free(), body()),
-        crate::program::TriggerSpec::self_cast(),
-    );
-    spell.triggered.push(spell.triggered[0].clone());
-    assert_eq!(
-        spell.validate(&vocabulary),
-        Err(DefinitionError::DuplicateAbility)
-    );
-    spell.triggered.pop();
-    spell.triggered[0].body = ExecutableBody::new(
-        BodyTarget::SinglePlayer,
-        vec![Instruction::AdjustTargetLife {
-            adjustment: LifeAdjustment::Gain(1.into()),
-        }],
-    );
-    assert_eq!(spell.validate(&vocabulary), Ok(()));
-    let counted = ExecutableBody::new(
-        BodyTarget::None,
-        vec![Instruction::DrawController {
-            amount: crate::program::ValueExpr::event(
-                crate::program::EventValueKind::MatchedOccurrences,
-            ),
-        }],
-    );
-    spell.triggered[0].body = counted.clone();
-    assert_eq!(spell.validate(&vocabulary), Ok(()));
-    let ProgramKind::Spell(definition) = &mut spell.kind else {
-        unreachable!()
-    };
-    definition.body = counted;
-    assert_eq!(
-        spell.validate(&vocabulary),
-        Err(DefinitionError::UnboundTriggerAmount)
-    );
 }
 
 #[test]

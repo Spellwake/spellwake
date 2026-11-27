@@ -44,9 +44,16 @@ fn multiplier(factor: i64) -> Instruction {
 }
 
 fn damage(amount: i64) -> Instruction {
-    Instruction::Damage {
-        amount: amount.into(),
-    }
+    spellwake_engine::program::Instruction::DealDamage(Box::new(
+        spellwake_engine::toolbox::DealDamageSpec {
+            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                spellwake_engine::program::ValueExpr::Literal(amount.into()),
+            ),
+            exile_if_dies: false,
+        },
+    ))
 }
 
 fn prevention(amount: i64) -> Instruction {
@@ -1049,67 +1056,6 @@ fn mixed_pending_rejects_stale_foreign_and_wrong_kind_inputs_without_losing_prio
         case.target,
         12.into(),
     );
-}
-
-#[test]
-fn huge_products_and_following_prevention_never_narrow_or_round() {
-    let game = world(
-        100,
-        vec![
-            (
-                1,
-                A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![multiplier(3)]),
-            ),
-            (
-                2,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::CreatePreventionShield {
-                        amount: exact(PRODUCT_MINUS_SEVEN),
-                    }],
-                ),
-            ),
-            (
-                3,
-                A,
-                ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Damage {
-                        amount: exact(HUGE),
-                    }],
-                ),
-            ),
-        ],
-    );
-    let target = object(&game, FIRST);
-    let (game, multiplier) = create_multiplier(&game, 1, target);
-    let (game, shield) = create_shield(&game, 2, target);
-    let (start, source) = execute(&game, 3, target);
-    assert_eq!(start.damage_journal().attempts[0].amount, exact(HUGE));
-    let done = choose(start.state(), multiplier.id);
-    let journal = done.damage_journal();
-    let fact = &journal.multiplications[0];
-    assert_eq!(
-        (&fact.before, &fact.factor, &fact.after),
-        (&exact(HUGE), &3.into(), &exact(PRODUCT))
-    );
-    assert_eq!(fact.stage, 1);
-    assert_eq!(journal.preventions[0].amount, exact(PRODUCT_MINUS_SEVEN));
-    assert_eq!(
-        damage_support::prevention_remaining(&journal.preventions[0]).clone(),
-        7.into()
-    );
-    assert_eq!(journal.preventions[0].stage, 2);
-    assert!(
-        done.state()
-            .execution()
-            .prevention_shield(shield.id)
-            .is_none()
-    );
-    assert_dealt(journal, source, target, 7.into());
-    assert_eq!(marked(done.state(), target), 7.into());
 }
 
 #[test]

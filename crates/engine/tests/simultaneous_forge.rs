@@ -12,7 +12,6 @@ use spellwake_engine::{
     game::{
         DecisionReply, GameCommand, GameContext, GameId, GameState, NativeCandidate, RuleFrame,
     },
-    life::LifeAdjustment,
     mana::{FloatingMana, ManaCost, ManaType},
     object_identity::{CardId, ObjectDestination, ObjectZone},
     occurrence::{RulesOccurrence, RulesRecord, TriggerRelated},
@@ -118,15 +117,25 @@ fn trigger(scenario: &str) -> TriggeredAbility {
         body: ExecutableBody::new(
             BodyTarget::None,
             if scenario == "count" {
-                vec![Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::event(
-                        spellwake_engine::program::EventValueKind::MatchedOccurrences,
+                vec![spellwake_engine::program::Instruction::DrawCards(Box::new(
+                    spellwake_engine::toolbox::DrawCardsSpec::simple(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::event(
+                            spellwake_engine::program::EventValueKind::MatchedOccurrences,
+                        ),
                     ),
-                }]
+                ))]
             } else {
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                }]
+                vec![spellwake_engine::program::Instruction::AdjustLife(
+                    Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    )),
+                )]
             },
         ),
     }
@@ -166,9 +175,14 @@ fn run(scenario: &str) {
         instructions.push(instructions[0].clone());
     }
     if scenario == "zero" {
-        instructions.push(Instruction::AdjustControllerLife {
-            adjustment: LifeAdjustment::Gain(3.into()),
-        });
+        instructions.push(spellwake_engine::program::Instruction::AdjustLife(
+            Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                ),
+                spellwake_engine::program::ValueExpr::Literal(3.into()),
+            )),
+        ));
     }
     let producer = Program::instant(
         ManaCost::specific(ManaType::Green, 1.into()),

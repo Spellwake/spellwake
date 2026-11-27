@@ -11,7 +11,6 @@ use spellwake_engine::{
     characteristics::Color,
     effects::Program,
     land::LandType,
-    life::LifeAdjustment,
     mana::{ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaType},
     program::{
         BodyTarget, ExecutableBody, Instruction, PlayerRelation, ResolvingPlayer, Supertype,
@@ -265,9 +264,14 @@ impl AuthoredEffect {
             ),
             Self::DrawTwo => ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                }],
+                vec![Instruction::DrawCards(Box::new(
+                    spellwake_engine::toolbox::DrawCardsSpec::simple(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::Literal(2.into()),
+                    ),
+                ))],
             ),
             Self::CreateSoldiers => ExecutableBody::new(
                 BodyTarget::None,
@@ -304,12 +308,16 @@ impl AuthoredTrigger {
         &self,
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<TriggeredAbility, RegistryError> {
-        let draw = Instruction::DrawController {
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        };
-        let gain = Instruction::AdjustControllerLife {
-            adjustment: LifeAdjustment::Gain(1.into()),
-        };
+        let draw =
+            Instruction::DrawCards(Box::new(spellwake_engine::toolbox::DrawCardsSpec::simple(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            )));
+        let gain =
+            Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::literal(1),
+            )));
         let (target, instructions) = match self.effect {
             AuthoredTriggerEffect::OptionalGainOne => (
                 BodyTarget::None,
@@ -350,17 +358,27 @@ impl AuthoredTrigger {
                 BodyTarget::None,
                 vec![
                     draw,
-                    Instruction::AdjustControllerLife {
-                        adjustment: LifeAdjustment::Lose(1.into()),
-                    },
+                    Instruction::AdjustLife(Box::new(
+                        spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                    )),
                 ],
             ),
             AuthoredTriggerEffect::TargetLoseOneGainOne => (
                 BodyTarget::SinglePlayer,
                 vec![
-                    Instruction::AdjustTargetLife {
-                        adjustment: LifeAdjustment::Lose(1.into()),
-                    },
+                    Instruction::AdjustLife(Box::new(
+                        spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                    )),
                     gain,
                 ],
             ),

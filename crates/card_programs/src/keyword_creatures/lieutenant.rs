@@ -5,10 +5,9 @@ use spellwake_engine::{
         AbilityChange, ControllerSelector, NumericExpression, NumericPair, PermanentSelector,
         StaticPart, StaticParts,
     },
-    life::LifeAdjustment,
     program::{
-        BodyTarget, EffectSubject, ExecutableBody, Instruction, ObjectFilter, ResolvingPlayer,
-        TriggerGrouping,
+        AffectedPlayers, BodyTarget, EffectSubject, ExecutableBody, Instruction, ObjectFilter,
+        ResolvingPlayer, TriggerGrouping,
     },
 };
 pub(super) fn compile(
@@ -90,10 +89,12 @@ pub(super) fn compile(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
             ),
-            "each opponent loses 3 life." => body.push(Instruction::AdjustEachOpponentLife {
-                adjustment: LifeAdjustment::Lose(3.into()),
-                controller_adjustment: None,
-            }),
+            "each opponent loses 3 life." => body.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent),
+                    spellwake_engine::program::ValueExpr::literal(3),
+                ),
+            ),
             "put a +1/+1 counter on each creature you control." => body.push(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
                     spellwake_engine::toolbox::ObjectQuery::zone(
@@ -106,9 +107,17 @@ pub(super) fn compile(
             ),
             "prevent all combat damage that would be dealt to creatures you control this turn. Other creatures you control gain vigilance until end of turn." =>
             {
-                body.push(Instruction::PreventDamageThisTurn(
-                    spellwake_engine::damage::TurnPreventionFilter::CombatToControlledCreatures,
-                ));
+                body.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+                        spellwake_engine::damage::TurnPreventionSpec {
+                            combat_only: true,
+                            source: spellwake_engine::damage::PreventionSourceSpec::Any,
+                            recipient:
+                                spellwake_engine::damage::PreventionRecipientSpec::ControlledCreatures,
+                            both_directions: false,
+                        },
+                    ),
+                );
                 body.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
                         EffectSubject::Matching(

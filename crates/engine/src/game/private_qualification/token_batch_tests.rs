@@ -169,9 +169,14 @@ pub(super) fn grouped_fixture(boundary: &str, actions: Value) -> packet::Selecte
         grouping: crate::program::TriggerGrouping::OneOrMoreTogether,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: crate::life::LifeAdjustment::Gain(1.into()),
-            }],
+            vec![crate::program::Instruction::AdjustLife(Box::new(
+                crate::toolbox::AdjustLifeSpec::gain(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         ),
     });
     input.definitions.insert(

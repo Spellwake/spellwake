@@ -190,9 +190,14 @@ fn exact_four_raw_rows_native_source_signatures_and_complete_programs() {
                 target,
                 vec![
                     action,
-                    Instruction::DrawController {
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    Instruction::DrawCards(Box::new(
+                        spellwake_engine::toolbox::DrawCardsSpec::simple(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                    )),
                 ],
             ),
         );

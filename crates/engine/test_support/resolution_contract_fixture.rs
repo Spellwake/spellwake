@@ -138,24 +138,36 @@ pub fn body(
                     into: creature_types::slot(row["into"].clone())?,
                     excluding: type_set(&row["excluding"], full, other)?,
                 },
-                "DrawController" => Instruction::DrawController {
-                    amount: match text(&row["amount"], "tag")? {
-                        "Literal" => ValueExpr::Literal(quantity(&row["amount"]["value"])?),
-                        "ControlledPermanentsOfChosenType" => {
-                            spellwake_engine::program::ValueExpr::count_battlefield(
-                                spellwake_engine::program::ObjectFilter::any()
-                                    .controlled()
-                                    .of_chosen_slot(creature_types::slot(
-                                        row["amount"]["chosen"].clone(),
-                                    )?),
-                            )
-                        }
-                        _ => return Err("unlisted finite draw amount".into()),
-                    },
-                },
-                "Damage" => Instruction::Damage {
-                    amount: quantity(&row["amount"])?,
-                },
+                "DrawController" => Instruction::DrawCards(Box::new(
+                    spellwake_engine::toolbox::DrawCardsSpec::simple(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        match text(&row["amount"], "tag")? {
+                            "Literal" => ValueExpr::Literal(quantity(&row["amount"]["value"])?),
+                            "ControlledPermanentsOfChosenType" => {
+                                spellwake_engine::program::ValueExpr::count_battlefield(
+                                    spellwake_engine::program::ObjectFilter::any()
+                                        .controlled()
+                                        .of_chosen_slot(creature_types::slot(
+                                            row["amount"]["chosen"].clone(),
+                                        )?),
+                                )
+                            }
+                            _ => return Err("unlisted finite draw amount".into()),
+                        },
+                    ),
+                )),
+                "Damage" => {
+                    Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            ValueExpr::Literal(quantity(&row["amount"])?),
+                        ),
+                        exile_if_dies: false,
+                    }))
+                }
                 "CopySpell" => Instruction::CopySpell,
                 "CounterSpell" => Instruction::CounterSpell,
                 _ => return Err("unlisted finite body instruction".into()),
@@ -349,9 +361,14 @@ pub fn public_input(
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DrawController {
-                        amount: ValueExpr::Literal(0.into()),
-                    }],
+                    vec![Instruction::DrawCards(Box::new(
+                        spellwake_engine::toolbox::DrawCardsSpec::simple(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::Literal(0.into()),
+                        ),
+                    ))],
                 ),
             ),
         )?;
