@@ -340,7 +340,7 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                 }
                 ts.restore(ycp);
             }
-            // Support `<player> or a/an/another <object_filter>` (`you or another permanent you control`, `you or a Hero you control`, `you or a planeswalker you control`)
+            // Support `<player> or a/an/another <object_filter>` (`you or another permanent you control`, `you or a Hero you control`, `the player or planeswalker it's attacking`)
             let ocp = ts.checkpoint();
             if ts.eat_word("or")
                 && ts.peek_word().is_some_and(|w| {
@@ -353,12 +353,15 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                 })
                 && let Ok(extra) = try_parse(ts, parse_object_filter)
             {
+                let _ = ts.eat_phrase(&["it's", "attacking"])
+                    || ts.eat_phrase(&["they're", "attacking"]);
                 return Ok(SubjectRef::Compound(vec![
                     SubjectRef::Player(p),
                     SubjectRef::Group(Box::new(extra)),
                 ]));
             }
             ts.restore(ocp);
+            let _ = ts.eat_phrase(&["chosen", "at", "random"]);
             return Ok(SubjectRef::Player(p));
         }
         ts.restore(cp);
@@ -588,7 +591,7 @@ pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
         ts.eat_phrase(&["the", "card"]);
         return Some(AnaphoraRef::ThatCard);
     }
-    if ts.eat_phrase(&["that", "spell"]) {
+    if ts.eat_phrase(&["that", "spell"]) || ts.eat_phrase(&["that", "ability"]) {
         return Some(AnaphoraRef::ThatSpell);
     }
     if ts.eat_phrase(&["that", "token"]) {

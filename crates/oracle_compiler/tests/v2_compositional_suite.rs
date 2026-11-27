@@ -3247,3 +3247,456 @@ fn v2_wave8_compositional_grammar_deep_ir_assertions() {
         ValueExpr::Const(1),
     );
 }
+
+/// 12. Deep Wave 9 compositional IR assertions (84.75% -> 85.55%, +258 cards, 0 regressions,
+///     0 IR enum bloat, `clause/player_verbs.rs` modularized into `clause/player_actions.rs`):
+///     - Activated abilities on Instants/Sorceries (`Magma Opus`, `Piercing Rays` Forecast)
+///     - Keyword + static lines (`Plate Armor`)
+///     - DMU Defiler cycle (`Defiler of Vigor`), Commander Curses (`Curse of Opulence`),
+///       and Job Select Equipment (`Black Mage's Rod`, `Thief's Knife`)
+///     - Player visibility & spell-limit statics (`Lantern of Insight`, `Moderation`, `Steel Golem`)
+///     - Activated-ability locks & defender-attack tails (`Encrust`, `Faith's Fetters`, `Arcades`)
+///     - Repeated keyword actions (`Contagion Engine`, `Progenitor Exarch`, `Ad Nauseam`)
+///     - Library-order / sacrifice-the-rest / shuffle-the-rest (`Goblin Recruiter`, `Archfiend of Depravity`, `Kindred Summons`)
+///     - Energy scaling (`Peema Trailblazer`), damage prevention (`Pay No Heed`, `Guard Dogs`),
+///       protection choices (`Apostle's Blessing`), and `Luminate Primordial` zero-regression guard.
+#[test]
+fn v2_wave9_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        ActivationRestriction, AnaphoraRef, Duration, Effect, ForEachDomain, KeywordKind,
+        KeywordParam, LibraryOrder, ManaRuleKind, ObjectMutation, PlayerActionKind, PlayerMutation,
+        PlayerRestrictionKind, RuleRestrictionKind, StaticAbility, SubjectRef, SubjectStaticRule,
+        VisibilityKind, ZoneOpKind,
+    };
+
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "Defiler of Vigor",
+            "Creature - Phyrexian Wurm",
+            "Trample\nAs an additional cost to cast green permanent spells, you may pay 2 life. Those spells cost {G} less to cast if you paid life this way. This effect reduces only the amount of green mana you pay.\nWhenever you cast a green permanent spell, put a +1/+1 counter on each creature you control.",
+        ),
+        (
+            "Curse of Opulence",
+            "Enchantment - Aura Curse",
+            "Enchant player\nWhenever enchanted player is attacked, create a Gold token. Each opponent attacking that player does the same.",
+        ),
+        (
+            "Rings of Brighthearth",
+            "Artifact",
+            "Whenever you activate an ability, if it isn't a mana ability, you may pay {2}. If you do, copy that ability. You may choose new targets for the copy.",
+        ),
+        (
+            "Penance",
+            "Enchantment",
+            "Put a card from your hand on top of your library: The next time a black or red source of your choice would deal damage this turn, prevent that damage.",
+        ),
+        (
+            "Luminate Primordial",
+            "Creature - Avatar",
+            "Vigilance\nWhen Luminate Primordial enters, for each opponent, exile up to one target creature that player controls and that player gains life equal to its power.",
+        ),
+        (
+            "Black Mage's Rod",
+            "Artifact - Equipment",
+            "Job select\nEquipped creature gets +1/+0, has \"Whenever you cast a noncreature spell, this creature deals 1 damage to each opponent,\" and is a Wizard in addition to its other types.\nEquip {3}",
+        ),
+        (
+            "Encrust",
+            "Enchantment - Aura",
+            "Enchant artifact or creature\nEnchanted permanent doesn't untap during its controller's untap step and its activated abilities can't be activated.",
+        ),
+        (
+            "Faith's Fetters",
+            "Enchantment - Aura",
+            "Enchant permanent\nWhen Faith's Fetters enters, you gain 4 life.\nEnchanted permanent can't attack or block, and its activated abilities can't be activated unless they're mana abilities.",
+        ),
+        (
+            "Arcades, the Strategist",
+            "Legendary Creature - Elder Dragon",
+            "Flying, vigilance\nWhenever a creature you control with defender enters, draw a card.\nEach creature you control with defender assigns combat damage equal to its toughness rather than its power and can attack as though it didn't have defender.",
+        ),
+        (
+            "Lantern of Insight",
+            "Artifact",
+            "Players play with the top card of their libraries revealed.\n{T}, Sacrifice Lantern of Insight: Target player shuffles.",
+        ),
+        (
+            "Moderation",
+            "Enchantment",
+            "You can't cast more than one spell each turn.\nWhenever you cast a spell, draw a card.",
+        ),
+        (
+            "Kaalia of the Vast",
+            "Legendary Creature - Human Cleric",
+            "Flying\nWhenever Kaalia of the Vast attacks an opponent, you may put an Angel, Demon, or Dragon creature card from your hand onto the battlefield tapped and attacking that opponent.",
+        ),
+        (
+            "Hellrider",
+            "Creature - Devil",
+            "Haste\nWhenever a creature you control attacks, Hellrider deals 1 damage to the player or planeswalker it's attacking.",
+        ),
+        (
+            "Contagion Engine",
+            "Artifact",
+            "When Contagion Engine enters, put a -1/-1 counter on each creature target player controls.\n{4}, {T}: Proliferate twice.",
+        ),
+        (
+            "Ad Nauseam",
+            "Instant",
+            "Reveal the top card of your library and put that card into your hand. You lose life equal to its mana value. You may repeat this process any number of times.",
+        ),
+        (
+            "Goblin Recruiter",
+            "Creature - Goblin",
+            "When Goblin Recruiter enters, search your library for any number of Goblin cards, reveal them, then shuffle and put those cards on top in any order.",
+        ),
+        (
+            "Rosheen Meanderer",
+            "Legendary Creature - Giant Shaman",
+            "{T}: Add {C}{C}{C}{C}. Spend this mana only on costs that contain {X}.",
+        ),
+        (
+            "Pay No Heed",
+            "Instant",
+            "Prevent all damage a source of your choice would deal this turn.",
+        ),
+        (
+            "Searing Blood",
+            "Instant",
+            "Searing Blood deals 2 damage to target creature. When that creature dies this turn, Searing Blood deals 3 damage to the creature's controller.",
+        ),
+        (
+            "Scandalmonger",
+            "Creature - Boar Monger",
+            "{2}: Target player discards a card. Any player may activate this ability but only as a sorcery.",
+        ),
+        (
+            "Magma Opus",
+            "Instant",
+            "Magma Opus deals 4 damage divided as you choose among any number of targets. Tap two target permanents. Create a 4/4 blue and red Elemental creature token. Draw two cards.\n{U/R}{U/R}, Discard Magma Opus: Create a Treasure token.",
+        ),
+        (
+            "Piercing Rays",
+            "Sorcery",
+            "Exile target tapped creature.\nForecast \u{2014} {2}{W}, Reveal Piercing Rays from your hand: Tap target untapped creature.",
+        ),
+        (
+            "Plate Armor",
+            "Artifact - Equipment",
+            "Equipped creature gets +3/+3 and has ward {1}.\nEquip {3}. This ability costs {1} less to activate for each other Equipment you control.",
+        ),
+        (
+            "Archfiend of Depravity",
+            "Creature - Demon",
+            "Flying\nAt the beginning of each opponent's end step, that player chooses up to two creatures they control, then sacrifices the rest.",
+        ),
+        (
+            "Steel Golem",
+            "Artifact Creature - Golem",
+            "You can't cast creature spells.",
+        ),
+        (
+            "Peema Trailblazer",
+            "Creature - Elf Warrior",
+            "Trample\nWhenever Peema Trailblazer deals combat damage to a player, you get that many {E}.\nExhaust \u{2014} Pay six {E}: Put two +1/+1 counters on Peema Trailblazer. Then draw cards equal to the greatest power among creatures you control.",
+        ),
+        (
+            "Apostle's Blessing",
+            "Instant",
+            "Target artifact or creature you control gains protection from artifacts or from the color of your choice until end of turn.",
+        ),
+        (
+            "Kindred Summons",
+            "Instant",
+            "Choose a creature type. Reveal cards from the top of your library until you reveal X creature cards of the chosen type, where X is the number of creatures you control of that type. Put those cards onto the battlefield, then shuffle the rest of the revealed cards into your library.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in cases {
+        let compiled = compile_v2_strict(name, type_line, oracle_text, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 9 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Deep IR assertions:
+    // 1. Magma Opus -> spell_effects (4 effects) + Activated ability on Instant!
+    let opus = compile_v2_strict(
+        "Magma Opus",
+        "Instant",
+        "Magma Opus deals 4 damage divided as you choose among any number of targets. Tap two target permanents. Create a 4/4 blue and red Elemental creature token. Draw two cards.\n{U/R}{U/R}, Discard Magma Opus: Create a Treasure token.",
+        &vocab,
+    );
+    assert_eq!(opus.faces[0].spell_effects.len(), 4);
+    assert!(matches!(
+        opus.faces[0].abilities.as_slice(),
+        [Ability::Activated { cost, body, .. }] if cost.len() == 2 && body.len() == 1
+    ));
+
+    // 2. Plate Armor -> Equip keyword + CostModifier/ActivationCostModifier static on same line
+    let plate = compile_v2_strict(
+        "Plate Armor",
+        "Artifact - Equipment",
+        "Equipped creature gets +3/+3 and has ward {1}.\nEquip {3}. This ability costs {1} less to activate for each other Equipment you control.",
+        &vocab,
+    );
+    assert!(
+        plate.faces[0]
+            .keywords
+            .iter()
+            .any(|k| k.kind == KeywordKind::Equip)
+    );
+    assert_eq!(plate.faces[0].statics.len(), 2);
+
+    // 3. Lantern of Insight -> VisibilityRule(PlayWithTopRevealed)
+    let lantern = compile_v2_strict(
+        "Lantern of Insight",
+        "Artifact",
+        "Players play with the top card of their libraries revealed.",
+        &vocab,
+    );
+    assert!(matches!(
+        lantern.faces[0].statics.as_slice(),
+        [StaticAbility::VisibilityRule {
+            kind: VisibilityKind::PlayWithTopRevealed,
+            ..
+        }]
+    ));
+
+    // 4. Moderation -> PlayerRestriction(CantCastMoreThanOnePerTurn)
+    let moderation = compile_v2_strict(
+        "Moderation",
+        "Enchantment",
+        "You can't cast more than one spell each turn.",
+        &vocab,
+    );
+    assert!(matches!(
+        moderation.faces[0].statics.as_slice(),
+        [StaticAbility::PlayerRestriction {
+            restriction: PlayerRestrictionKind::CantCastMoreThanOnePerTurn,
+            ..
+        }]
+    ));
+
+    // 5. Steel Golem -> RuleRestriction(CantBeCast) preserving creature-spell filter
+    let golem = compile_v2_strict(
+        "Steel Golem",
+        "Artifact Creature - Golem",
+        "You can't cast creature spells.",
+        &vocab,
+    );
+    assert!(matches!(
+        golem.faces[0].statics.as_slice(),
+        [StaticAbility::RuleRestriction {
+            subject: Some(SubjectRef::Group(_)),
+            rule: RuleRestrictionKind::CantBeCast,
+            ..
+        }]
+    ));
+
+    // 6. Encrust -> Compound([DoesntUntap, ActivatedAbilitiesCantBeActivated])
+    let encrust = compile_v2_strict(
+        "Encrust",
+        "Enchantment - Aura",
+        "Enchant artifact or creature\nEnchanted permanent doesn't untap during its controller's untap step and its activated abilities can't be activated.",
+        &vocab,
+    );
+    assert!(matches!(
+        encrust.faces[0].statics.as_slice(),
+        [StaticAbility::Compound(parts)]
+            if matches!(
+                parts.as_slice(),
+                [
+                    StaticAbility::SubjectRule {
+                        rule: SubjectStaticRule::DoesntUntap,
+                        ..
+                    },
+                    StaticAbility::RuleRestriction {
+                        rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
+                        ..
+                    },
+                ]
+            )
+    ));
+
+    // 7. Arcades -> Compound([AssignDamageByToughness, CanAttackWithDefender])
+    let arcades = compile_v2_strict(
+        "Arcades, the Strategist",
+        "Legendary Creature - Elder Dragon",
+        "Each creature you control with defender assigns combat damage equal to its toughness rather than its power and can attack as though it didn't have defender.",
+        &vocab,
+    );
+    assert!(matches!(
+        arcades.faces[0].statics.as_slice(),
+        [StaticAbility::Compound(parts)]
+            if matches!(
+                parts.as_slice(),
+                [
+                    StaticAbility::SubjectRule {
+                        rule: SubjectStaticRule::AssignDamageByToughness,
+                        ..
+                    },
+                    StaticAbility::SubjectRule {
+                        rule: SubjectStaticRule::CanAttackWithDefender,
+                        ..
+                    },
+                ]
+            )
+    ));
+
+    // 8. Contagion Engine -> Proliferate twice wrapped in ForEach(Count(2))
+    let engine = compile_v2_strict(
+        "Contagion Engine",
+        "Artifact",
+        "{4}, {T}: Proliferate twice.",
+        &vocab,
+    );
+    assert!(matches!(
+        engine.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::ForEach {
+                    over: ForEachDomain::Count(_),
+                    body: inner,
+                }] if matches!(
+                    inner.as_slice(),
+                    [Effect::MutatePlayer {
+                        mutation: PlayerMutation::Action(PlayerActionKind::Proliferate),
+                        ..
+                    }]
+                )
+            )
+    ));
+
+    // 9. Rosheen Meanderer -> ManaRule(SpendOnlyColorOnX)
+    let rosheen = compile_v2_strict(
+        "Rosheen Meanderer",
+        "Legendary Creature - Giant Shaman",
+        "{T}: Add {C}{C}{C}{C}. Spend this mana only on costs that contain {X}.",
+        &vocab,
+    );
+    assert!(matches!(
+        rosheen.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                &body[1],
+                Effect::MutatePlayer {
+                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendOnlyColorOnX(_)),
+                    ..
+                }
+            )
+    ));
+
+    // 10. Goblin Recruiter -> ZoneOp(Move, Top + AnyOrder)
+    let recruiter = compile_v2_strict(
+        "Goblin Recruiter",
+        "Creature - Goblin",
+        "When Goblin Recruiter enters, search your library for any number of Goblin cards, reveal them, then shuffle and put those cards on top in any order.",
+        &vocab,
+    );
+    assert!(matches!(
+        recruiter.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if body.iter().any(|e| matches!(
+                e,
+                Effect::ZoneOp {
+                    op: ZoneOpKind::Move,
+                    to: Some(dest),
+                    ..
+                } if dest.library_order == Some(LibraryOrder::AnyOrder)
+            ))
+    ));
+
+    // 11. Scandalmonger -> AllowedPlayer + AsSorcery restrictions both preserved
+    let monger = compile_v2_strict(
+        "Scandalmonger",
+        "Creature - Boar Monger",
+        "{2}: Target player discards a card. Any player may activate this ability but only as a sorcery.",
+        &vocab,
+    );
+    assert!(matches!(
+        monger.faces[0].abilities.as_slice(),
+        [Ability::Activated { restrictions, .. }]
+            if matches!(
+                restrictions.as_slice(),
+                [
+                    ActivationRestriction::AllowedPlayer(_),
+                    ActivationRestriction::AsSorcery,
+                ]
+            )
+    ));
+
+    // 12. Luminate Primordial zero-regression guard (ForEach opponent -> Exile + AdjustLife, NOT swallowed as compound exile!)
+    let primordial = compile_v2_strict(
+        "Luminate Primordial",
+        "Creature - Avatar",
+        "When Luminate Primordial enters, for each opponent, exile up to one target creature that player controls and that player gains life equal to its power.",
+        &vocab,
+    );
+    assert!(matches!(
+        primordial.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::ForEach { body: inner, .. }]
+                    if matches!(
+                        inner.as_slice(),
+                        [
+                            Effect::ZoneOp { op: ZoneOpKind::Exile { .. }, .. },
+                            Effect::AdjustLife { .. },
+                        ]
+                    )
+            )
+    ));
+
+    // 13. Archfiend of Depravity (`sacrifices the rest` -> AnaphoraRef::TheRest) & Apostle's Blessing (`ChosenColor`)
+    let archfiend = compile_v2_strict(
+        "Archfiend of Depravity",
+        "Creature - Demon",
+        "At the beginning of each opponent's end step, that player chooses up to two creatures they control, then sacrifices the rest.",
+        &vocab,
+    );
+    assert!(matches!(
+        archfiend.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if body.iter().any(|e| matches!(
+                e,
+                Effect::ZoneOp {
+                    op: ZoneOpKind::Sacrifice,
+                    subject: SubjectRef::Anaphora(AnaphoraRef::TheRest),
+                    ..
+                }
+            ))
+    ));
+    let blessing = compile_v2_strict(
+        "Apostle's Blessing",
+        "Instant",
+        "Target artifact or creature you control gains protection from artifacts or from the color of your choice until end of turn.",
+        &vocab,
+    );
+    assert!(matches!(
+        blessing.faces[0].spell_effects.as_slice(),
+        [Effect::MutateObject {
+            mutation: ObjectMutation::GrantKeywords(kws),
+            duration: Duration::UntilEndOfTurn,
+            ..
+        }] if matches!(
+            kws.as_slice(),
+            [spellwake_oracle_compiler::v2::ir::KeywordSpec {
+                kind: KeywordKind::Protection,
+                param: Some(KeywordParam::ChosenColor),
+            }]
+        )
+    ));
+}

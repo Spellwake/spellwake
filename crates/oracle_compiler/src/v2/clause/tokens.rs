@@ -77,6 +77,10 @@ pub(crate) fn parse_token_creation(
         {
             modifiers.tapped = true;
             modifiers.attacking = true;
+            let _ = ts.eat_phrase(&["that", "opponent"])
+                || ts.eat_phrase(&["that", "player"])
+                || ts.eat_phrase(&["the", "defending", "player"])
+                || ts.eat_phrase(&["defending", "player"]);
         }
         let exceptions = parse_copy_exceptions(ts);
         let final_count = if deferred_equal_to && ts.eat_phrase(&["equal", "to"]) {
@@ -323,6 +327,10 @@ pub(crate) fn parse_token_creation(
     if ts.eat_phrase(&["tapped", "and", "attacking"]) {
         mods.tapped = true;
         mods.attacking = true;
+        let _ = ts.eat_phrase(&["that", "opponent"])
+            || ts.eat_phrase(&["that", "player"])
+            || ts.eat_phrase(&["the", "defending", "player"])
+            || ts.eat_phrase(&["defending", "player"]);
     } else if ts.eat_word("tapped") {
         mods.tapped = true;
     }

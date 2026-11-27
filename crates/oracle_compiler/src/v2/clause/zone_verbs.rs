@@ -245,6 +245,24 @@ fn parse_zone_verb_frame_inner(
 
     // 9. `sacrifice(s) ...`
     if ts.eat_word("sacrifice") || ts.eat_word("sacrifices") {
+        if ts.eat_phrase(&["the", "rest"]) {
+            return Ok((
+                vec![Effect::ZoneOp {
+                    actor,
+                    op: ZoneOpKind::Sacrifice,
+                    subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::TheRest),
+                    from: vec![ZoneRef {
+                        zone: ZoneKind::Battlefield,
+                        owner: ZoneOwner::Default,
+                    }],
+                    to: None,
+                    modifiers: EntryModifiers::default(),
+                    except: None,
+                    count: None,
+                }],
+                (),
+            ));
+        }
         // Handle anaphoric / `~` / `all <flt>` subjects (`Sacrifice it`, `Sacrifice ~`, `sacrifices all permanents in the pile of their choice`)
         // Guard against `"that many"` which is a dynamic count (`sacrifice that many permanents`), not an explicit subject!
         let is_that_many = ts.peek_phrase(&["that", "many"]);
@@ -605,7 +623,7 @@ fn parse_zone_verb_frame_inner(
             ));
         }
 
-        // Compound 3-way exile (`Exile all enchantments from the battlefield, all instant cards from all graveyards, and all artifact cards from all hands`)
+        // Compound exile (`Exile ~ and those creature cards`, `Exile all enchantments from the battlefield, all instant cards from all graveyards, and all artifact cards from all hands`)
         let first = parse_subject_ref(ts)?;
         let mut subjects = vec![first];
         loop {
@@ -620,6 +638,20 @@ fn parse_zone_verb_frame_inner(
                     subjects.push(next_s);
                     continue;
                 }
+            }
+            ts.restore(cp);
+            if ts.eat_word("and")
+                && !ts.peek_phrase(&["that", "player"])
+                && !ts.peek_phrase(&["that", "opponent"])
+                && ts.peek_word().is_some_and(|w| {
+                    w.eq_ignore_ascii_case("those")
+                        || w.eq_ignore_ascii_case("that")
+                        || w.eq_ignore_ascii_case("all")
+                })
+                && let Ok(next_s) = try_parse(ts, parse_subject_ref)
+            {
+                subjects.push(next_s);
+                continue;
             }
             ts.restore(cp);
             break;
@@ -668,25 +700,46 @@ fn parse_zone_verb_frame_inner(
         // Optional `with a/an/<N> <kind> counter(s) on it` / `with a number of <kind> counters on it equal to <val>`
         let counters = parse_exile_with_counters(ts);
         let ex_dur = parse_trailing_duration(ts);
-        let _ = ts.eat_phrase(&[
-            "instead",
-            "of",
-            "putting",
-            "it",
-            "into",
-            "its",
-            "owner's",
-            "graveyard",
-        ]) || ts.eat_phrase(&[
-            "instead",
-            "of",
-            "putting",
-            "them",
-            "into",
-            "their",
-            "owners'",
-            "graveyards",
-        ]);
+        let ate_instead_gy =
+            ts.eat_phrase(&[
+                "instead",
+                "of",
+                "putting",
+                "it",
+                "into",
+                "its",
+                "owner's",
+                "graveyard",
+            ]) || ts.eat_phrase(&[
+                "instead",
+                "of",
+                "putting",
+                "them",
+                "into",
+                "their",
+                "owners'",
+                "graveyards",
+            ]) || ts.eat_phrase(&[
+                "instead",
+                "of",
+                "putting",
+                "it",
+                "into",
+                "your",
+                "graveyard",
+            ]) || ts.eat_phrase(&["instead", "of", "putting", "it", "into", "a", "graveyard"])
+                || ts.eat_phrase(&[
+                    "instead",
+                    "of",
+                    "putting",
+                    "it",
+                    "into",
+                    "their",
+                    "graveyard",
+                ]);
+        if ate_instead_gy {
+            let _ = ts.eat_phrase(&["as", "it", "resolves"]);
+        }
         let eff = Effect::ZoneOp {
             actor,
             op: ZoneOpKind::Exile {
@@ -1083,6 +1136,13 @@ fn parse_zone_verb_frame_inner(
             if ts.eat_phrase(&["on", "top"])
                 && !ts.peek_word().is_some_and(|w| w.eq_ignore_ascii_case("of"))
             {
+                let order = if ts.eat_phrase(&["in", "any", "order"]) {
+                    Some(crate::v2::ir::LibraryOrder::AnyOrder)
+                } else if ts.eat_phrase(&["in", "a", "random", "order"]) {
+                    Some(crate::v2::ir::LibraryOrder::RandomOrder)
+                } else {
+                    None
+                };
                 return Ok((
                     vec![Effect::ZoneOp {
                         actor,
@@ -1093,7 +1153,7 @@ fn parse_zone_verb_frame_inner(
                             zone: ZoneKind::Library,
                             owner: ZoneOwner::Default,
                             library_position: Some(crate::v2::ir::LibraryPosition::Top),
-                            library_order: None,
+                            library_order: order,
                             under_control: None,
                         }),
                         modifiers: EntryModifiers::default(),
@@ -1370,6 +1430,36 @@ fn parse_zone_verb_frame_inner(
                 ));
             }
             ts.restore(scp);
+        }
+        {
+            let rcp = ts.checkpoint();
+            if (ts.eat_phrase(&["the", "rest", "of", "the", "revealed", "cards"])
+                || ts.eat_phrase(&["the", "rest", "of", "those", "cards"])
+                || ts.eat_phrase(&["the", "rest"]))
+                && ts.eat_word("into")
+                && let Ok(zref) = try_parse(ts, parse_zone_ref)
+            {
+                return Ok((
+                    vec![Effect::ZoneOp {
+                        actor,
+                        op: ZoneOpKind::Shuffle,
+                        subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::TheRest),
+                        from: Vec::new(),
+                        to: Some(ZoneDest {
+                            zone: zref.zone,
+                            owner: zref.owner,
+                            library_position: Some(crate::v2::ir::LibraryPosition::Shuffled),
+                            library_order: None,
+                            under_control: None,
+                        }),
+                        modifiers: EntryModifiers::default(),
+                        except: None,
+                        count: None,
+                    }],
+                    (),
+                ));
+            }
+            ts.restore(rcp);
         }
         {
             let scp = ts.checkpoint();

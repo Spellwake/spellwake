@@ -396,70 +396,73 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 5. Activated ability (`<cost>: <body>`, including inline modal `Choose one —` + `•` lines!)
-        if !is_spell && let Some((cost_str, body_str)) = split_cost_and_effect(line) {
+        // 5. Activated ability (`<cost>: <body>`, including inline modal `Choose one —` + `•` lines,
+        //    and activated abilities on Instants/Sorceries such as Forecast and discard-for-Treasure!)
+        if let Some((cost_str, body_str)) = split_cost_and_effect(line) {
             let cost_res = tokenize(cost_str).and_then(|toks| {
                 let mut ts = TokenStream::new(cost_str, &toks, vocab, ParseStage::Cost);
                 let c = parse_cost_list(&mut ts)?;
                 ts.expect_eof()?;
                 Ok(c)
             });
-            let next_is_bullet = lines.get(i + 1).is_some_and(|l| l.starts_with(BULLET));
-            if let Some(count) = parse_modal_header(body_str, next_is_bullet) {
-                let mut modes = Vec::new();
-                i += 1;
-                while i < lines.len() && lines[i].starts_with(BULLET) {
-                    let raw_mode = lines[i].trim_start_matches(BULLET).trim();
-                    let mode_text = strip_ability_word_prefix(raw_mode);
-                    match parse_effect_body_str(&mode_text, vocab) {
-                        Ok(body) => modes.push(ModalMode { body }),
-                        Err(errs) => out.errors.extend(errs),
-                    }
+            if !is_spell || cost_res.is_ok() {
+                let next_is_bullet = lines.get(i + 1).is_some_and(|l| l.starts_with(BULLET));
+                if let Some(count) = parse_modal_header(body_str, next_is_bullet) {
+                    let mut modes = Vec::new();
                     i += 1;
+                    while i < lines.len() && lines[i].starts_with(BULLET) {
+                        let raw_mode = lines[i].trim_start_matches(BULLET).trim();
+                        let mode_text = strip_ability_word_prefix(raw_mode);
+                        match parse_effect_body_str(&mode_text, vocab) {
+                            Ok(body) => modes.push(ModalMode { body }),
+                            Err(errs) => out.errors.extend(errs),
+                        }
+                        i += 1;
+                    }
+                    match cost_res {
+                        Ok(cost) if !modes.is_empty() => out.abilities.push(Ability::Activated {
+                            cost,
+                            body: vec![Effect::PromptChoice {
+                                chooser: PlayerRef::You,
+                                kind: ChoiceKind::Modal { count, modes },
+                            }],
+                            restrictions: Vec::new(),
+                        }),
+                        Ok(_) => out.errors.push(ParseError {
+                            span: Span {
+                                start: 0,
+                                end: line.len(),
+                            },
+                            stage: ParseStage::Effect,
+                            message: "modal activated ability with zero modes".to_string(),
+                            text: line.to_string(),
+                        }),
+                        Err(e) => out.errors.push(e),
+                    }
+                    continue;
                 }
-                match cost_res {
-                    Ok(cost) if !modes.is_empty() => out.abilities.push(Ability::Activated {
-                        cost,
-                        body: vec![Effect::PromptChoice {
-                            chooser: PlayerRef::You,
-                            kind: ChoiceKind::Modal { count, modes },
-                        }],
-                        restrictions: Vec::new(),
-                    }),
-                    Ok(_) => out.errors.push(ParseError {
-                        span: Span {
-                            start: 0,
-                            end: line.len(),
-                        },
-                        stage: ParseStage::Effect,
-                        message: "modal activated ability with zero modes".to_string(),
-                        text: line.to_string(),
-                    }),
-                    Err(e) => out.errors.push(e),
+                match (cost_res, parse_effect_body_str(body_str, vocab)) {
+                    (Ok(cost), Ok(mut body)) => {
+                        let mut restrictions = Vec::new();
+                        body.retain(|eff| match eff {
+                            Effect::Restriction(rs) => {
+                                restrictions.extend(rs.iter().cloned());
+                                false
+                            }
+                            _ => true,
+                        });
+                        out.abilities.push(Ability::Activated {
+                            cost,
+                            body,
+                            restrictions,
+                        });
+                    }
+                    (Err(e), _) => out.errors.push(e),
+                    (_, Err(errs)) => out.errors.extend(errs),
                 }
+                i += 1;
                 continue;
             }
-            match (cost_res, parse_effect_body_str(body_str, vocab)) {
-                (Ok(cost), Ok(mut body)) => {
-                    let mut restrictions = Vec::new();
-                    body.retain(|eff| match eff {
-                        Effect::Restriction(rs) => {
-                            restrictions.extend(rs.iter().cloned());
-                            false
-                        }
-                        _ => true,
-                    });
-                    out.abilities.push(Ability::Activated {
-                        cost,
-                        body,
-                        restrictions,
-                    });
-                }
-                (Err(e), _) => out.errors.push(e),
-                (_, Err(errs)) => out.errors.extend(errs),
-            }
-            i += 1;
-            continue;
         }
 
         // 6. Triggered ability (`When/Whenever/At the beginning of ..., <body>`, including inline modal!)
@@ -514,15 +517,25 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 7. Standalone keyword line (`Flying, vigilance`, `Kicker—Sacrifice an artifact.`)
+        // 7. Standalone keyword line (`Flying, vigilance`, `Kicker—Sacrifice an artifact.`, `Equip {3}. This ability costs {1} less to activate ...`)
         if let Ok(toks) = tokenize(line) {
             let mut ts = TokenStream::new(line, &toks, vocab, ParseStage::Face);
             if let Ok((kws, _)) = parse_keyword_list(&mut ts) {
-                let _ = ts.eat_period();
+                let ate_period = ts.eat_period();
                 if ts.is_eof() {
                     out.keywords.extend(kws);
                     i += 1;
                     continue;
+                }
+                if ate_period && !is_spell {
+                    let mut tail_ts =
+                        TokenStream::new(line, &toks[ts.pos..], vocab, ParseStage::Static);
+                    if let Ok(st) = parse_static_ability(&mut tail_ts) {
+                        out.keywords.extend(kws);
+                        out.statics.push(st);
+                        i += 1;
+                        continue;
+                    }
                 }
             }
         }

@@ -66,6 +66,78 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             ConditionFlag::IsYourTurn,
         ))));
     }
+    // `it had [a/an/one or more] [<kind>] counter(s) on it` (`Leader's Talent`, `Nikara, Lair Scavenger`)
+    {
+        let hcp = ts.checkpoint();
+        if (ts.eat_word("it") || ts.eat_tilde())
+            && ts.eat_word("had")
+            && (ts.eat_phrase(&["one", "or", "more"]) || ts.eat_word("a") || ts.eat_word("an"))
+        {
+            let kind = if ts.eat_word("counter") || ts.eat_word("counters") {
+                crate::v2::ir::CounterKind::Any
+            } else if let Ok(ck) = try_parse(ts, parse_counter_kind)
+                && (ts.eat_word("counter") || ts.eat_word("counters"))
+            {
+                ck
+            } else {
+                ts.restore(hcp);
+                return Err(ts.err("expected counter after `had`"));
+            };
+            if ts.eat_phrase(&["on", "it"]) {
+                return Ok(ConditionExpr::Compare {
+                    lhs: Box::new(ValueExpr::CounterCount {
+                        subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                        kind,
+                    }),
+                    op: CompareOp::Ge,
+                    rhs: Box::new(ValueExpr::Const(1)),
+                });
+            }
+        }
+        ts.restore(hcp);
+    }
+    // `this ability has been activated <N> or more times this turn` (`Nalathni Dragon`, `Initiates of the Ebon Hand`)
+    {
+        let acp = ts.checkpoint();
+        if ts.eat_phrase(&["this", "ability", "has", "been", "activated"])
+            && let Some(n) = ts.next_number(false)
+            && ts.eat_phrase(&["or", "more", "times", "this", "turn"])
+        {
+            return Ok(ConditionExpr::EventCheck(
+                EventCheckKind::ResolutionCountThisTurn(u8::try_from(n).unwrap_or(1)),
+            ));
+        }
+        ts.restore(acp);
+    }
+    // `~ / it didn't attack [or come under your control] this turn` (`Mad Dog`, `Erg Raiders`)
+    {
+        let mcp = ts.checkpoint();
+        if (ts.eat_tilde() || ts.eat_word("it")) && ts.eat_phrase(&["didn't", "attack"]) {
+            let _ = ts.eat_phrase(&["or", "come", "under", "your", "control"]);
+            if ts.eat_phrase(&["this", "turn"]) {
+                return Ok(ConditionExpr::Not(Box::new(ConditionExpr::SubjectState {
+                    subject: Box::new(SubjectRef::SelfObject),
+                    state: crate::v2::ir::ObjectStateKind::AttackedOrBlockedThisTurn,
+                })));
+            }
+        }
+        ts.restore(mcp);
+    }
+    // `a/an <flt> is on the battlefield` (`Pious Kitsune`, etc.)
+    {
+        let bf_cp = ts.checkpoint();
+        if (ts.eat_word("a") || ts.eat_word("an"))
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["is", "on", "the", "battlefield"])
+        {
+            return Ok(ConditionExpr::Controls {
+                player: PlayerRef::EachPlayer,
+                filter: Box::new(flt),
+                min_count: 1,
+            });
+        }
+        ts.restore(bf_cp);
+    }
     // `~ isn't on the battlefield` (`Grist, the Hunger Tide`)
     {
         let bcp = ts.checkpoint();

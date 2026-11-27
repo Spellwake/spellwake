@@ -127,7 +127,7 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
                     }
                     ts.restore(best_cp);
                 }
-                let _ = ts.eat_word("all") || ts.eat_word("the");
+                let _ = ts.eat_word("all") || ts.eat_word("the") || ts.eat_word("those");
                 if let Ok(flt) = try_parse(ts, parse_object_filter) {
                     return Ok(ValueExpr::AggregateStat {
                         op: AggregateOp::Sum,
@@ -292,7 +292,7 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         return Ok(ValueExpr::ManaPaidThisWay);
     }
     if ts.eat_phrase(&["the", "total", "mana", "value", "of"]) {
-        let _ = ts.eat_word("all") || ts.eat_word("the");
+        let _ = ts.eat_word("all") || ts.eat_word("the") || ts.eat_word("those");
         let flt = parse_object_filter(ts)?;
         return Ok(ValueExpr::AggregateStat {
             op: AggregateOp::Sum,
@@ -580,7 +580,7 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         });
     }
     if ts.eat_phrase(&["the", "total", "mana", "value", "of"]) {
-        let _ = ts.eat_word("all") || ts.eat_word("the");
+        let _ = ts.eat_word("all") || ts.eat_word("the") || ts.eat_word("those");
         let flt = parse_object_filter(ts)?;
         return Ok(ValueExpr::AggregateStat {
             op: AggregateOp::Sum,
