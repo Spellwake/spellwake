@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "slug": "ai",
+  "label": "AI",
+  "category": "service-domain",
+  "readinessStage": "hold-for-rules-engine",
+  "description": "Offline AI runtime behavior, prompt/schema contracts, Postgres quota/budget/slot integrity, and frontend AI tier-quota checks. Full gameplay AI testing waits on the rules engine.",
+  "localOnly": false,
+  "unqualifiedReason": null,
+  "hostedCredentials": [
+    "SPELLWAKE_AI_PROVIDER",
+    "OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_BASE_URL"
+  ],
+  "notes": "Offline scripted AI runtime, compact prompt/schema, quota/budget/slot Postgres integrity, and frontend tier-quota tests; live LLM providers and Langfuse tracing require hosted credentials. Revealed-card bot memory is owned separately.",
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application ai_runtime offline tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--lib",
+          "ai_runtime"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "ai_runtime_integrity",
+      "ai_ready_integrity",
+      "ai_budget_integrity",
+      "ai_ante_port_contracts",
+      "manual_ai_slot"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "frontend ai-tier-quota contracts",
+        "args": [
+          "bun",
+          "test",
+          "src/data/ai-tier-quota.test.ts"
+        ],
+        "cwd": "apps/play",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/ai_runtime",
+    "apps/play/src/data/ai-tier-quota.test.ts"
+  ]
+}

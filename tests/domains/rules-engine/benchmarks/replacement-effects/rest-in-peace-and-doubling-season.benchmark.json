@@ -1,0 +1,303 @@
+{
+  "schema_version": 1,
+  "id": "replacement-effects/rest-in-peace-and-doubling-season",
+  "title": "Replacement Effects: Rest in Peace, Doubling Season, and Rule 616.1 Ordering",
+  "category": "replacement-effects",
+  "execution_status": "pending-engine",
+  "execution_receipt": null,
+  "review_status": "pending-independent-review",
+  "rules_edition": {
+    "edition": "MTG Comprehensive Rules (2026-09-25)",
+    "source_url": "https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt",
+    "cited_rules": [
+      {
+        "rule": "306.5b",
+        "summary": "A planeswalker enters with loyalty counters equal to its printed loyalty via a replacement effect."
+      },
+      {
+        "rule": "614.1c",
+        "summary": "Effects reading 'enters with ...' are replacement effects that modify how a permanent enters the battlefield."
+      },
+      {
+        "rule": "614.5",
+        "summary": "A replacement effect cannot apply more than once to the same event or its modified result."
+      },
+      {
+        "rule": "614.6",
+        "summary": "If an event is replaced, the original event never happens and abilities that trigger on the original event do not trigger."
+      },
+      {
+        "rule": "616.1",
+        "summary": "When multiple replacement effects apply to the same event, the affected player or controller of the affected object chooses which applies first."
+      },
+      {
+        "rule": "700.4",
+        "summary": "Dies means being put into a graveyard from the battlefield."
+      }
+    ]
+  },
+  "provenance": {
+    "source_summary": "Core replacement-effect stress benchmark covering suppressed death triggers, counter doubling vs loyalty costs, and affected-player ordering under Rule 616.1.",
+    "scope_notes": "Preemptive benchmark authored before full replacement-effect choice architecture completes."
+  },
+  "required_capabilities": [
+    "replacement.affected-player-ordering",
+    "replacement.counter-doubling-effect-vs-cost",
+    "replacement.zone-change-exile",
+    "triggers.dies-suppression"
+  ],
+  "cards": {
+    "rest_in_peace": {
+      "name": "Rest in Peace",
+      "oracle_id": "087f9ad7-e74f-40e2-8102-1ed2925d0418",
+      "mana_cost": "{1}{W}",
+      "type_line": "Enchantment",
+      "oracle_text": "When Rest in Peace enters, exile all graveyards.\nIf a card or token would be put into a graveyard from anywhere, exile it instead."
+    },
+    "blood_artist": {
+      "name": "Blood Artist",
+      "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d",
+      "mana_cost": "{1}{B}",
+      "type_line": "Creature — Vampire",
+      "oracle_text": "Whenever Blood Artist or another creature dies, target player loses 1 life and you gain 1 life.",
+      "power": "0",
+      "toughness": "1"
+    },
+    "grizzly_bears": {
+      "name": "Grizzly Bears",
+      "oracle_id": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "mana_cost": "{1}{G}",
+      "type_line": "Creature — Bear",
+      "oracle_text": "",
+      "power": "2",
+      "toughness": "2"
+    },
+    "shock": {
+      "name": "Shock",
+      "oracle_id": "a9d288b8-cdc1-4e55-a0c9-d6edfc95e65d",
+      "mana_cost": "{R}",
+      "type_line": "Instant",
+      "oracle_text": "Shock deals 2 damage to any target."
+    },
+    "doubling_season": {
+      "name": "Doubling Season",
+      "oracle_id": "01546b7d-a233-4176-8843-d732074dc5b6",
+      "mana_cost": "{4}{G}",
+      "type_line": "Enchantment",
+      "oracle_text": "If an effect would create one or more tokens under your control, it creates twice that many of those tokens instead.\nIf an effect would put one or more counters on a permanent you control, it puts twice that many of those counters on that permanent instead."
+    },
+    "jace_tms": {
+      "name": "Jace, the Mind Sculptor",
+      "oracle_id": "7f77a84e-5a4b-4834-aefa-3cecc175ae8e",
+      "mana_cost": "{2}{U}{U}",
+      "type_line": "Legendary Planeswalker — Jace",
+      "oracle_text": "+2: Look at the top card of target player's library. You may put that card on the bottom of that player's library.\n0: Draw three cards, then put two cards from your hand on top of your library in any order.\n-1: Return target creature to its owner's hand.\n-12: Exile all cards from target player's library, then that player shuffles their hand into their library."
+    },
+    "torbran": {
+      "name": "Torbran, Thane of Red Fell",
+      "oracle_id": "8c3495bf-02e7-4ad9-949d-92eb3d2b662a",
+      "mana_cost": "{1}{R}{R}{R}",
+      "type_line": "Legendary Creature — Dwarf Noble",
+      "oracle_text": "If a red source you control would deal damage to an opponent or a permanent an opponent controls, it deals that much damage plus 2 instead.",
+      "power": "2",
+      "toughness": "4"
+    },
+    "furnace_of_rath": {
+      "name": "Furnace of Rath",
+      "oracle_id": "68715465-6cf9-4006-87e9-31f227fe9ed3",
+      "mana_cost": "{1}{R}{R}{R}",
+      "type_line": "Enchantment",
+      "oracle_text": "If a source would deal damage to a permanent or player, it deals double that damage to that permanent or player instead."
+    }
+  },
+  "cases": [
+    {
+      "id": "rest-in-peace-suppresses-blood-artist-dies-trigger",
+      "name": "Rest in Peace replaces dying with exile and suppresses Blood Artist",
+      "summary": "Shock deals lethal damage to Grizzly Bears while Rest in Peace is on the battlefield; Grizzly Bears goes straight to exile and Blood Artist never triggers.",
+      "rules": ["614.6", "700.4"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20, "mana_pool": { "R": 1 } },
+          { "id": "p2", "life": 20 }
+        ],
+        "active_player": "p1",
+        "turn_number": 3,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          { "alias": "rip", "card": "rest_in_peace", "owner": "p2", "controller": "p2", "zone": "BATTLEFIELD" },
+          { "alias": "artist", "card": "blood_artist", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "bears", "card": "grizzly_bears", "owner": "p2", "controller": "p2", "zone": "BATTLEFIELD" },
+          { "alias": "shock", "card": "shock", "owner": "p1", "controller": "p1", "zone": "HAND" }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "shock",
+            "target": "bears",
+            "description": "P1 casts Shock targeting Grizzly Bears."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "p1",
+            "description": "Shock resolves and state-based actions destroy Grizzly Bears."
+          },
+          "checkpoint": {
+            "id": "bears-exiled-no-dies-trigger",
+            "assertions": [
+              { "kind": "object-zone", "target": "bears", "expected": "EXILE" },
+              { "kind": "trigger-not-fired", "source": "artist", "event": "dies" },
+              { "kind": "player-life", "player": "p1", "expected": 20 },
+              { "kind": "player-life", "player": "p2", "expected": 20 }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "replaced-death-never-triggers-dies",
+          "rules": ["614.6", "700.4"],
+          "description": "Because Rest in Peace replaces going to the graveyard with exile, the creature never dies and dies triggers never fire."
+        }
+      ]
+    },
+    {
+      "id": "doubling-season-doubles-planeswalker-etb-not-loyalty-cost",
+      "name": "Doubling Season doubles planeswalker ETB loyalty but not +2 activation cost",
+      "summary": "Jace enters with 6 loyalty counters (3 doubled to 6 via Rule 306.5b + 614.1c), then activating +2 adds only 2 counters to reach 8 because paying a loyalty cost is not an effect.",
+      "rules": ["306.5b", "614.1c", "614.5"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20, "mana_pool": { "U": 4 } },
+          { "id": "p2", "life": 20 }
+        ],
+        "active_player": "p1",
+        "turn_number": 5,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          { "alias": "season", "card": "doubling_season", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "jace", "card": "jace_tms", "owner": "p1", "controller": "p1", "zone": "HAND" }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "jace",
+            "description": "P1 casts Jace, the Mind Sculptor while controlling Doubling Season."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "p1",
+            "description": "Jace enters the battlefield with doubled starting loyalty."
+          },
+          "checkpoint": {
+            "id": "jace-enters-with-6-loyalty",
+            "assertions": [
+              { "kind": "object-zone", "target": "jace", "expected": "BATTLEFIELD" },
+              { "kind": "object-counters", "target": "jace", "counter": "loyalty", "expected": 6 }
+            ]
+          }
+        },
+        {
+          "step": 3,
+          "action": {
+            "kind": "activate-ability",
+            "actor": "p1",
+            "source": "jace",
+            "ability": "loyalty:+2",
+            "target": "p1",
+            "description": "P1 activates Jace's +2 loyalty ability by paying the +2 cost."
+          },
+          "checkpoint": {
+            "id": "loyalty-cost-not-doubled",
+            "assertions": [
+              { "kind": "object-counters", "target": "jace", "counter": "loyalty", "expected": 8 }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "effect-vs-cost-distinction",
+          "rules": ["306.5b", "614.1c"],
+          "description": "Doubling Season doubles counters placed by effects (including intrinsic ETB loyalty) but never doubles counters placed as a cost to activate a loyalty ability."
+        }
+      ]
+    },
+    {
+      "id": "torbran-and-furnace-affected-player-chooses-order",
+      "name": "Torbran + Furnace of Rath lets affected opponent minimize damage under Rule 616.1",
+      "summary": "P1 casts Shock targeting P2 with Torbran and Furnace of Rath out; P2 (the affected player) chooses Furnace first (2*2=4) then Torbran (+2=6) instead of Torbran first ((2+2)*2=8).",
+      "rules": ["614.5", "616.1"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20, "mana_pool": { "R": 1 } },
+          { "id": "p2", "life": 20 }
+        ],
+        "active_player": "p1",
+        "turn_number": 5,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          { "alias": "torbran", "card": "torbran", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "furnace", "card": "furnace_of_rath", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "shock", "card": "shock", "owner": "p1", "controller": "p1", "zone": "HAND" }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "shock",
+            "target": "p2",
+            "description": "P1 casts Shock targeting P2."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "choose-replacement-order",
+            "actor": "p2",
+            "description": "Affected player P2 orders Furnace of Rath before Torbran to take 6 damage instead of 8."
+          }
+        },
+        {
+          "step": 3,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "p1",
+            "description": "Shock deals 6 damage to P2."
+          },
+          "checkpoint": {
+            "id": "p2-takes-6-damage",
+            "assertions": [
+              { "kind": "choice-accepted", "actor": "p2" },
+              { "kind": "player-life", "player": "p2", "expected": 14 }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "affected-player-controls-replacement-order",
+          "rules": ["616.1"],
+          "description": "The player being dealt damage (not the controller of the damage source or replacement effects) chooses the order of competing damage replacement effects."
+        }
+      ]
+    }
+  ]
+}

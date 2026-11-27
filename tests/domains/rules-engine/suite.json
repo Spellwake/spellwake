@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "slug": "rules-engine",
+  "label": "Rules Engine",
+  "category": "core-engine",
+  "readinessStage": "hold-for-rules-engine",
+  "description": "Regression tests for already-built MTG rules mechanics plus preemptive complex interaction benchmarks awaiting full engine capabilities.",
+  "localOnly": true,
+  "unqualifiedReason": null,
+  "hostedCredentials": [],
+  "notes": "Deterministic offline Rust rules engine tests (crates/engine) plus reference projection comparison guards. Complex multi-card interaction benchmarks live under tests/domains/rules-engine/benchmarks/ and track engine capability readiness honestly.",
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "rules engine library unit tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "spellwake-engine",
+          "--lib"
+        ],
+        "cwd": ".",
+        "envExtra": {
+          "CARGO_TARGET_DIR": "{ROOT}/target",
+          "RUST_MIN_STACK": "67108864"
+        }
+      },
+      {
+        "kind": "cargo",
+        "label": "rules engine layer and ability integration tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "spellwake-engine",
+          "--test",
+          "characteristics_layers",
+          "--test",
+          "ability_removal",
+          "--test",
+          "land_subtypes"
+        ],
+        "cwd": ".",
+        "envExtra": {
+          "CARGO_TARGET_DIR": "{ROOT}/target",
+          "RUST_MIN_STACK": "67108864"
+        }
+      }
+    ],
+    "postgresDbFilters": [],
+    "frontend": [],
+    "python": [
+      {
+        "kind": "python",
+        "label": "reference evidence and interaction comparison guards",
+        "args": [
+          "{PYTHON}",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tests/reference",
+          "-p",
+          "test_*.py"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ]
+  },
+  "benchmarks": [
+    "tests/domains/rules-engine/benchmarks"
+  ],
+  "relatedPaths": [
+    "crates/engine/src",
+    "crates/engine/tests",
+    "crates/card_programs/tests",
+    "tests/domains/rules-engine/benchmarks",
+    "tests/reference",
+    "tests/scenarios"
+  ]
+}

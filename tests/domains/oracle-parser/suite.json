@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "slug": "oracle-parser",
+  "label": "Oracle Parser",
+  "category": "core-engine",
+  "readinessStage": "automated-daily-polling",
+  "description": "Stage 1 Oracle text compiler, real-card semantic AST verification, and automated daily Scryfall full-corpus polling audit.",
+  "localOnly": true,
+  "unqualifiedReason": null,
+  "hostedCredentials": [],
+  "notes": "Deterministic offline Stage 1 Oracle compiler verified against 103 real Scryfall cards across 15 layouts plus synthetic auditor self-tests.",
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "oracle compiler real-card semantic suite",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "spellwake-oracle-compiler",
+          "--test",
+          "real_card_semantic_suite"
+        ],
+        "cwd": ".",
+        "envExtra": {
+          "CARGO_TARGET_DIR": "{ROOT}/target",
+          "RUST_MIN_STACK": "67108864"
+        }
+      },
+      {
+        "kind": "cargo",
+        "label": "oracle compiler unit regression tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "spellwake-oracle-compiler",
+          "--lib"
+        ],
+        "cwd": ".",
+        "envExtra": {
+          "CARGO_TARGET_DIR": "{ROOT}/target",
+          "RUST_MIN_STACK": "67108864"
+        }
+      }
+    ],
+    "postgresDbFilters": [],
+    "frontend": [],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "crates/oracle_compiler/src",
+    "crates/oracle_compiler/tests/real_card_semantic_suite.rs",
+    "crates/oracle_compiler/tests/fixtures/real_cards_corpus_sample.json"
+  ]
+}

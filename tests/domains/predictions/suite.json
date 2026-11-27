@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "slug": "predictions",
+  "label": "Predictions",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Price source ingestion, prediction market/order/settlement Postgres integrity, frontend prediction rules, and browser E2E flows.",
+  "localOnly": false,
+  "unqualifiedReason": null,
+  "hostedCredentials": [
+    "SPELLWAKE_SUPABASE_URL",
+    "SPELLWAKE_SUPABASE_SECRET_KEY",
+    "SPELLWAKE_PRICE_BUCKET"
+  ],
+  "notes": "Price source ingestion, prediction market/order/settlement Postgres integrity, frontend prediction rules, and standalone Playwright browser E2E checks; live daily Scryfall price capture and Storage retention require hosted credentials.",
+  "subdomains": [
+    {
+      "slug": "price-ingestion",
+      "label": "Price Source Ingestion",
+      "description": "Daily Scryfall price capture, sampling policies, and publication records.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/price_source",
+        "services/application/src/price_collector",
+        "services/application/tests/database/pricing.rs"
+      ]
+    },
+    {
+      "slug": "markets-and-orders",
+      "label": "Markets, Orders & Positions",
+      "description": "Prediction market books, order commands, matched positions, and frontend prediction rules.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/prediction_commands.rs",
+        "services/application/tests/database/prediction_reads.rs",
+        "apps/play/src/data/prediction-api.test.ts",
+        "apps/play/src/data/prediction-rules.test.ts",
+        "apps/play/scripts/qualify-predictions.ts"
+      ]
+    },
+    {
+      "slug": "resolution-and-settlement",
+      "label": "Resolution & Settlement",
+      "description": "Market outcome resolution, payout settlement, and read-only resolved market views.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/prediction_resolution.rs",
+        "services/application/tests/database/prediction_publication.rs",
+        "apps/play/scripts/qualify-predictions.ts"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application price_source tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--test",
+          "price_source"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "cargo",
+        "label": "application prediction unit tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--lib",
+          "prediction"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "predictions",
+      "prediction_commands",
+      "prediction_reads",
+      "prediction_publication",
+      "prediction_resolution",
+      "pricing"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "frontend prediction contracts",
+        "args": [
+          "bun",
+          "test",
+          "src/data/prediction-api.test.ts",
+          "src/data/prediction-publication-api.test.ts",
+          "src/data/prediction-reads-api.test.ts",
+          "src/data/prediction-rules.test.ts"
+        ],
+        "cwd": "apps/play",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright predictions explore, positions, resolved view, and responsive suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-predictions.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/price_source",
+    "services/application/src/price_collector",
+    "services/application/tests/fixtures/prediction-publication.json",
+    "services/application/tests/fixtures/prediction-reads.json",
+    "apps/play/src/data/prediction-rules.test.ts",
+    "apps/play/scripts/qualify-predictions.ts"
+  ]
+}

@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import badge_svg  # noqa: E402
 import catalog_refresh  # noqa: E402
 import health_checks  # noqa: E402
+import rules_benchmarks  # noqa: E402
 
 
 def _make_card(
@@ -154,17 +155,37 @@ class CatalogRefreshTests(unittest.TestCase):
 
 
 class HealthChecksTests(unittest.TestCase):
-    def test_pet_cosmetics_remains_visibly_unknown_without_real_checks(self) -> None:
-        pet_spec = next(d for d in health_checks.DOMAINS if d.slug == "pet-cosmetics")
-        result = health_checks.evaluate_domain(
-            pet_spec, run_db=True, run_frontend=True, db_available=True
+    def test_cosmetics_pets_subdomain_keeps_domain_honestly_partial_until_wired(self) -> None:
+        cosmetics_spec = next(d for d in health_checks.DOMAINS if d.slug == "cosmetics")
+        sub_slugs = [s.slug for s in cosmetics_spec.subdomains]
+        self.assertEqual(sub_slugs, ["card-backs", "sleeves", "dice", "playmats", "pets"])
+        pets_sub = next(s for s in cosmetics_spec.subdomains if s.slug == "pets")
+        self.assertTrue(pets_sub.unqualified_reason)
+
+        synth = health_checks.DomainSpec(
+            slug="cosmetics-synth",
+            label="Cosmetics",
+            rust_checks=(
+                health_checks.CommandSpec(
+                    kind="cargo",
+                    label="synthetic cosmetics pass",
+                    args=(sys.executable, "-c", "print('test result: ok. 5 passed; 0 failed; 0 ignored;')"),
+                ),
+            ),
+            db_filters=(),
+            frontend_checks=(),
+            hosted_credentials=(),
+            subdomains=cosmetics_spec.subdomains,
         )
-        self.assertEqual(result["localStatus"], "unknown")
-        self.assertEqual(result["localBadge"]["color"], "lightgrey")
-        self.assertIn("unknown", result["localBadge"]["message"])
-        self.assertEqual(result["liveStatus"], "unknown")
-        self.assertEqual(result["passedTests"], 0)
-        self.assertTrue(result["unqualifiedReason"])
+        result = health_checks.evaluate_domain(
+            synth, run_db=True, run_frontend=True, db_available=True
+        )
+        self.assertEqual(result["localStatus"], "local-partial")
+        self.assertEqual(result["localBadge"]["color"], "yellow")
+        self.assertEqual(result["passedTests"], 5)
+        self.assertEqual([u["slug"] for u in result["unqualifiedSubdomains"]], ["pets"])
+        pets_report = next(s for s in result["subdomains"] if s["slug"] == "pets")
+        self.assertEqual(pets_report["status"], "unknown")
 
     def test_zero_test_command_never_produces_green_badge(self) -> None:
         spec = health_checks.DomainSpec(
@@ -310,6 +331,102 @@ class HealthChecksTests(unittest.TestCase):
         self.assertIn("AI &amp; Pets", svg)
         self.assertIn("unknown &lt;unqualified&gt;", svg)
         self.assertIn("#57606a", svg)
+
+    def test_registry_loads_all_registered_domains_and_validates_cleanly(self) -> None:
+        errors = rules_benchmarks.validate_registry()
+        self.assertEqual(errors, [])
+        slugs = [d.slug for d in health_checks.DOMAINS]
+        self.assertEqual(
+            slugs,
+            [
+                "patreon",
+                "stripe",
+                "matchmaking",
+                "predictions",
+                "market",
+                "cosmetics",
+                "account-auth",
+                "decks-collection",
+                "custom-cards",
+                "social",
+                "league-progression",
+                "rendering",
+                "oracle-parser",
+                "rules-engine",
+                "ai",
+            ],
+        )
+        rendering_spec = next(d for d in health_checks.DOMAINS if d.slug == "rendering")
+        self.assertEqual(
+            [s.slug for s in rendering_spec.subdomains],
+            ["3d-tabletop", "ui-responsive", "component-gallery"],
+        )
+        patreon_spec = next(d for d in health_checks.DOMAINS if d.slug == "patreon")
+        self.assertIn("patreon_current_work", patreon_spec.db_filters)
+
+    def test_parse_python_unittest_counts(self) -> None:
+        ok_out = "......\n----------------------------------------------------------------------\nRan 12 tests in 0.042s\n\nOK\n"
+        self.assertEqual(health_checks.parse_test_counts("python", ok_out), (12, 0, 0))
+        fail_out = "Ran 10 tests in 0.100s\n\nFAILED (failures=2, errors=1, skipped=1)\n"
+        self.assertEqual(health_checks.parse_test_counts("python", fail_out), (6, 3, 1))
+
+    def test_rules_benchmarks_validate_urzas_saga_blood_moon_honestly_as_pending(self) -> None:
+        report = rules_benchmarks.evaluate_benchmarks()
+        self.assertTrue(report["validationPassed"], report["validationErrors"])
+        self.assertEqual(report["status"], "pending-engine")
+        self.assertEqual(report["badge"]["color"], "lightgrey")
+        self.assertFalse(report["badge"]["isError"])
+        self.assertIn("0/15 pass", report["badge"]["message"])
+        self.assertIn("15 pending", report["badge"]["message"])
+        ids = [b["id"] for b in report["benchmarks"]]
+        self.assertIn("layers-and-sagas/urzas-saga-blood-moon", ids)
+        self.assertIn("layers-and-sagas/humility-opalescence-timestamps", ids)
+        self.assertIn("replacement-effects/rest-in-peace-and-doubling-season", ids)
+        self.assertIn("copy-effects/clone-and-copyable-values", ids)
+        self.assertIn("combat-and-sba/deathtouch-trample-lifelink-and-sba", ids)
+        self.assertIn("stack-and-priority/split-second-and-apnap-triggers", ids)
+        with tempfile.TemporaryDirectory() as tmp:
+            badges_dir = Path(tmp)
+            ep = rules_benchmarks.write_benchmark_badge(report, badges_dir)
+            self.assertEqual(ep["color"], "lightgrey")
+            self.assertTrue((badges_dir / "rules-engine-benchmarks.svg").is_file())
+            self.assertTrue((badges_dir / "rules-engine-benchmarks.json").is_file())
+
+    def test_rules_benchmarks_reject_passing_without_execution_receipt(self) -> None:
+        spec_path = (
+            ROOT
+            / "tests"
+            / "domains"
+            / "rules-engine"
+            / "benchmarks"
+            / "layers-and-sagas"
+            / "urzas-saga-blood-moon.benchmark.json"
+        )
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        spec["execution_status"] = "passing"
+        spec["execution_receipt"] = None
+        errors = rules_benchmarks.validate_benchmark_spec(spec, path=spec_path)
+        self.assertTrue(
+            any("execution_receipt" in e for e in errors),
+            f"Expected missing receipt error, got: {errors}",
+        )
+
+    def test_rules_benchmarks_reject_unknown_card_alias_and_nonsequential_steps(self) -> None:
+        spec_path = (
+            ROOT
+            / "tests"
+            / "domains"
+            / "rules-engine"
+            / "benchmarks"
+            / "layers-and-sagas"
+            / "urzas-saga-blood-moon.benchmark.json"
+        )
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        spec["cases"][0]["initial_state"]["objects"][0]["card"] = "nonexistent_card"
+        spec["cases"][0]["steps"][0]["step"] = 99
+        errors = rules_benchmarks.validate_benchmark_spec(spec, path=spec_path)
+        self.assertTrue(any("not in cards" in e for e in errors), errors)
+        self.assertTrue(any("must be sequential" in e for e in errors), errors)
 
 
 if __name__ == "__main__":
