@@ -361,7 +361,15 @@ fn lower_enters_tapped(
         (None, None) => {
             match perm.entry_tap {
                 None => perm.entry_tap = Some(EntryTap::Always),
-                Some(EntryTap::Always) => {}
+                Some(EntryTap::Always)
+                | Some(EntryTap::AlwaysChooseColor)
+                | Some(EntryTap::AlwaysChooseColorExcept(_)) => {}
+                Some(EntryTap::ChooseColor) => {
+                    perm.entry_tap = Some(EntryTap::AlwaysChooseColor);
+                }
+                Some(EntryTap::ChooseColorExcept(excluded)) => {
+                    perm.entry_tap = Some(EntryTap::AlwaysChooseColorExcept(excluded));
+                }
                 Some(_) => {
                     return Err(LoweringError::Unsupported(
                         "v2:replacement-entry-tap-conflict",
@@ -1007,13 +1015,28 @@ pub(super) fn set_entry_tap(program: &mut Program, tap: EntryTap) -> LowerResult
             "v2:replacement-entry-tap-nonpermanent",
         ));
     };
-    match perm.entry_tap {
-        None => {
+    match (perm.entry_tap, tap) {
+        (None, tap) => {
             perm.entry_tap = Some(tap);
             Ok(())
         }
-        Some(existing) if existing == tap => Ok(()),
-        Some(_) => Err(LoweringError::Unsupported(
+        (Some(existing), tap) if existing == tap => Ok(()),
+        (Some(EntryTap::Always), EntryTap::ChooseColor)
+        | (Some(EntryTap::ChooseColor), EntryTap::Always) => {
+            perm.entry_tap = Some(EntryTap::AlwaysChooseColor);
+            Ok(())
+        }
+        (Some(EntryTap::Always), EntryTap::ChooseColorExcept(excluded))
+        | (Some(EntryTap::ChooseColorExcept(excluded)), EntryTap::Always) => {
+            perm.entry_tap = Some(EntryTap::AlwaysChooseColorExcept(excluded));
+            Ok(())
+        }
+        (Some(EntryTap::AlwaysChooseColor), EntryTap::Always | EntryTap::ChooseColor) => Ok(()),
+        (Some(EntryTap::AlwaysChooseColorExcept(c)), EntryTap::Always) => {
+            let _ = c;
+            Ok(())
+        }
+        (Some(_), _) => Err(LoweringError::Unsupported(
             "v2:replacement-entry-tap-conflict",
         )),
     }

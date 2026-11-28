@@ -332,7 +332,8 @@ impl Projection<'_, '_> {
                     },
                 )
             }
-            spellwake_engine::land::EntryTap::ChooseColor => {
+            spellwake_engine::land::EntryTap::ChooseColor
+            | spellwake_engine::land::EntryTap::AlwaysChooseColor => {
                 let options = spellwake_engine::mana::ManaType::ALL
                     .into_iter()
                     .filter(|color| *color != spellwake_engine::mana::ManaType::Colourless)

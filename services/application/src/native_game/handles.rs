@@ -314,13 +314,19 @@ impl NativeScope<'_> {
                     || matches!(self.frame()?, RuleFrame::EntryChoice(frame) if match frame.rule() {
                         spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded)
                         | spellwake_engine::land::EntryTap::ChooseColorExcept(excluded) => color != excluded && color != ManaType::Colourless,
-                        spellwake_engine::land::EntryTap::ChooseColor => color != ManaType::Colourless,
+                        spellwake_engine::land::EntryTap::ChooseColor
+                        | spellwake_engine::land::EntryTap::AlwaysChooseColor => {
+                            color != ManaType::Colourless
+                        }
                         _ => false,
                     })
                     || matches!(self.frame()?, RuleFrame::TokenEntryChoice(frame) if match frame.rule() {
                         spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(excluded)
                         | spellwake_engine::land::EntryTap::ChooseColorExcept(excluded) => color != excluded && color != ManaType::Colourless,
-                        spellwake_engine::land::EntryTap::ChooseColor => color != ManaType::Colourless,
+                        spellwake_engine::land::EntryTap::ChooseColor
+                        | spellwake_engine::land::EntryTap::AlwaysChooseColor => {
+                            color != ManaType::Colourless
+                        }
                         _ => false,
                     })
             }

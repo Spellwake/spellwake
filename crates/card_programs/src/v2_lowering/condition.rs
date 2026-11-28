@@ -1065,6 +1065,39 @@ fn lower_controls_condition(
     min_count: u16,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<ResolutionCondition> {
+    if min_count == 1
+        && let Some(pos) = filter
+            .predicates
+            .iter()
+            .position(|p| matches!(p, v2::FilterPredicate::GreatestStat { .. }))
+    {
+        let mut cleaned = filter.clone();
+        cleaned.zones.clear();
+        let v2::FilterPredicate::GreatestStat { stat, scope } = cleaned.predicates.remove(pos)
+        else {
+            unreachable!()
+        };
+        let scope_default = scope.as_ref() == &v2::ObjectFilter::default();
+        let scope_matches_cleaned = {
+            let mut scope_no_zones = scope.as_ref().clone();
+            scope_no_zones.zones.clear();
+            scope_no_zones == cleaned
+        };
+        if scope_default || scope_matches_cleaned {
+            let obj_filter = lower_object_filter(&cleaned, ctx)?;
+            let rp = match player {
+                v2::PlayerRef::You => ResolvingPlayer::Controller,
+                other => lower_world_resolving_player(other, ctx)?,
+            };
+            return Ok(rc_ge_one(EngineValueExpr::PlayerStat(
+                PlayerStatExpr::ControlsGreatestStat {
+                    player: rp,
+                    filter: Box::new(obj_filter),
+                    stat: lower_stat_kind(stat),
+                },
+            )));
+        }
+    }
     let mut cleaned = filter.clone();
     cleaned.zones.clear();
     let obj_filter = lower_object_filter(&cleaned, ctx)?;

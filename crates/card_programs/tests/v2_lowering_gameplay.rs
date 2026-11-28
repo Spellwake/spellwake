@@ -2458,3 +2458,410 @@ fn wave6_untap_lock_duration_and_colossus_library_replacement_and_cant_attack_un
         "Desperate Castaways must gain CannotAttack once Alice no longer controls an artifact"
     );
 }
+
+#[test]
+fn wave7_always_choose_color_exile_with_counters_and_greatest_stat() {
+    let vocab = test_vocab();
+    let coldsteel = compile_card(
+        &vocab,
+        "Coldsteel Heart",
+        "Snow Artifact",
+        Some("{2}"),
+        None,
+        "This artifact enters tapped.\nAs this artifact enters, choose a color.\n{T}: Add one mana of the chosen color.",
+    );
+    let exile_time = compile_card(
+        &vocab,
+        "Chrono Banish",
+        "Sorcery",
+        Some("{1}{U}"),
+        None,
+        "Exile target creature with three time counters on it.",
+    );
+    let greatest_check = compile_card(
+        &vocab,
+        "Artificer's Insight",
+        "Sorcery",
+        Some("{U}"),
+        None,
+        "If you control the artifact with the greatest mana value or tied for the greatest mana value, draw a card.",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Target Bear",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: coldsteel,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: exile_time,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: greatest_check,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: bear,
+            },
+        ],
+        &[(ALICE, ManaType::Blue, 2), (ALICE, ManaType::Colourless, 3)],
+    );
+
+    // 1. Cast Coldsteel Heart -> EntryChoice::Color(Green) -> enters battlefield tapped.
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Colourless, 2)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let pending = game
+        .pending_decision()
+        .expect("expected Coldsteel Heart color entry choice");
+    assert!(matches!(pending.frame(), RuleFrame::EntryChoice(_)));
+    game = reply(
+        &game,
+        DecisionReply::EntryChoice(spellwake_engine::land::EntryChoice::Color(ManaType::Green)),
+    );
+    assert_eq!(object(&game, 1).zone(), ObjectZone::Battlefield);
+    assert_eq!(
+        object(&game, 1).tapped(),
+        Some(true),
+        "Coldsteel Heart (AlwaysChooseColor) must enter tapped"
+    );
+
+    // 2. Exile Bob's Bear with 3 time counters -> Bear is in Exile with 3 time counters.
+    let bear_id = object(&game, 4).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 2).id(),
+            target: Some(TargetRef::Object(bear_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 4).zone(),
+        ObjectZone::Exile,
+        "Chrono Banish must exile target creature"
+    );
+    let exiled_bear_id = object(&game, 4).id();
+    assert_eq!(
+        game.execution()
+            .counters_of_kind(exiled_bear_id, spellwake_engine::effects::CounterKind::Time),
+        3.into(),
+        "exiled creature must receive 3 time counters"
+    );
+
+    // 3. Alice controls Coldsteel Heart (MV 2, greatest among artifacts) -> Artificer's Insight draws 1.
+    let hand_before = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Hand(ALICE))
+        .count();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 3).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let hand_after = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Hand(ALICE))
+        .count();
+    assert_eq!(
+        hand_after, hand_before,
+        "casting Artificer's Insight (-1) and drawing (+1) should keep hand size equal"
+    );
+}
+
+#[test]
+fn wave7_search_any_number_optional_if_previous_and_prevent_damage_compound() {
+    let vocab = test_vocab();
+    let land_surge = compile_card(
+        &vocab,
+        "Land Surge",
+        "Sorcery",
+        Some("{1}{G}"),
+        None,
+        "Search your library for any number of basic land cards, reveal those cards, put them into your hand, then shuffle.",
+    );
+    let forest = compile_card(
+        &vocab,
+        "Forest",
+        "Basic Land \u{2014} Forest",
+        None,
+        None,
+        "",
+    );
+    let optional_draw = compile_card(
+        &vocab,
+        "Dark Bargain Test",
+        "Sorcery",
+        Some("{B}"),
+        None,
+        "You may pay 2 life. If you do, draw a card.",
+    );
+    let safe_passage = compile_card(
+        &vocab,
+        "Safe Passage Test",
+        "Instant",
+        Some("{1}{W}"),
+        None,
+        "Prevent all damage that would be dealt to you and creatures you control this turn.",
+    );
+    let bolt = compile_card(
+        &vocab,
+        "Lightning Bolt",
+        "Instant",
+        Some("{R}"),
+        None,
+        "Lightning Bolt deals 3 damage to any target.",
+    );
+
+    let mut game = start_game_with_padding(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: land_surge,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryTop,
+                program: forest.clone(),
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryTop,
+                program: forest,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: optional_draw.clone(),
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: optional_draw,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: safe_passage,
+            },
+            SeedCard {
+                card: CardId(7),
+                owner: BOB,
+                destination: ObjectDestination::Hand,
+                program: bolt,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Green, 1),
+            (ALICE, ManaType::Black, 2),
+            (ALICE, ManaType::White, 1),
+            (ALICE, ManaType::Colourless, 2),
+            (BOB, ManaType::Red, 1),
+        ],
+        1,
+    );
+
+    // 1. Land Surge searches any number of basic lands (picks both Forests).
+    let f1 = object(&game, 2).id();
+    let f2 = object(&game, 3).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Green, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let pending = game
+        .pending_decision()
+        .expect("expected any-number library search");
+    assert!(matches!(pending.frame(), RuleFrame::LibraryTop(_)));
+    game = reply(
+        &game,
+        DecisionReply::LibraryTop(LibraryTopReply::SearchWithEntryColors {
+            selected: vec![f1, f2],
+            colors: vec![],
+        }),
+    );
+    assert_eq!(object(&game, 2).zone(), ObjectZone::Hand(ALICE));
+    assert_eq!(object(&game, 3).zone(), ObjectZone::Hand(ALICE));
+
+    // 2. Dark Bargain Test #1: accept optional pay 2 life -> life 20 -> 18, draws 1 card!
+    let hand_before_accept = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Hand(ALICE))
+        .count();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert!(matches!(
+        game.pending_decision().unwrap().frame(),
+        RuleFrame::OptionalEffect(_)
+    ));
+    game = reply(
+        &game,
+        DecisionReply::OptionalEffect(OptionalEffectChoice::Take),
+    );
+    assert_eq!(life(&game, ALICE), 18.into());
+    let hand_after_accept = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Hand(ALICE))
+        .count();
+    assert_eq!(
+        hand_after_accept, hand_before_accept,
+        "accepting optional pay 2 life must trigger IfPrevious draw (+1 after -1 cast)"
+    );
+
+    // 3. Dark Bargain Test #2: decline optional -> life stays 18, draws 0 cards!
+    let hand_before_decline = hand_after_accept;
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 5).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    game = reply(
+        &game,
+        DecisionReply::OptionalEffect(OptionalEffectChoice::Decline),
+    );
+    assert_eq!(life(&game, ALICE), 18.into());
+    let hand_after_decline = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Hand(ALICE))
+        .count();
+    assert_eq!(
+        hand_after_decline,
+        hand_before_decline - 1,
+        "declining optional must NOT draw a card"
+    );
+
+    // 4. Cast Safe Passage Test (Compound target: you and creatures you control),
+    //    then Bob casts Lightning Bolt at Alice -> damage prevented, life stays 18!
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 6).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::White, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    game = pass(&game);
+    game = advance(
+        &game,
+        BOB,
+        GameCommand::CastWithResources {
+            spell: object(&game, 7).id(),
+            target: Some(TargetRef::Player(ALICE)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        life(&game, ALICE),
+        18.into(),
+        "Safe Passage compound prevention shield must prevent Lightning Bolt to Alice"
+    );
+}

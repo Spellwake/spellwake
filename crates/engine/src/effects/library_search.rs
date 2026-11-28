@@ -371,7 +371,10 @@ impl EffectWindow {
                                 .collect(),
                         );
                     }
-                    Some(crate::land::EntryTap::ChooseColor) => {
+                    Some(
+                        crate::land::EntryTap::ChooseColor
+                        | crate::land::EntryTap::AlwaysChooseColor,
+                    ) => {
                         entry_colors.insert(
                             id,
                             crate::mana::ManaType::ALL
@@ -1208,7 +1211,8 @@ impl EffectWindow {
                 continue;
             };
             let chosen = match rule {
-                crate::land::EntryTap::AlwaysChooseColorExcept(_)
+                crate::land::EntryTap::AlwaysChooseColor
+                | crate::land::EntryTap::AlwaysChooseColorExcept(_)
                 | crate::land::EntryTap::ChooseColor
                 | crate::land::EntryTap::ChooseColorExcept(_) => {
                     work.colors.iter().any(|(id, _)| *id == object)
@@ -1655,9 +1659,9 @@ impl EffectWindow {
                     crate::land::EntryTap::AlwaysChooseColorExcept(excluded)
                     | crate::land::EntryTap::ChooseColorExcept(excluded),
                 ) => color != crate::mana::ManaType::Colourless && color != excluded,
-                Some(crate::land::EntryTap::ChooseColor) => {
-                    color != crate::mana::ManaType::Colourless
-                }
+                Some(
+                    crate::land::EntryTap::ChooseColor | crate::land::EntryTap::AlwaysChooseColor,
+                ) => color != crate::mana::ManaType::Colourless,
                 _ => false,
             };
             if !color_ok {

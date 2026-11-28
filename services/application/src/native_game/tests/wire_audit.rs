@@ -134,7 +134,8 @@ fn can_seed_directly_on_battlefield(prog: &Program) -> bool {
         && !matches!(
             def.entry_tap,
             Some(
-                EntryTap::AlwaysChooseColorExcept(_)
+                EntryTap::AlwaysChooseColor
+                    | EntryTap::AlwaysChooseColorExcept(_)
                     | EntryTap::ChooseColor
                     | EntryTap::ChooseColorExcept(_)
                     | EntryTap::ChooseCreatureType
@@ -172,6 +173,7 @@ fn entry_tap_wire_supported(tap: EntryTap) -> bool {
         | EntryTap::UnlessPlayerLifeThirteenOrLess => true,
         // Interactive entry choices wired in decisions.rs + translate.rs
         EntryTap::ReadAhead { .. }
+        | EntryTap::AlwaysChooseColor
         | EntryTap::AlwaysChooseColorExcept(_)
         | EntryTap::ChooseColor
         | EntryTap::ChooseColorExcept(_)

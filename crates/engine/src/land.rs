@@ -63,6 +63,8 @@ pub enum EntryTap {
         final_chapter: u8,
     },
     Always,
+    /// Enter tapped after choosing any WUBRG color (e.g. Coldsteel Heart, Baldur's Gate Gates).
+    AlwaysChooseColor,
     /// Enter tapped after choosing a color other than the excluded color.
     AlwaysChooseColorExcept(ManaType),
     /// Choose any WUBRG color as this permanent enters, without changing its tapped status.

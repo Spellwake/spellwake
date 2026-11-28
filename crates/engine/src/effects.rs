@@ -6517,7 +6517,8 @@ impl EffectWindow {
                         .and_then(Program::permanent)
                         .and_then(|permanent| permanent.entry_tap),
                     Some(
-                        crate::land::EntryTap::AlwaysChooseColorExcept(_)
+                        crate::land::EntryTap::AlwaysChooseColor
+                            | crate::land::EntryTap::AlwaysChooseColorExcept(_)
                             | crate::land::EntryTap::ChooseColor
                             | crate::land::EntryTap::ChooseColorExcept(_)
                     )
@@ -6764,6 +6765,7 @@ impl EffectWindow {
                     .collect()
             }
             EntryTap::ReadAhead { .. }
+            | EntryTap::AlwaysChooseColor
             | EntryTap::AlwaysChooseColorExcept(_)
             | EntryTap::ChooseColor
             | EntryTap::ChooseColorExcept(_)
@@ -6812,9 +6814,10 @@ impl EffectWindow {
                 | crate::land::EntryTap::ChooseColorExcept(excluded),
                 crate::land::EntryChoice::Color(color),
             ) => color != excluded && color != ManaType::Colourless,
-            (crate::land::EntryTap::ChooseColor, crate::land::EntryChoice::Color(color)) => {
-                color != ManaType::Colourless
-            }
+            (
+                crate::land::EntryTap::ChooseColor | crate::land::EntryTap::AlwaysChooseColor,
+                crate::land::EntryChoice::Color(color),
+            ) => color != ManaType::Colourless,
             (
                 crate::land::EntryTap::ReadAhead { final_chapter },
                 crate::land::EntryChoice::Chapter(n),

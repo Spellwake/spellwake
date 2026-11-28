@@ -14,15 +14,16 @@ use spellwake_engine::{
     mana::ManaCost,
     program::{
         BodyTarget, CardType, DelayedReturnTiming, ExecutableBody, Instruction, LibrarySearch,
-        MoveSubjectRef, ObjectFilter as EngineObjectFilter, ResolvingPlayer,
+        MoveSubjectRef, ObjectFilter as EngineObjectFilter, PlayerStatExpr, ResolvingPlayer,
         SearchBattlefieldPostEntry, SearchCardMatcher, SearchCount, SearchDestination,
         SearchExileLink, SearchSource, TargetZone, ValueExpr as EngineValueExpr,
     },
     toolbox::{
-        BindingId, ChoiceCategory, CounterDestination, DrawCardsSpec, GraveyardSemantics,
-        LibraryOrderPos, ObjectQuery, PlayerSelector, PromptChoiceSpec, PromptDomain, QuerySlice,
-        QueryZone, SelectionConstraint, StackOpKind, StackOpSpec, StackTargetSelector, TagKey,
-        ZoneDest as EngineZoneDest, ZoneOpSpec, ZoneSelection,
+        BindingId, ChoiceCategory, CounterDestination, CounterOp, DrawCardsSpec,
+        GraveyardSemantics, LibraryOrderPos, MutateObjectSpec, ObjectMutation, ObjectQuery,
+        PlayerSelector, PromptChoiceSpec, PromptDomain, QuerySlice, QueryZone, SelectionConstraint,
+        StackOpKind, StackOpSpec, StackTargetSelector, TagKey, ZoneDest as EngineZoneDest,
+        ZoneOpSpec, ZoneSelection,
     },
 };
 use spellwake_oracle_compiler::{ast, v2::ir as v2};
@@ -315,9 +316,14 @@ fn lower_exile(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
-    if counters.is_some() {
-        return Err(LoweringError::Unsupported("v2:exile-with-counters"));
-    }
+    let lowered_counters = if let Some((ck, val_expr)) = counters {
+        effect::register_value_expr_player_targets(val_expr, acc, ctx)?;
+        let kind = atoms::lower_counter_kind(ck)?;
+        let amount = value::lower_value_expr(val_expr, ctx)?;
+        Some((kind, amount))
+    } else {
+        None
+    };
     if modifiers.tapped
         || modifiers.attacking
         || modifiers.transformed
@@ -340,7 +346,17 @@ fn lower_exile(
         delayed_return: None,
         link_group: None,
     };
-    emit_zone_op_with_prior(built, destination, None, acc, ctx)
+    emit_zone_op_with_prior(built, destination, None, acc, ctx)?;
+    if let Some((kind, amount)) = lowered_counters {
+        let moved_slot = ctx
+            .last_moved_binding
+            .ok_or(LoweringError::Unsupported("v2:exile-with-counters"))?;
+        acc.push(Instruction::MutateObject(Box::new(MutateObjectSpec::all(
+            ObjectQuery::Bound(moved_slot),
+            ObjectMutation::Counters(CounterOp::Add { kind, amount }),
+        ))));
+    }
+    Ok(())
 }
 
 /// Lower `Effect::ZoneOp` (`Exile`) wrapped in `Duration::UntilSourceLeaves` (e.g. Banishing Light).
@@ -909,10 +925,17 @@ fn lower_search_library(
     let source = lower_search_source(from, acc)?;
     let (matcher, subj_count) = lower_search_matcher(subject, acc, ctx)?;
     let eff_count = count.or(subj_count);
-    let search_count = lower_search_count(eff_count, exact, acc, ctx)?;
     let destination = lower_search_destination(to, modifiers)?;
 
     if is_multi_player_ref(actor) {
+        let search_count = lower_search_count(
+            eff_count,
+            exact,
+            source,
+            ResolvingPlayer::LoopPlayer,
+            acc,
+            ctx,
+        )?;
         let group_sel = atoms::lower_player_ref(actor, acc, ctx)?;
         let search = LibrarySearch {
             searcher: ResolvingPlayer::LoopPlayer,
@@ -938,6 +961,7 @@ fn lower_search_library(
     }
 
     let searcher = atoms::lower_resolving_player(actor, acc, ctx)?;
+    let search_count = lower_search_count(eff_count, exact, source, searcher, acc, ctx)?;
     acc.push(Instruction::SearchLibrary {
         filter: Box::new(LibrarySearch {
             searcher,
@@ -989,8 +1013,15 @@ pub(crate) fn lower_split_search_library(
     let source = lower_search_source(from, acc)?;
     let (matcher, subj_count) = lower_search_matcher(subject, acc, ctx)?;
     let eff_count = count.or(subj_count);
-    let search_count = lower_search_count(eff_count, exact, acc, ctx)?;
     if is_multi_player_ref(actor) {
+        let search_count = lower_search_count(
+            eff_count,
+            exact,
+            source,
+            ResolvingPlayer::LoopPlayer,
+            acc,
+            ctx,
+        )?;
         let group_sel = atoms::lower_player_ref(actor, acc, ctx)?;
         let search = LibrarySearch {
             searcher: ResolvingPlayer::LoopPlayer,
@@ -1015,6 +1046,7 @@ pub(crate) fn lower_split_search_library(
         return Ok(());
     }
     let searcher = atoms::lower_resolving_player(actor, acc, ctx)?;
+    let search_count = lower_search_count(eff_count, exact, source, searcher, acc, ctx)?;
     acc.push(Instruction::SearchLibrary {
         filter: Box::new(LibrarySearch {
             searcher,
@@ -2637,6 +2669,8 @@ fn try_pure_land_subtypes_matcher(f: &v2::ObjectFilter) -> Option<SearchCardMatc
 fn lower_search_count(
     count: Option<&v2::CountSpec>,
     exact: bool,
+    source: SearchSource,
+    searcher: ResolvingPlayer,
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<SearchCount> {
@@ -2648,7 +2682,18 @@ fn lower_search_count(
         });
     };
     if cs.any_number {
-        return Err(LoweringError::Unsupported("v2:search-library-any-number"));
+        let lib_owner = match source {
+            SearchSource::OwnLibrary => searcher,
+            SearchSource::TargetOpponentLibrary | SearchSource::TargetPlayerLibrary => {
+                ResolvingPlayer::TargetPlayer
+            }
+            _ => {
+                return Err(LoweringError::Unsupported("v2:search-library-any-number"));
+            }
+        };
+        return Ok(SearchCount::UpToExpr(Box::new(
+            EngineValueExpr::PlayerStat(PlayerStatExpr::PlayerLibrarySize(lib_owner)),
+        )));
     }
     if exact && !cs.up_to {
         let Some(val) = value::lower_value_const(&cs.count) else {

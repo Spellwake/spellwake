@@ -3160,6 +3160,16 @@ fn lower_prevent_damage(
         }
     };
 
+    if let Some(v2::SubjectRef::Compound(parts)) = target
+        && amount.is_none()
+        && !parts.is_empty()
+    {
+        for part in parts {
+            lower_prevent_damage(amount, combat_only, source, Some(part), duration, acc, ctx)?;
+        }
+        return Ok(());
+    }
+
     let recipient = match target {
         None => StaticDamageRecipient::Any,
         Some(v2::SubjectRef::Player(v2::PlayerRef::You)) => StaticDamageRecipient::Controller,
@@ -3167,6 +3177,16 @@ fn lower_prevent_damage(
             StaticDamageRecipient::Opponents
         }
         Some(v2::SubjectRef::Player(v2::PlayerRef::EachPlayer)) => StaticDamageRecipient::Players,
+        Some(v2::SubjectRef::Player(v2::PlayerRef::TargetPlayer)) => {
+            acc.register_target(BodyTarget::SINGLE_PLAYER, v2::TargetCount::Exact(1))?;
+            ctx.last_player_target = Some(ResolvingPlayer::TargetPlayer);
+            StaticDamageRecipient::TargetAny
+        }
+        Some(v2::SubjectRef::Player(v2::PlayerRef::TargetOpponent)) => {
+            acc.register_target(BodyTarget::SINGLE_OPPONENT, v2::TargetCount::Exact(1))?;
+            ctx.last_player_target = Some(ResolvingPlayer::TargetPlayer);
+            StaticDamageRecipient::TargetAny
+        }
         Some(v2::SubjectRef::SelfObject) => StaticDamageRecipient::SelfObject,
         Some(v2::SubjectRef::Anaphora(
             v2::AnaphoraRef::EnchantedCreature
@@ -3189,6 +3209,12 @@ fn lower_prevent_damage(
                 StaticDamageRecipient::TargetObject
             }
         }
+        Some(v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::It
+            | v2::AnaphoraRef::ThatCreature
+            | v2::AnaphoraRef::ThatPermanent
+            | v2::AnaphoraRef::ThatObject,
+        )) if ctx.self_antecedent => StaticDamageRecipient::SelfObject,
         Some(v2::SubjectRef::AnyTarget) => {
             acc.register_target(BodyTarget::SINGLE_ANY_TARGET, v2::TargetCount::Exact(1))?;
             StaticDamageRecipient::TargetAny
@@ -3728,14 +3754,28 @@ fn lower_optional(
     let chooser = atoms::lower_resolving_player(actor, acc, ctx)?;
     let prior_moved = ctx.last_moved_binding;
     let prior_unchosen = ctx.last_unchosen_binding;
+    let prior_succeeded = ctx.last_succeeded_binding;
     let opt_idx = acc.instructions.len();
     acc.push(Instruction::OptionalSequence {
         chooser,
         instructions: 0,
     });
     lower_effects_into(body, acc, ctx)?;
+    let (ok_slot, appended_true) = if ctx.last_succeeded_binding != prior_succeeded
+        && let Some(slot) = ctx.last_succeeded_binding
+    {
+        (slot, false)
+    } else {
+        let slot = ctx.alloc_binding()?;
+        acc.push(Instruction::BindEnv {
+            binding: slot,
+            value: Box::new(ExecValue::Bool(true)),
+        });
+        ctx.last_succeeded_binding = Some(slot);
+        (slot, true)
+    };
     let count = acc.instructions.len().saturating_sub(opt_idx + 1);
-    if count == 0 {
+    if count == 0 || (appended_true && count <= 1) {
         return Err(LoweringError::Unsupported("v2:optional-empty-body"));
     }
     validate_optional_slice(&acc.instructions[(opt_idx + 1)..])?;
@@ -3744,7 +3784,19 @@ fn lower_optional(
     {
         *instructions = count;
     }
-    maybe_preinit_optional_unchosen(acc, opt_idx, prior_moved, prior_unchosen, ctx);
+    // Pre-initialize `ok_slot` to `false` right before `OptionalSequence` so a subsequent
+    // `IfPrevious` (even if not directly adjacent) always sees a defined bool binding when declined.
+    for ins in &mut acc.instructions {
+        ins.shift_jumps(1, opt_idx);
+    }
+    acc.instructions.insert(
+        opt_idx,
+        Instruction::BindEnv {
+            binding: ok_slot,
+            value: Box::new(ExecValue::Bool(false)),
+        },
+    );
+    maybe_preinit_optional_unchosen(acc, opt_idx + 1, prior_moved, prior_unchosen, ctx);
     Ok(())
 }
 
