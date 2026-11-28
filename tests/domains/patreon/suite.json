@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "slug": "patreon",
+  "label": "Patreon",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Patreon OAuth linking, webhook notification intake, membership refresh workflows, Postgres financial integrity, and frontend API contracts.",
+  "localOnly": false,
+  "unqualifiedReason": null,
+  "hostedCredentials": [
+    "SPELLWAKE_PATREON_CLIENT_ID",
+    "SPELLWAKE_PATREON_CLIENT_SECRET",
+    "SPELLWAKE_PATREON_REDIRECT_URI",
+    "SPELLWAKE_PATREON_WEBHOOK_SECRET",
+    "SPELLWAKE_PATREON_EVIDENCE_BUCKET"
+  ],
+  "notes": "Retained source/association fixtures, Postgres RLS/refresh/financial integrity (including patreon_current_work), and frontend API contracts; live Patreon OAuth/webhooks require hosted credentials.",
+  "subdomains": [
+    {
+      "slug": "oauth-association",
+      "label": "OAuth & Association",
+      "description": "OAuth link initiation, callback verification, account binding, and unlink rules.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/patreon/oauth.rs",
+        "services/application/src/patreon/association.rs",
+        "services/application/tests/database/patreon_association.rs",
+        "apps/play/src/data/patreon-association-api.test.ts",
+        "apps/play/src/data/patreon-link.test.ts"
+      ]
+    },
+    {
+      "slug": "webhook-intake",
+      "label": "Webhook Intake & Processing",
+      "description": "Webhook HMAC signature validation, ingress routes, notification deduplication, and processing integrity.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/patreon/intake.rs",
+        "services/application/src/patreon/intake_tests.rs",
+        "services/application/src/api_tests/patreon_ingress.rs",
+        "services/application/tests/database/patreon_intake.rs",
+        "services/application/tests/database/patreon_notification_processing_integrity.rs"
+      ]
+    },
+    {
+      "slug": "membership-refresh",
+      "label": "Membership Refresh & Workflows",
+      "description": "Periodic member sweeps, refresh work discovery/recovery, cancellation, and Temporal workflow orchestration.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/patreon/refresh.rs",
+        "services/application/src/patreon/refresh_workflow.rs",
+        "services/application/tests/database/patreon_refresh.rs",
+        "services/application/tests/database/patreon_current_work.rs",
+        "services/application/tools/test_local_patreon_workflow.py"
+      ]
+    },
+    {
+      "slug": "financial-integrity",
+      "label": "Financial & Tier Integrity",
+      "description": "Patron tier mapping, membership entitlement accounting, and retirement source guards.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/patreon_financial_integrity.rs",
+        "services/application/tests/fixtures/patreon-source.json",
+        "services/application/tests/fixtures/patreon-association.json"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application patreon unit and route tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--lib",
+          "patreon"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "patreon_association",
+      "patreon_intake",
+      "patreon_refresh",
+      "patreon_financial_integrity",
+      "patreon_notification_processing_integrity"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "frontend patreon contract tests",
+        "args": [
+          "bun",
+          "test",
+          "src/data/patreon-association-api.test.ts",
+          "src/data/patreon-link.test.ts",
+          "src/data/patreon-account-status.test.ts"
+        ],
+        "cwd": "apps/play",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright patreon browser OAuth and responsive suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-patreon.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/patreon",
+    "services/application/src/api/patreon_routes.rs",
+    "services/application/src/api_tests/patreon.rs",
+    "services/application/src/api_tests/patreon_ingress.rs",
+    "services/application/tests/database/patreon_association.rs",
+    "services/application/tests/database/patreon_current_work.rs",
+    "services/application/tests/database/patreon_intake.rs",
+    "services/application/tests/database/patreon_refresh.rs",
+    "services/application/tests/database/patreon_financial_integrity.rs",
+    "services/application/tests/database/patreon_notification_processing_integrity.rs",
+    "services/application/tools/test_local_patreon_workflow.py",
+    "apps/play/src/data/patreon-association-api.test.ts",
+    "apps/play/src/data/patreon-link.test.ts",
+    "apps/play/src/data/patreon-account-status.test.ts",
+    "apps/play/scripts/qualify-patreon.ts"
+  ]
+}

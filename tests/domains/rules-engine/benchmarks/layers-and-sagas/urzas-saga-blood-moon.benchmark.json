@@ -1,0 +1,926 @@
+{
+  "schema_version": 1,
+  "id": "layers-and-sagas/urzas-saga-blood-moon",
+  "title": "Urza's Saga and Blood Moon under post-Final Fantasy Saga rules",
+  "category": "layers-and-sagas",
+  "execution_status": "pending-engine",
+  "execution_receipt": null,
+  "review_status": "pending-independent-review",
+  "rules_edition": {
+    "edition": "2026-09-25",
+    "source_url": "https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt",
+    "cited_rules": [
+      {
+        "rule": "305.7",
+        "summary": "Setting a land's subtype to a basic land type (Mountain) removes abilities generated from its rules text and old land types and grants the matching basic mana ability, while preserving non-land types/subtypes (Enchantment, Saga) and abilities granted by other effects."
+      },
+      {
+        "rule": "505.4",
+        "summary": "At the beginning of the active player's precombat main phase, that player puts a lore counter on each Saga they control with one or more chapter abilities (turn-based action, does not use the stack)."
+      },
+      {
+        "rule": "613.1d",
+        "summary": "Layer 4 applies type-changing effects (including Blood Moon turning nonbasic lands into Mountains)."
+      },
+      {
+        "rule": "613.1f",
+        "summary": "Layer 6 applies ability-adding and ability-removing effects (including Urza's Saga Chapter I and II continuous effects granting activated abilities), after Layer 4."
+      },
+      {
+        "rule": "614.12",
+        "summary": "ETB replacement effects check characteristics as the permanent would exist on the battlefield under active continuous effects."
+      },
+      {
+        "rule": "704.5s",
+        "summary": "State-based action: a Saga permanent with one or more chapter abilities and lore counters >= final chapter number (with no chapter ability on the stack) is sacrificed."
+      },
+      {
+        "rule": "714.2d",
+        "summary": "A Saga's final chapter number is the greatest chapter symbol it has, or 0 if it has no chapter abilities."
+      },
+      {
+        "rule": "714.3a",
+        "summary": "Each Saga without read ahead has the intrinsic ability 'This Saga enters with a lore counter on it' (a replacement effect tied to the Saga subtype)."
+      },
+      {
+        "rule": "714.3c",
+        "summary": "As a player's precombat main phase begins, that player puts a lore counter on each Saga they control with one or more chapter abilities."
+      },
+      {
+        "rule": "714.4",
+        "summary": "Post-Final Fantasy Saga sacrifice rule: only a Saga permanent with one or more chapter abilities is sacrificed when lore counters >= final chapter number and no chapter ability from it is on the stack."
+      }
+    ]
+  },
+  "provenance": {
+    "source_summary": "Derived from the Final Fantasy MTG Comprehensive Rules Saga update (CR 505.4, 704.5s, 714.3a, 714.3c, 714.4) and Layer 4/6 ordering (CR 305.7, 613.1d, 613.1f), inspired by community analysis of Urza's Saga + Blood Moon in Modern and Legacy.",
+    "scope_notes": "Preemptive declarative benchmark authored before full Saga execution and Blood Moon continuous-effect integration land in crates/engine. Cards use exact Scryfall Oracle IDs and Oracle text verified against Spellwake fixtures and Scryfall."
+  },
+  "required_capabilities": [
+    "lands.activated-land-destruction",
+    "layers.layer-4-basic-land-subtype-override",
+    "layers.layer-6-granted-abilities-over-layer-4",
+    "sagas.chapter-triggers",
+    "sagas.etb-lore-counter-714-3a",
+    "sagas.precombat-main-lore-counter-714-3c",
+    "sagas.sba-sacrifice-requires-chapter-abilities-714-4",
+    "spells.enchantment-removal",
+    "tokens.construct-artifact-count-cda"
+  ],
+  "cards": {
+    "urzas_saga": {
+      "name": "Urza's Saga",
+      "oracle_id": "4c6a0c30-b547-4eff-8ff4-0ca25803c076",
+      "mana_cost": "",
+      "type_line": "Enchantment Land \u2014 Urza's Saga",
+      "oracle_text": "(As this Saga enters and after your draw step, add a lore counter. Sacrifice after III.)\nI \u2014 This Saga gains \"{T}: Add {C}.\"\nII \u2014 This Saga gains \"{2}, {T}: Create a 0/0 colorless Construct artifact creature token with 'This token gets +1/+1 for each artifact you control.'\"\nIII \u2014 Search your library for an artifact card with mana cost {0} or {1}, put it onto the battlefield, then shuffle."
+    },
+    "blood_moon": {
+      "name": "Blood Moon",
+      "oracle_id": "94fac5fe-97d5-4c12-a80c-8efff9d853ae",
+      "mana_cost": "{2}{R}",
+      "type_line": "Enchantment",
+      "oracle_text": "Nonbasic lands are Mountains."
+    },
+    "sol_ring": {
+      "name": "Sol Ring",
+      "oracle_id": "6ad8011d-3471-4369-9d68-b264cc027487",
+      "mana_cost": "{1}",
+      "type_line": "Artifact",
+      "oracle_text": "{T}: Add {C}{C}."
+    },
+    "wasteland": {
+      "name": "Wasteland",
+      "oracle_id": "09a70ae8-3859-4a09-901d-dce063fa3b5f",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "{T}: Add {C}.\n{T}, Sacrifice this land: Destroy target nonbasic land."
+    },
+    "ghost_quarter": {
+      "name": "Ghost Quarter",
+      "oracle_id": "2ec4288e-34c6-4831-a2c0-ba1ca1d9d1dc",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "{T}: Add {C}.\n{T}, Sacrifice this land: Destroy target land. Its controller may search their library for a basic land card, put it onto the battlefield, then shuffle."
+    },
+    "disenchant": {
+      "name": "Disenchant",
+      "oracle_id": "a7e97fa9-4b72-4548-b854-5be5f18a6f1a",
+      "mana_cost": "{1}{W}",
+      "type_line": "Instant",
+      "oracle_text": "Destroy target artifact or enchantment."
+    }
+  },
+  "cases": [
+    {
+      "id": "chapter-2-then-blood-moon-retains-construct-ability",
+      "name": "Urza's Saga at Chapter II survives Blood Moon and keeps making Constructs indefinitely",
+      "summary": "After Urza's Saga resolves Chapters I and II, Blood Moon enters and turns it into a Mountain in Layer 4. Under post-Final Fantasy CR 714.4 and 714.3c, it is not sacrificed, stops gaining lore counters on future turns, and retains its Layer 6 granted mana and Construct-making abilities.",
+      "rules": [
+        "305.7",
+        "505.4",
+        "613.1d",
+        "613.1f",
+        "704.5s",
+        "714.3c",
+        "714.4"
+      ],
+      "initial_state": {
+        "players": [
+          {
+            "id": "A",
+            "life": 20,
+            "mana_pool": {
+              "R": 3,
+              "C": 4
+            }
+          },
+          {
+            "id": "B",
+            "life": 20
+          }
+        ],
+        "active_player": "A",
+        "turn_number": 2,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          {
+            "alias": "saga",
+            "card": "urzas_saga",
+            "owner": "A",
+            "controller": "A",
+            "zone": "BATTLEFIELD",
+            "counters": {
+              "lore": 2
+            },
+            "tapped": false,
+            "timestamp_order": 1,
+            "resolved_chapter_grants": [
+              "chapter-1-tap-add-c",
+              "chapter-2-create-construct"
+            ]
+          },
+          {
+            "alias": "moon",
+            "card": "blood_moon",
+            "owner": "A",
+            "controller": "A",
+            "zone": "HAND"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "A",
+            "source": "moon",
+            "description": "Player A casts Blood Moon during Turn 2 precombat main phase after Urza's Saga Chapter II has already resolved."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "game",
+            "description": "Blood Moon resolves and enters the battlefield; state-based actions are checked."
+          },
+          "checkpoint": {
+            "id": "after-blood-moon-enters",
+            "assertions": [
+              {
+                "kind": "sba-not-sacrificed",
+                "object": "saga"
+              },
+              {
+                "kind": "object-zone",
+                "object": "saga",
+                "zone": "BATTLEFIELD"
+              },
+              {
+                "kind": "object-types",
+                "object": "saga",
+                "types": [
+                  "Enchantment",
+                  "Land"
+                ]
+              },
+              {
+                "kind": "object-subtypes",
+                "object": "saga",
+                "subtypes": [
+                  "Mountain",
+                  "Saga"
+                ]
+              },
+              {
+                "kind": "object-counters",
+                "object": "saga",
+                "counter": "lore",
+                "count": 2
+              },
+              {
+                "kind": "object-chapter-abilities",
+                "object": "saga",
+                "chapters": []
+              },
+              {
+                "kind": "object-abilities-present",
+                "object": "saga",
+                "abilities": [
+                  "intrinsic-tap-add-r",
+                  "chapter-1-tap-add-c",
+                  "chapter-2-create-construct"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "step": 3,
+          "action": {
+            "kind": "advance-to-next-turn",
+            "actor": "A",
+            "phase": "PRECOMBAT_MAIN",
+            "description": "Advance to Player A's Turn 3 precombat main phase."
+          },
+          "checkpoint": {
+            "id": "turn-3-precombat-no-lore-counter",
+            "assertions": [
+              {
+                "kind": "sba-not-sacrificed",
+                "object": "saga"
+              },
+              {
+                "kind": "object-zone",
+                "object": "saga",
+                "zone": "BATTLEFIELD"
+              },
+              {
+                "kind": "object-counters",
+                "object": "saga",
+                "counter": "lore",
+                "count": 2
+              },
+              {
+                "kind": "stack-empty"
+              }
+            ]
+          }
+        },
+        {
+          "step": 4,
+          "action": {
+            "kind": "activate-ability",
+            "actor": "A",
+            "source": "saga",
+            "ability": "chapter-2-create-construct",
+            "description": "Player A pays {2} and taps Urza's Saga to activate its Layer 6 Construct-creating ability."
+          }
+        },
+        {
+          "step": 5,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "game",
+            "description": "The Construct ability resolves, creating a 0/0 Construct artifact creature token."
+          },
+          "checkpoint": {
+            "id": "after-first-construct-under-blood-moon",
+            "assertions": [
+              {
+                "kind": "token-count",
+                "controller": "A",
+                "token_name": "Construct",
+                "count": 1
+              },
+              {
+                "kind": "token-stats",
+                "controller": "A",
+                "token_name": "Construct",
+                "power": 1,
+                "toughness": 1
+              },
+              {
+                "kind": "object-zone",
+                "object": "saga",
+                "zone": "BATTLEFIELD"
+              },
+              {
+                "kind": "object-counters",
+                "object": "saga",
+                "counter": "lore",
+                "count": 2
+              }
+            ]
+          }
+        },
+        {
+          "step": 6,
+          "action": {
+            "kind": "advance-to-next-turn",
+            "actor": "A",
+            "phase": "PRECOMBAT_MAIN",
+            "description": "Advance to Player A's Turn 4 precombat main phase to verify indefinite survival."
+          }
+        },
+        {
+          "step": 7,
+          "action": {
+            "kind": "activate-ability",
+            "actor": "A",
+            "source": "saga",
+            "ability": "chapter-2-create-construct",
+            "description": "Player A activates the Construct ability a second time on Turn 4."
+          }
+        },
+        {
+          "step": 8,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "game",
+            "description": "Second Construct enters; both Constructs count two artifacts."
+          },
+          "checkpoint": {
+            "id": "after-second-construct-under-blood-moon",
+            "assertions": [
+              {
+                "kind": "sba-not-sacrificed",
+                "object": "saga"
+              },
+              {
+                "kind": "object-counters",
+                "object": "saga",
+                "counter": "lore",
+                "count": 2
+              },
+              {
+                "kind": "token-count",
+                "controller": "A",
+                "token_name": "Construct",
+                "count": 2
+              },
+              {
+                "kind": "token-stats",
+                "controller": "A",
+                "token_name": "Construct",
+                "power": 2,
+                "toughness": 2
+              }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "no-legacy-zero-chapter-sacrifice",
+          "rules": [
+            "704.5s",
+            "714.2d",
+            "714.4"
+          ],
+          "description": "Engine must NOT apply the pre-Final Fantasy rule that sacrificed any Saga with 0 chapter abilities."
+        },
+        {
+          "id": "layer-6-grants-survive-layer-4-blood-moon",
+          "rules": [
+            "305.7",
+            "613.1d",
+            "613.1f"
+          ],
+          "description": "Blood Moon removes printed text-box abilities in Layer 4, but continuous effects from already-resolved Chapters I and II apply in Layer 6 and remain active."
+        },
+        {
+          "id": "no-turn-based-lore-counters-without-chapters",
+          "rules": [
+            "505.4",
+            "714.3c"
+          ],
+          "description": "A Saga with zero chapter abilities must not receive precombat main phase lore counters."
+        }
+      ]
+    },
+    {
+      "id": "blood-moon-first-then-urzas-saga-enters",
+      "name": "Urza's Saga played into an existing Blood Moon survives as a Mountain without triggering Chapter I",
+      "summary": "When Blood Moon is already on the battlefield, Urza's Saga enters as an Enchantment Land - Mountain Saga with no chapter abilities. Per CR 305.7 and 714.3a it keeps the Saga subtype (entering with 1 lore counter via the Saga intrinsic replacement effect) without triggering Chapter I, is not sacrificed under CR 714.4, and gains no further lore counters on future turns.",
+      "rules": [
+        "305.7",
+        "505.4",
+        "613.1d",
+        "614.12",
+        "704.5s",
+        "714.3a",
+        "714.3c",
+        "714.4"
+      ],
+      "initial_state": {
+        "players": [
+          {
+            "id": "A",
+            "life": 20
+          },
+          {
+            "id": "B",
+            "life": 20
+          }
+        ],
+        "active_player": "A",
+        "turn_number": 3,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          {
+            "alias": "moon",
+            "card": "blood_moon",
+            "owner": "B",
+            "controller": "B",
+            "zone": "BATTLEFIELD",
+            "timestamp_order": 1
+          },
+          {
+            "alias": "saga",
+            "card": "urzas_saga",
+            "owner": "A",
+            "controller": "A",
+            "zone": "HAND"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "play-land",
+            "actor": "A",
+            "source": "saga",
+            "description": "Player A plays Urza's Saga while Blood Moon is already on the battlefield."
+          },
+          "checkpoint": {
+            "id": "after-saga-enters-under-blood-moon",
+            "assertions": [
+              {
+                "kind": "sba-not-sacrificed",
+                "object": "saga"
+              },
+              {
+                "kind": "object-zone",
+                "object": "saga",
+                "zone": "BATTLEFIELD"
+              },
+              {
+                "kind": "object-types",
+                "object": "saga",
+                "types": [
+                  "Enchantment",
+                  "Land"
+                ]
+              },
+              {
+                "kind": "object-subtypes",
+                "object": "saga",
+                "subtypes": [
+                  "Mountain",
+                  "Saga"
+                ]
+              },
+              {
+                "kind": "object-counters",
+                "object": "saga",
+                "counter": "lore",
+                "count": 1
+              },
+              {
+                "kind": "object-chapter-abilities",
+                "object": "saga",
+                "chapters": []
+              },
+              {
+                "kind": "stack-empty"
+              },
+              {
+                "kind": "object-abilities-present",
+                "object": "saga",
+                "abilities": [
+                  "intrinsic-tap-add-r"
+                ]
+              },
+              {
+                "kind": "object-abilities-absent",
+                "object": "saga",
+                "abilities": [
+                  "chapter-1-tap-add-c",
+                  "chapter-2-create-construct"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "advance-to-next-turn",
+            "actor": "A",
+            "phase": "PRECOMBAT_MAIN",
+            "description": "Advance to Player A's next precombat main phase to confirm no new lore counter is placed."
+          },
+          "checkpoint": {
+            "id": "next-turn-still-mountain-no-new-lore",
+            "assertions": [
+              {
+                "kind": "sba-not-sacrificed",
+                "object": "saga"
+              },
+              {
+                "kind": "object-counters",
+                "object": "saga",
+                "counter": "lore",
+                "count": 1
+              },
+              {
+                "kind": "stack-empty"
+              }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "saga-subtype-preserved-under-blood-moon",
+          "rules": [
+            "305.7",
+            "714.3a"
+          ],
+          "description": "Blood Moon replaces only land subtypes; the Saga enchantment subtype and its intrinsic ETB lore counter replacement effect remain, while printed chapter abilities are blanked."
+        },
+        {
+          "id": "chapter-1-does-not-trigger-when-blanked",
+          "rules": [
+            "305.7",
+            "614.12",
+            "714.2b"
+          ],
+          "description": "Because Urza's Saga has no chapter abilities as it enters under Blood Moon, Chapter I does not trigger and does not grant '{T}: Add {C}'."
+        }
+      ]
+    },
+    {
+      "id": "blood-moon-leaves-resumes-saga-progression",
+      "name": "Destroying Blood Moon restores Urza's Saga chapters and resumes progression to Chapter III sacrifice",
+      "summary": "When Blood Moon leaves the battlefield, Urza's Saga (frozen at 2 lore counters) regains its Urza's land subtype and chapter abilities. On the next precombat main phase it ticks to 3 lore counters, triggers Chapter III to fetch Sol Ring, and is sacrificed by CR 714.4 only after Chapter III leaves the stack.",
+      "rules": [
+        "305.7",
+        "505.4",
+        "704.5s",
+        "714.3c",
+        "714.4"
+      ],
+      "initial_state": {
+        "players": [
+          {
+            "id": "A",
+            "life": 20
+          },
+          {
+            "id": "B",
+            "life": 20,
+            "mana_pool": {
+              "W": 2
+            }
+          }
+        ],
+        "active_player": "B",
+        "turn_number": 3,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          {
+            "alias": "saga",
+            "card": "urzas_saga",
+            "owner": "A",
+            "controller": "A",
+            "zone": "BATTLEFIELD",
+            "counters": {
+              "lore": 2
+            },
+            "tapped": false,
+            "timestamp_order": 1,
+            "resolved_chapter_grants": [
+              "chapter-1-tap-add-c",
+              "chapter-2-create-construct"
+            ]
+          },
+          {
+            "alias": "moon",
+            "card": "blood_moon",
+            "owner": "A",
+            "controller": "A",
+            "zone": "BATTLEFIELD",
+            "timestamp_order": 2
+          },
+          {
+            "alias": "disenchant",
+            "card": "disenchant",
+            "owner": "B",
+            "controller": "B",
+            "zone": "HAND"
+          },
+          {
+            "alias": "sol_ring",
+            "card": "sol_ring",
+            "owner": "A",
+            "controller": "A",
+            "zone": "LIBRARY"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "B",
+            "source": "disenchant",
+            "target": "moon",
+            "description": "Player B casts Disenchant targeting Blood Moon."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "game",
+            "description": "Disenchant resolves and destroys Blood Moon."
+          },
+          "checkpoint": {
+            "id": "after-blood-moon-destroyed",
+            "assertions": [
+              {
+                "kind": "object-zone",
+                "object": "moon",
+                "zone": "GRAVEYARD"
+              },
+              {
+                "kind": "sba-not-sacrificed",
+                "object": "saga"
+              },
+              {
+                "kind": "object-subtypes",
+                "object": "saga",
+                "subtypes": [
+                  "Urza's",
+                  "Saga"
+                ]
+              },
+              {
+                "kind": "object-chapter-abilities",
+                "object": "saga",
+                "chapters": [
+                  "I",
+                  "II",
+                  "III"
+                ]
+              },
+              {
+                "kind": "object-abilities-absent",
+                "object": "saga",
+                "abilities": [
+                  "intrinsic-tap-add-r"
+                ]
+              },
+              {
+                "kind": "object-abilities-present",
+                "object": "saga",
+                "abilities": [
+                  "chapter-1-tap-add-c",
+                  "chapter-2-create-construct"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "step": 3,
+          "action": {
+            "kind": "advance-to-next-turn",
+            "actor": "A",
+            "phase": "PRECOMBAT_MAIN",
+            "description": "Advance to Player A's next precombat main phase; Urza's Saga gains its 3rd lore counter and triggers Chapter III."
+          },
+          "checkpoint": {
+            "id": "chapter-3-on-stack-saga-still-present",
+            "assertions": [
+              {
+                "kind": "object-counters",
+                "object": "saga",
+                "counter": "lore",
+                "count": 3
+              },
+              {
+                "kind": "stack-contains",
+                "source": "saga",
+                "ability": "chapter-3-search-artifact"
+              },
+              {
+                "kind": "sba-not-sacrificed",
+                "object": "saga"
+              }
+            ]
+          }
+        },
+        {
+          "step": 4,
+          "action": {
+            "kind": "resolve-top",
+            "actor": "A",
+            "search_choice": "sol_ring",
+            "description": "Chapter III resolves, putting Sol Ring onto the battlefield, then state-based actions sacrifice Urza's Saga."
+          },
+          "checkpoint": {
+            "id": "after-chapter-3-resolution-and-sba",
+            "assertions": [
+              {
+                "kind": "object-zone",
+                "object": "sol_ring",
+                "zone": "BATTLEFIELD"
+              },
+              {
+                "kind": "sba-sacrificed",
+                "object": "saga"
+              },
+              {
+                "kind": "object-zone",
+                "object": "saga",
+                "zone": "GRAVEYARD"
+              }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "chapter-3-on-stack-blocks-early-sba-sacrifice",
+          "rules": [
+            "704.5s",
+            "714.4"
+          ],
+          "description": "Urza's Saga must remain on the battlefield while Chapter III is on the stack, then be sacrificed immediately after Chapter III leaves the stack."
+        }
+      ]
+    },
+    {
+      "id": "nonbasic-land-destruction-locked-out-under-blood-moon",
+      "name": "Opponent's Wasteland and Ghost Quarter cannot destroy Urza's Saga under Blood Moon",
+      "summary": "Because Blood Moon turns all nonbasic lands into Mountains in Layer 4, opponent's Wasteland and Ghost Quarter lose their activated sacrifice-to-destroy-land abilities and cannot answer Urza's Saga.",
+      "rules": [
+        "305.7",
+        "613.1d"
+      ],
+      "initial_state": {
+        "players": [
+          {
+            "id": "A",
+            "life": 20
+          },
+          {
+            "id": "B",
+            "life": 20
+          }
+        ],
+        "active_player": "B",
+        "turn_number": 3,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          {
+            "alias": "saga",
+            "card": "urzas_saga",
+            "owner": "A",
+            "controller": "A",
+            "zone": "BATTLEFIELD",
+            "counters": {
+              "lore": 2
+            },
+            "timestamp_order": 1,
+            "resolved_chapter_grants": [
+              "chapter-1-tap-add-c",
+              "chapter-2-create-construct"
+            ]
+          },
+          {
+            "alias": "wasteland",
+            "card": "wasteland",
+            "owner": "B",
+            "controller": "B",
+            "zone": "BATTLEFIELD",
+            "timestamp_order": 2
+          },
+          {
+            "alias": "ghost_quarter",
+            "card": "ghost_quarter",
+            "owner": "B",
+            "controller": "B",
+            "zone": "BATTLEFIELD",
+            "timestamp_order": 3
+          },
+          {
+            "alias": "moon",
+            "card": "blood_moon",
+            "owner": "A",
+            "controller": "A",
+            "zone": "BATTLEFIELD",
+            "timestamp_order": 4
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "attempt-illegal-activation",
+            "actor": "B",
+            "source": "wasteland",
+            "target": "saga",
+            "ability": "destroy-nonbasic-land",
+            "description": "Player B attempts to activate Wasteland's sacrifice ability targeting Urza's Saga under Blood Moon."
+          },
+          "checkpoint": {
+            "id": "wasteland-activation-rejected",
+            "assertions": [
+              {
+                "kind": "action-rejected",
+                "reason": "ability-not-present"
+              },
+              {
+                "kind": "object-subtypes",
+                "object": "wasteland",
+                "subtypes": [
+                  "Mountain"
+                ]
+              },
+              {
+                "kind": "object-abilities-absent",
+                "object": "wasteland",
+                "abilities": [
+                  "destroy-nonbasic-land"
+                ]
+              },
+              {
+                "kind": "object-zone",
+                "object": "saga",
+                "zone": "BATTLEFIELD"
+              }
+            ]
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "attempt-illegal-activation",
+            "actor": "B",
+            "source": "ghost_quarter",
+            "target": "saga",
+            "ability": "destroy-land",
+            "description": "Player B attempts to activate Ghost Quarter's sacrifice ability targeting Urza's Saga under Blood Moon."
+          },
+          "checkpoint": {
+            "id": "ghost-quarter-activation-rejected",
+            "assertions": [
+              {
+                "kind": "action-rejected",
+                "reason": "ability-not-present"
+              },
+              {
+                "kind": "object-subtypes",
+                "object": "ghost_quarter",
+                "subtypes": [
+                  "Mountain"
+                ]
+              },
+              {
+                "kind": "object-abilities-absent",
+                "object": "ghost_quarter",
+                "abilities": [
+                  "destroy-land"
+                ]
+              },
+              {
+                "kind": "object-zone",
+                "object": "saga",
+                "zone": "BATTLEFIELD"
+              }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "nonbasic-land-destruction-stripped-by-layer-4",
+          "rules": [
+            "305.7",
+            "613.1d"
+          ],
+          "description": "Wasteland and Ghost Quarter are nonbasic lands; under Blood Moon they lose all printed abilities and can only tap for {R}."
+        }
+      ]
+    }
+  ]
+}
