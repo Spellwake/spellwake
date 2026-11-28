@@ -279,6 +279,26 @@ fn lower_face_v2_inner(
         for eff in &compiled.spell_effects {
             if let v2::Effect::Restriction(rs) = eff {
                 spell_restrictions.extend(rs.iter().cloned());
+            } else if let v2::Effect::BranchCondition {
+                condition,
+                then_body,
+                else_body,
+            } = eff
+                && else_body.is_empty()
+                && let [
+                    v2::Effect::ApplyContinuous {
+                        effect,
+                        duration: v2::Duration::Instant | v2::Duration::Permanent,
+                    },
+                ] = then_body.as_slice()
+                && let v2::StaticAbility::AlternativeCost(costs) = effect.as_ref()
+            {
+                crate::v2_lowering::cost::lower_conditional_alternative_cast_costs(
+                    condition,
+                    costs,
+                    &mut program,
+                    &mut ctx,
+                )?;
             } else {
                 exec_effects.push(eff.clone());
             }
@@ -289,7 +309,11 @@ fn lower_face_v2_inner(
         if !spell_restrictions.is_empty() {
             program.cast_timing = lower_cast_timing_restrictions(&spell_restrictions, &mut ctx)?;
         }
-        let (body, modes) = lower_spell_effects_v2(&exec_effects, &mut ctx)?;
+        let prev_is_spell = ctx.is_spell_body;
+        ctx.is_spell_body = true;
+        let spell_res = lower_spell_effects_v2(&exec_effects, &mut ctx);
+        ctx.is_spell_body = prev_is_spell;
+        let (body, modes) = spell_res?;
         if let ProgramKind::Spell(spell) = &mut program.kind {
             spell.body = body;
             spell.modes = modes;

@@ -812,13 +812,10 @@ pub(crate) fn lower_additional_cast_costs(
     Ok(())
 }
 
-/// Lower unconditional alternative casting costs (`You may <costs> rather than pay ...`)
-/// into `program.conditional_cost`.
-pub(crate) fn lower_alternative_cast_costs(
+fn lower_alternative_cast_cost_parts(
     costs: &[v2::Cost],
-    program: &mut Program,
     ctx: &mut LowerCtx<'_>,
-) -> LowerResult<()> {
+) -> LowerResult<(ManaCost, Vec<ExtraActivationCost>)> {
     let mut mana = ManaCost::free();
     let mut extra = Vec::new();
     for atom in costs {
@@ -841,10 +838,50 @@ pub(crate) fn lower_alternative_cast_costs(
             extra.push(lowered);
         }
     }
+    Ok((mana, extra))
+}
+
+/// Lower unconditional alternative casting costs (`You may <costs> rather than pay ...`)
+/// into `program.conditional_cost`.
+pub(crate) fn lower_alternative_cast_costs(
+    costs: &[v2::Cost],
+    program: &mut Program,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    let (mana, extra) = lower_alternative_cast_cost_parts(costs, ctx)?;
     if program
         .conditional_cost
         .replace(ConditionalCastCost::Alternative {
             condition: None,
+            mana,
+            extra,
+        })
+        .is_some()
+    {
+        return Err(LoweringError::Unsupported(
+            "v2:cost:duplicate-conditional-cost",
+        ));
+    }
+    Ok(())
+}
+
+/// Lower conditional alternative casting costs (`If <cond>, you may <costs> rather than pay ...`)
+/// into `program.conditional_cost`.
+pub(crate) fn lower_conditional_alternative_cast_costs(
+    cond: &v2::ConditionExpr,
+    costs: &[v2::Cost],
+    program: &mut Program,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    let res_cond = lower_resolution_condition(cond, ctx)?;
+    if !res_cond.is_world_evaluable() {
+        return Err(LoweringError::Unsupported("v2:cost:alt-cast-nonworld-cond"));
+    }
+    let (mana, extra) = lower_alternative_cast_cost_parts(costs, ctx)?;
+    if program
+        .conditional_cost
+        .replace(ConditionalCastCost::Alternative {
+            condition: Some(Box::new(res_cond)),
             mana,
             extra,
         })

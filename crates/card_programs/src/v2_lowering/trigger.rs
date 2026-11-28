@@ -117,6 +117,7 @@ pub(crate) fn lower_triggered_ability(
     let prev_has_participant = ctx.trigger_has_participant;
     let prev_is_spell_cast = ctx.trigger_is_spell_cast;
     let prev_damage_event = ctx.trigger_damage_event;
+    let prev_self_antecedent = ctx.self_antecedent;
     ctx.trigger_has_participant = !specs.is_empty()
         && specs
             .iter()
@@ -127,10 +128,19 @@ pub(crate) fn lower_triggered_ability(
             .iter()
             .all(|ev| matches!(ev, v2::TriggerEvent::SpellCast { .. }));
     ctx.trigger_damage_event = infer_trigger_damage_event(&specs);
+    if !effective_spec.events.is_empty()
+        && effective_spec
+            .events
+            .iter()
+            .all(trigger_event_establishes_self_antecedent)
+    {
+        ctx.self_antecedent = true;
+    }
     let exec_body_res = lower_triggered_body(&exec_effects, remaining_cond, ctx);
     ctx.trigger_has_participant = prev_has_participant;
     ctx.trigger_is_spell_cast = prev_is_spell_cast;
     ctx.trigger_damage_event = prev_damage_event;
+    ctx.self_antecedent = prev_self_antecedent;
     let exec_body = exec_body_res?;
 
     let mut out = Vec::with_capacity(specs.len());
@@ -367,6 +377,28 @@ pub(crate) fn lower_trigger_events(
         ctx.trigger_damage_event = Some(ev);
     }
     Ok((merged, grouping, world_res_cond))
+}
+
+fn trigger_event_establishes_self_antecedent(ev: &v2::TriggerEvent) -> bool {
+    match ev {
+        v2::TriggerEvent::Attacks {
+            subject: Some(subj),
+            ..
+        }
+        | v2::TriggerEvent::DealsDamage {
+            source: Some(subj), ..
+        } => matches!(subj, v2::SubjectRef::SelfObject),
+        v2::TriggerEvent::Blocks { subject, .. }
+        | v2::TriggerEvent::BecomesBlocked { subject, .. }
+        | v2::TriggerEvent::DealtDamage { subject, .. }
+        | v2::TriggerEvent::CounterPlaced { subject, .. }
+        | v2::TriggerEvent::CounterEvent { subject, .. }
+        | v2::TriggerEvent::LastCounterRemoved { subject, .. }
+        | v2::TriggerEvent::BecomesTarget { subject, .. } => {
+            matches!(subject, v2::SubjectRef::SelfObject)
+        }
+        _ => false,
+    }
 }
 
 fn is_player_damage_recipient(recipient: DamageTriggerRecipient) -> bool {

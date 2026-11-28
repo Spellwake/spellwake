@@ -549,6 +549,11 @@ impl EffectWindow {
                 &mut journal,
                 |_, _, _| Ok(vec![RulesOccurrence::Shuffled(shuffle.clone())]),
             )?;
+            if let Some(cursor) = next.resolution_cursor_mut() {
+                cursor.results.last_moved_objects.clear();
+                cursor.results.last_action_count = Some(0.into());
+                cursor.results.last_action_succeeded = false;
+            }
             next.advance_instruction()?;
             let progress = next.progress_rules(
                 DamageJournal::default(),
@@ -605,6 +610,7 @@ impl EffectWindow {
         let mut next = self.clone();
         next.revision = revision;
         let mut journal = RulesJournal::default();
+        let mut moved_id = None;
         if let Some(id) = selected {
             let before = next.rules_snapshot(None)?;
             let original = next
@@ -625,6 +631,7 @@ impl EffectWindow {
                 .ok_or(EffectError::InconsistentProgram)?
                 .clone();
             let entering = current.id();
+            moved_id = Some(entering);
             if let Some(color) = colors.get(&id) {
                 next.entry_color_choices.insert(entering, *color);
                 if let Some(c) = color.color() {
@@ -678,6 +685,11 @@ impl EffectWindow {
             &mut journal,
             |_, _, _| Ok(vec![RulesOccurrence::Shuffled(shuffle.clone())]),
         )?;
+        if let Some(cursor) = next.resolution_cursor_mut() {
+            cursor.results.last_moved_objects = moved_id.into_iter().collect();
+            cursor.results.last_action_count = Some(i64::from(moved_id.is_some()).into());
+            cursor.results.last_action_succeeded = moved_id.is_some();
+        }
         next.advance_instruction()?;
         let progress = next.progress_rules(
             DamageJournal::default(),
@@ -1381,6 +1393,7 @@ impl EffectWindow {
             Instruction::SearchLibrary { filter } if filter.is_haste_and_return()
         );
         let mut found = None;
+        let mut moved_ids: Vec<ObjectId> = Vec::new();
         if !moves.is_empty() {
             let before = self.rules_snapshot(None)?;
             let from_graveyard = matches!(
@@ -1409,6 +1422,7 @@ impl EffectWindow {
                 )?
             };
             self.window = window;
+            moved_ids = movements.iter().map(|m| m.after.id()).collect();
             if matches!(
                 self.current_instruction()?,
                 Instruction::SearchLibrary { filter }
@@ -1611,6 +1625,12 @@ impl EffectWindow {
                     }])
                 },
             )?;
+        }
+        if let Some(cursor) = self.resolution_cursor_mut() {
+            cursor.results.last_action_count =
+                Some(i64::try_from(moved_ids.len()).unwrap_or(i64::MAX).into());
+            cursor.results.last_action_succeeded = !moved_ids.is_empty();
+            cursor.results.last_moved_objects = moved_ids;
         }
         self.advance_instruction()?;
         Ok((entropy, shuffle))

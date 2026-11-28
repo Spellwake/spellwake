@@ -13,6 +13,9 @@ use spellwake_engine::{
     characteristics::{
         AbilityChange, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec, StaticDamageRecipient,
     },
+    damage::{
+        DamageSourceChoiceFilter, PreventionRecipientSpec, PreventionSourceSpec, TurnPreventionSpec,
+    },
     program::{
         AffectedPlayers, BodyTarget, DamageAmountSpec, ExecutableBody, Instruction,
         ObjectFilter as EngineObjectFilter, ResolvingPlayer, TargetZone, TemporaryRuleKind,
@@ -84,6 +87,12 @@ pub(crate) fn lower_effects_into(
         if is_flashback_grant_plus_cost_clause(effects, i) {
             lower_step_with_target_dispatch(&effects[i], acc, ctx)?;
             i += 2;
+            continue;
+        }
+
+        // 3a. Fuse `[GrantPlayPermission, SpendManaAsAnyType]` (directly or via `ScopedDuration`).
+        if let Some(next_i) = try_fuse_grant_play_with_any_color(effects, i, acc, ctx)? {
+            i = next_i;
             continue;
         }
 
@@ -749,6 +758,103 @@ fn is_copy_retarget_followup(eff: &v2::Effect) -> bool {
         )
 }
 
+fn is_spend_mana_as_any_type(eff: &v2::Effect) -> bool {
+    match eff {
+        v2::Effect::MutatePlayer {
+            player: v2::PlayerRef::You,
+            mutation: v2::PlayerMutation::Action(v2::PlayerActionKind::SpendManaAsAnyType),
+            ..
+        } => true,
+        v2::Effect::Optional {
+            actor: v2::PlayerRef::You,
+            body,
+        }
+        | v2::Effect::ScopedDuration { body, .. } => {
+            body.len() == 1 && is_spend_mana_as_any_type(&body[0])
+        }
+        _ => false,
+    }
+}
+
+fn effective_grant_play_duration<'a>(
+    outer_duration: &'a v2::Duration,
+    inner_dur: &'a v2::Duration,
+) -> LowerResult<&'a v2::Duration> {
+    if *inner_dur == v2::Duration::UntilEndOfTurn
+        && matches!(
+            outer_duration,
+            v2::Duration::UntilEndOfNextTurn
+                | v2::Duration::UntilYourNextEndStep
+                | v2::Duration::UntilYourNextTurn
+                | v2::Duration::UntilYourNextUpkeep
+                | v2::Duration::ForAsLongAsExiled
+                | v2::Duration::ForTheRestOfTheGame
+                | v2::Duration::Permanent
+        )
+    {
+        Ok(outer_duration)
+    } else {
+        merge_scoped_duration(outer_duration, inner_dur)
+    }
+}
+
+fn try_fuse_grant_play_with_any_color(
+    effects: &[v2::Effect],
+    i: usize,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<Option<usize>> {
+    let Some(next_eff) = effects.get(i + 1) else {
+        return Ok(None);
+    };
+    if !is_spend_mana_as_any_type(next_eff) {
+        return Ok(None);
+    }
+    match &effects[i] {
+        v2::Effect::MutatePlayer {
+            player,
+            mutation:
+                v2::PlayerMutation::GrantPlayPermission {
+                    cast_only,
+                    subject,
+                    free,
+                },
+            duration,
+        } => {
+            mutation::lower_grant_play_permission(
+                *player, *cast_only, subject, *free, true, duration, acc, ctx,
+            )?;
+            Ok(Some(i + 2))
+        }
+        v2::Effect::ScopedDuration {
+            duration: outer_dur,
+            body,
+        } => {
+            if let [
+                v2::Effect::MutatePlayer {
+                    player,
+                    mutation:
+                        v2::PlayerMutation::GrantPlayPermission {
+                            cast_only,
+                            subject,
+                            free,
+                        },
+                    duration: inner_dur,
+                },
+            ] = body.as_slice()
+            {
+                let effective = effective_grant_play_duration(outer_dur, inner_dur)?;
+                mutation::lower_grant_play_permission(
+                    *player, *cast_only, subject, *free, true, effective, acc, ctx,
+                )?;
+                return Ok(Some(i + 2));
+            }
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
 fn is_flashback_grant_plus_cost_clause(effects: &[v2::Effect], i: usize) -> bool {
     let v2::Effect::MutateObject {
         mutation: v2::ObjectMutation::GrantKeywords(kws),
@@ -1405,6 +1511,9 @@ fn rewrite_offer_zone_owner(owner: v2::ZoneOwner) -> v2::ZoneOwner {
 fn rewrite_offer_subject_ref(subj: &v2::SubjectRef, offer_actor: v2::PlayerRef) -> v2::SubjectRef {
     match subj {
         v2::SubjectRef::Player(p) if *p == offer_actor => {
+            v2::SubjectRef::Player(v2::PlayerRef::ThatPlayer)
+        }
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::Them) => {
             v2::SubjectRef::Player(v2::PlayerRef::ThatPlayer)
         }
         v2::SubjectRef::HandOf(p) if *p == offer_actor || *p == v2::PlayerRef::You => {
@@ -2147,6 +2256,243 @@ fn damage_announced_bounds(count: v2::TargetCount) -> Option<(u16, u16)> {
     }
 }
 
+fn is_chosen_damage_source_filter(f: &v2::ObjectFilter) -> Option<DamageSourceChoiceFilter> {
+    let (cleaned, chosen_player) = filter::split_of_chosen_player(f);
+    if chosen_player != Some(v2::PlayerRef::You) {
+        return None;
+    }
+    let clean_rest = cleaned.forbidden_types.is_empty()
+        && cleaned.required_supertypes.is_empty()
+        && cleaned.forbidden_supertypes.is_empty()
+        && cleaned.subtypes.is_empty()
+        && cleaned.forbidden_subtypes.is_empty()
+        && cleaned.forbidden_colors.is_empty()
+        && cleaned.color_arity.is_none()
+        && cleaned.controller.is_none()
+        && cleaned.owner.is_none()
+        && cleaned.zones.is_empty()
+        && cleaned.combat.is_none()
+        && cleaned.tapped.is_none()
+        && cleaned.token.is_none()
+        && cleaned.required_keywords.is_empty()
+        && cleaned.forbidden_keywords.is_empty()
+        && cleaned.stat_bounds.is_empty()
+        && cleaned.flags.is_empty()
+        && cleaned.predicates.is_empty()
+        && !cleaned.any_spell
+        && !cleaned.is_ability;
+    if !clean_rest {
+        return None;
+    }
+    if cleaned.all_types.is_empty() && cleaned.any_types.is_empty() {
+        if cleaned.any_colors.is_empty() {
+            return Some(DamageSourceChoiceFilter::Any);
+        }
+        return Some(DamageSourceChoiceFilter::Colors(atoms::lower_color_mask(
+            cleaned.any_colors,
+        )));
+    }
+    if cleaned.any_colors.is_empty()
+        && ((cleaned.all_types == ast::CardTypeMask::CREATURE && cleaned.any_types.is_empty())
+            || (cleaned.any_types == ast::CardTypeMask::CREATURE && cleaned.all_types.is_empty()))
+    {
+        return Some(DamageSourceChoiceFilter::Creature);
+    }
+    None
+}
+
+fn lower_turn_prevention_recipient(
+    target: Option<&v2::SubjectRef>,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<Option<PreventionRecipientSpec>> {
+    match target {
+        None => Ok(Some(PreventionRecipientSpec::Any)),
+        Some(v2::SubjectRef::Player(v2::PlayerRef::You)) => {
+            Ok(Some(PreventionRecipientSpec::Controller))
+        }
+        Some(v2::SubjectRef::Player(v2::PlayerRef::EachPlayer)) => {
+            Ok(Some(PreventionRecipientSpec::AllPlayers))
+        }
+        Some(v2::SubjectRef::SelfObject) => Ok(Some(PreventionRecipientSpec::AbilitySource)),
+        Some(v2::SubjectRef::AnyTarget) => {
+            acc.register_target(BodyTarget::SINGLE_ANY_TARGET, v2::TargetCount::Exact(1))?;
+            Ok(Some(PreventionRecipientSpec::Target))
+        }
+        Some(v2::SubjectRef::TargetPlayer {
+            opponent_only,
+            count: v2::TargetCount::Exact(1),
+        }) => {
+            acc.register_target(
+                BodyTarget::Player {
+                    opponents_only: *opponent_only,
+                },
+                v2::TargetCount::Exact(1),
+            )?;
+            ctx.last_player_target = Some(ResolvingPlayer::TargetPlayer);
+            Ok(Some(PreventionRecipientSpec::Target))
+        }
+        Some(subj @ v2::SubjectRef::TargetObject { .. }) => {
+            let (bt, tc) = atoms::lower_subject_to_target(subj, ctx)?;
+            if !matches!(tc, v2::TargetCount::Exact(1) | v2::TargetCount::UpTo(1)) {
+                return Ok(None);
+            }
+            acc.register_target(bt, tc)?;
+            Ok(Some(PreventionRecipientSpec::Target))
+        }
+        Some(v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::It
+            | v2::AnaphoraRef::ThatCreature
+            | v2::AnaphoraRef::ThatPermanent
+            | v2::AnaphoraRef::ThatObject
+            | v2::AnaphoraRef::SameTarget,
+        )) if acc.target_set => Ok(Some(PreventionRecipientSpec::Target)),
+        Some(v2::SubjectRef::Compound(parts)) if parts.len() == 2 => {
+            let has_you = parts
+                .iter()
+                .any(|p| matches!(p, v2::SubjectRef::Player(v2::PlayerRef::You)));
+            let other = parts
+                .iter()
+                .find(|p| !matches!(p, v2::SubjectRef::Player(v2::PlayerRef::You)));
+            if has_you
+                && let Some(
+                    v2::SubjectRef::Group(f) | v2::SubjectRef::All(f) | v2::SubjectRef::Each(f),
+                ) = other
+                && f.controller == Some(ast::ControllerRelation::You)
+                && f.forbidden_types.is_empty()
+                && f.subtypes.is_empty()
+                && f.any_colors.is_empty()
+                && f.predicates.is_empty()
+                && f.flags.is_empty()
+            {
+                if f.any_permanent && f.all_types.is_empty() && f.any_types.is_empty() {
+                    return Ok(Some(
+                        PreventionRecipientSpec::ControllerAndControlledPermanents,
+                    ));
+                }
+                if (f.all_types == ast::CardTypeMask::CREATURE && f.any_types.is_empty())
+                    || (f.any_types == ast::CardTypeMask::CREATURE && f.all_types.is_empty())
+                {
+                    return Ok(Some(
+                        PreventionRecipientSpec::ControllerAndControlledCreatures,
+                    ));
+                }
+            }
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn try_lower_turn_prevention_spec(
+    combat_only: bool,
+    source: Option<&v2::SubjectRef>,
+    target: Option<&v2::SubjectRef>,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<bool> {
+    let is_obj_anaph = |s: &v2::SubjectRef| {
+        matches!(
+            s,
+            v2::SubjectRef::Anaphora(
+                v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatObject
+                    | v2::AnaphoraRef::SameTarget
+            )
+        )
+    };
+
+    // Case 1: `"Prevent all [combat] damage that would be dealt to and dealt by <subject>"`.
+    if let (Some(src), Some(tgt)) = (source, target) {
+        if matches!(src, v2::SubjectRef::SelfObject) && matches!(tgt, v2::SubjectRef::SelfObject) {
+            acc.push(Instruction::ApplyContinuous(Box::new(
+                ApplyContinuousSpec::prevent_damage(TurnPreventionSpec {
+                    combat_only,
+                    source: PreventionSourceSpec::AbilitySource,
+                    recipient: PreventionRecipientSpec::AbilitySource,
+                    both_directions: true,
+                }),
+            )));
+            return Ok(true);
+        }
+        if is_obj_anaph(src) && is_obj_anaph(tgt) && acc.target_set {
+            if matches!(
+                acc.target,
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
+            ) && acc.target_bounds.is_none()
+                && !acc.x_target_count
+                && !acc.up_to_x_target_count
+            {
+                acc.push(Instruction::ApplyContinuous(Box::new(
+                    ApplyContinuousSpec::prevent_damage(TurnPreventionSpec {
+                        combat_only,
+                        source: PreventionSourceSpec::TargetPermanent,
+                        recipient: PreventionRecipientSpec::Target,
+                        both_directions: true,
+                    }),
+                )));
+                return Ok(true);
+            }
+        }
+        if matches!(src, v2::SubjectRef::TargetObject { .. })
+            && (src == tgt || is_obj_anaph(tgt))
+            && let Ok((bt, tc)) = atoms::lower_subject_to_target(src, ctx)
+            && matches!(
+                bt,
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
+            )
+            && matches!(tc, v2::TargetCount::Exact(1) | v2::TargetCount::UpTo(1))
+        {
+            acc.register_target(bt, tc)?;
+            acc.push(Instruction::ApplyContinuous(Box::new(
+                ApplyContinuousSpec::prevent_damage(TurnPreventionSpec {
+                    combat_only,
+                    source: PreventionSourceSpec::TargetPermanent,
+                    recipient: PreventionRecipientSpec::Target,
+                    both_directions: true,
+                }),
+            )));
+            return Ok(true);
+        }
+    }
+
+    // Case 2: `"a [color|creature] source of your choice"` -> `PreventionSourceSpec::ChosenSource`.
+    let chosen_choice_filter = match source {
+        Some(v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::ThatSource | v2::AnaphoraRef::ThatObject,
+        )) if !acc.target_set && ctx.last_moved_binding.is_none() => {
+            Some(DamageSourceChoiceFilter::Any)
+        }
+        Some(v2::SubjectRef::Group(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::All(f)) => {
+            is_chosen_damage_source_filter(f)
+        }
+        _ => None,
+    };
+    if let Some(choice_filter) = chosen_choice_filter
+        && let Some(recipient) = lower_turn_prevention_recipient(target, acc, ctx)?
+    {
+        acc.push(Instruction::ApplyContinuous(Box::new(
+            ApplyContinuousSpec::prevent_damage(TurnPreventionSpec {
+                combat_only,
+                source: PreventionSourceSpec::ChosenSource(choice_filter),
+                recipient,
+                both_directions: false,
+            }),
+        )));
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 fn lower_prevent_damage(
     amount: Option<&v2::ValueExpr>,
     combat_only: bool,
@@ -2171,6 +2517,13 @@ fn lower_prevent_damage(
         return Ok(());
     }
 
+    if amount.is_none()
+        && dur == ResolvedDuration::UntilEndOfTurn
+        && try_lower_turn_prevention_spec(combat_only, source, target, acc, ctx)?
+    {
+        return Ok(());
+    }
+
     if let Some(expr) = amount {
         register_value_expr_player_targets(expr, acc, ctx)?;
     }
@@ -2190,6 +2543,13 @@ fn lower_prevent_damage(
             acc.register_target(bt, tc)?;
             (None, true)
         }
+        Some(v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::It
+            | v2::AnaphoraRef::ThatCreature
+            | v2::AnaphoraRef::ThatPermanent
+            | v2::AnaphoraRef::ThatObject
+            | v2::AnaphoraRef::SameTarget,
+        )) if acc.target_set => (None, true),
         Some(_) => {
             return Err(LoweringError::Unsupported("v2:prevent-damage-source"));
         }
@@ -2208,6 +2568,22 @@ fn lower_prevent_damage(
             | v2::AnaphoraRef::EnchantedPermanent
             | v2::AnaphoraRef::EquippedCreature,
         )) => StaticDamageRecipient::AttachedHost,
+        Some(v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::It
+            | v2::AnaphoraRef::ThatCreature
+            | v2::AnaphoraRef::ThatPermanent
+            | v2::AnaphoraRef::ThatObject
+            | v2::AnaphoraRef::SameTarget,
+        )) if acc.target_set => {
+            if matches!(
+                acc.target,
+                BodyTarget::Player { .. } | BodyTarget::AnyTarget(_)
+            ) {
+                StaticDamageRecipient::TargetAny
+            } else {
+                StaticDamageRecipient::TargetObject
+            }
+        }
         Some(v2::SubjectRef::AnyTarget) => {
             acc.register_target(BodyTarget::SINGLE_ANY_TARGET, v2::TargetCount::Exact(1))?;
             StaticDamageRecipient::TargetAny
@@ -2222,6 +2598,7 @@ fn lower_prevent_damage(
                 },
                 *count,
             )?;
+            ctx.last_player_target = Some(ResolvingPlayer::TargetPlayer);
             StaticDamageRecipient::TargetAny
         }
         Some(subj @ v2::SubjectRef::TargetObject { .. }) => {
@@ -2283,6 +2660,31 @@ fn lower_prompt_choice(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    if !ctx.in_loop_player
+        && matches!(
+            chooser,
+            v2::PlayerRef::EachPlayer
+                | v2::PlayerRef::EachOpponent
+                | v2::PlayerRef::EachOtherPlayer
+        )
+    {
+        let selector = atoms::lower_player_ref(chooser, acc, ctx)?;
+        let prev = ctx.in_loop_player;
+        ctx.in_loop_player = true;
+        let sub_res = (|| {
+            let mut sub_acc = BodyAcc::new();
+            lower_prompt_choice(v2::PlayerRef::ThatPlayer, kind, &mut sub_acc, ctx)?;
+            sub_acc.into_body()
+        })();
+        ctx.in_loop_player = prev;
+        let sub_body = sub_res?;
+        acc.push(Instruction::ForEachPlayerQuery {
+            selector: Box::new(selector),
+            bind_player: BindingId::LOOP_PLAYER,
+            body: Box::new(sub_body),
+        });
+        return Ok(());
+    }
     let chooser_sel = atoms::lower_player_ref(chooser, acc, ctx)?;
     match kind {
         v2::ChoiceKind::ChooseCharacteristic(ck) => {
@@ -2393,50 +2795,20 @@ fn lower_prompt_choice(
                         auto_resolve_trivial: false,
                         option_branches: Vec::new(),
                     })));
+                    ctx.last_player_target = Some(ResolvingPlayer::ChosenPlayer);
                     return Ok(());
                 }
                 v2::SubjectRef::TargetPlayer {
                     opponent_only,
                     count,
                 } => {
-                    let (min, max) = match count {
-                        v2::TargetCount::Exact(n) => {
-                            let v = u8::try_from(*n).map_err(|_| {
-                                LoweringError::Unsupported("v2:choose-player-count")
-                            })?;
-                            (v, v)
-                        }
-                        v2::TargetCount::UpTo(n) => {
-                            let v = u8::try_from(*n).map_err(|_| {
-                                LoweringError::Unsupported("v2:choose-player-count")
-                            })?;
-                            (0, v)
-                        }
-                        _ => {
-                            return Err(LoweringError::Unsupported("v2:choose-player-count"));
-                        }
-                    };
-                    let selector = PlayerSelector::Group(if *opponent_only {
-                        AffectedPlayers::EachOpponent
-                    } else {
-                        AffectedPlayers::EachPlayer
-                    });
-                    let bind_to = ctx.alloc_binding()?;
-                    acc.push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
-                        chooser: chooser_sel,
-                        domain: PromptDomain::Players {
-                            selector,
-                            min,
-                            max,
-                            random: false,
+                    acc.register_target(
+                        BodyTarget::Player {
+                            opponents_only: *opponent_only,
                         },
-                        category: ChoiceCategory::Generic,
-                        bind_to,
-                        bind_unchosen: None,
-                        tag_partition: None,
-                        auto_resolve_trivial: false,
-                        option_branches: Vec::new(),
-                    })));
+                        *count,
+                    )?;
+                    ctx.last_player_target = Some(ResolvingPlayer::TargetPlayer);
                     return Ok(());
                 }
                 v2::SubjectRef::TargetObject { .. } | v2::SubjectRef::AnyTarget => {
@@ -2890,6 +3262,34 @@ fn find_first_direct_target<'a>(effects: &'a [v2::Effect]) -> Option<&'a v2::Sub
     None
 }
 
+fn find_first_direct_player_target(effects: &[v2::Effect]) -> Option<BodyTarget> {
+    for eff in effects {
+        match eff {
+            v2::Effect::ZoneOp { actor, .. }
+            | v2::Effect::AdjustLife { player: actor, .. }
+            | v2::Effect::MutatePlayer { player: actor, .. } => match actor {
+                v2::PlayerRef::TargetPlayer => return Some(BodyTarget::SINGLE_PLAYER),
+                v2::PlayerRef::TargetOpponent => return Some(BodyTarget::SINGLE_OPPONENT),
+                _ => {}
+            },
+            v2::Effect::BranchCondition {
+                then_body,
+                else_body,
+                ..
+            } => {
+                if let Some(t) = find_first_direct_player_target(then_body) {
+                    return Some(t);
+                }
+                if let Some(t) = find_first_direct_player_target(else_body) {
+                    return Some(t);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn lower_branch_condition(
     cond: &v2::ConditionExpr,
     then_body: &[v2::Effect],
@@ -2904,7 +3304,8 @@ fn lower_branch_condition(
     // Pre-register a single unambiguous target from `else_body` or `then_body` when either
     // `cond` references that target via anaphora (e.g. "Destroy target artifact if its mana value
     // is 2 or less") or `try_fuse_replace_previous` moved the original targeting effect into
-    // `else_body` while `then_body` references it via anaphora (e.g. Colossal Growth).
+    // `else_body` while `then_body` references it via anaphora (e.g. Colossal Growth, Increasing
+    // Confusion, Hypnotic Cloud).
     if !acc.target_set {
         let pre_target = if !else_body.is_empty() && find_first_direct_target(then_body).is_none() {
             find_first_direct_target(else_body)
@@ -2922,6 +3323,15 @@ fn lower_branch_condition(
                     acc.target,
                     BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
                 );
+            if matches!(acc.target, BodyTarget::Player { .. }) {
+                ctx.last_player_target = Some(ResolvingPlayer::TargetPlayer);
+            }
+        } else if !else_body.is_empty()
+            && find_first_direct_player_target(then_body).is_none()
+            && let Some(pt) = find_first_direct_player_target(else_body)
+        {
+            acc.register_target(pt, v2::TargetCount::Exact(1))?;
+            ctx.last_player_target = Some(ResolvingPlayer::TargetPlayer);
         }
     }
 
@@ -3379,6 +3789,39 @@ fn lower_for_each(
     }
 }
 
+fn value_expr_reads_moved_anaphora(expr: &v2::ValueExpr) -> bool {
+    match expr {
+        v2::ValueExpr::ObjectStat { subject, .. }
+        | v2::ValueExpr::CounterCount { subject, .. }
+        | v2::ValueExpr::ColorCount(subject) => matches!(
+            subject.as_ref(),
+            v2::SubjectRef::Anaphora(
+                v2::AnaphoraRef::ExiledObject
+                    | v2::AnaphoraRef::TheExiledCard
+                    | v2::AnaphoraRef::SacrificedObject
+                    | v2::AnaphoraRef::DestroyedObject
+                    | v2::AnaphoraRef::DiscardedObject
+            )
+        ),
+        v2::ValueExpr::Add(a, b) | v2::ValueExpr::Sub(a, b) | v2::ValueExpr::Mul(a, b) => {
+            value_expr_reads_moved_anaphora(a) || value_expr_reads_moved_anaphora(b)
+        }
+        v2::ValueExpr::Div { expr, .. } => value_expr_reads_moved_anaphora(expr),
+        _ => false,
+    }
+}
+
+fn value_expr_mentions_var(expr: &v2::ValueExpr, var: v2::VarName) -> bool {
+    match expr {
+        v2::ValueExpr::Var(v) => *v == var,
+        v2::ValueExpr::Add(a, b) | v2::ValueExpr::Sub(a, b) | v2::ValueExpr::Mul(a, b) => {
+            value_expr_mentions_var(a, var) || value_expr_mentions_var(b, var)
+        }
+        v2::ValueExpr::Div { expr, .. } => value_expr_mentions_var(expr, var),
+        _ => false,
+    }
+}
+
 fn lower_bind_variable(
     var: v2::VarName,
     expr: &v2::ValueExpr,
@@ -3388,6 +3831,34 @@ fn lower_bind_variable(
 ) -> LowerResult<()> {
     match var {
         v2::VarName::X => {
+            // When `v2` wraps `"Exile/Sacrifice/Destroy ... where X is the exiled/sacrificed/destroyed
+            // object's <stat>, then ..."` with `BindVariable` around the moving action itself,
+            // execute the independent leading move first so `last_moved_binding` is populated
+            // before evaluating `expr` into `X`.
+            if value_expr_reads_moved_anaphora(expr)
+                && let Some(
+                    first @ v2::Effect::ZoneOp {
+                        op:
+                            v2::ZoneOpKind::Exile { .. }
+                            | v2::ZoneOpKind::Sacrifice
+                            | v2::ZoneOpKind::Destroy { .. }
+                            | v2::ZoneOpKind::Discard { .. },
+                        count,
+                        ..
+                    },
+                ) = body.first()
+                && count
+                    .as_ref()
+                    .is_none_or(|c| !value_expr_mentions_var(&c.count, var))
+            {
+                lower_step_with_target_dispatch(first, acc, ctx)?;
+                register_value_expr_player_targets(expr, acc, ctx)?;
+                let val = value::lower_value_expr(expr, ctx)?;
+                acc.push(Instruction::MutatePlayer(Box::new(
+                    MutatePlayerSpec::bind_resolution_x(val),
+                )));
+                return lower_effects_into(&body[1..], acc, ctx);
+            }
             register_value_expr_player_targets(expr, acc, ctx)?;
             let val = value::lower_value_expr(expr, ctx)?;
             acc.push(Instruction::MutatePlayer(Box::new(
@@ -3609,12 +4080,33 @@ fn lower_scoped_duration(
         return Err(LoweringError::Unsupported("v2:scoped-duration-empty"));
     }
     if body.len() > 1 {
-        for eff in body {
+        let mut idx = 0;
+        while idx < body.len() {
+            if let v2::Effect::MutatePlayer {
+                player,
+                mutation:
+                    v2::PlayerMutation::GrantPlayPermission {
+                        cast_only,
+                        subject,
+                        free,
+                    },
+                duration: inner_dur,
+            } = &body[idx]
+                && body.get(idx + 1).is_some_and(is_spend_mana_as_any_type)
+            {
+                let effective = effective_grant_play_duration(outer_duration, inner_dur)?;
+                mutation::lower_grant_play_permission(
+                    *player, *cast_only, subject, *free, true, effective, acc, ctx,
+                )?;
+                idx += 2;
+                continue;
+            }
             let wrapped = v2::Effect::ScopedDuration {
                 duration: outer_duration.clone(),
-                body: vec![eff.clone()],
+                body: vec![body[idx].clone()],
             };
             lower_step_with_target_dispatch(&wrapped, acc, ctx)?;
+            idx += 1;
         }
         return Ok(());
     }

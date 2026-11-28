@@ -759,6 +759,11 @@ fn try_lower_stack_copy(
                 true,
             )))
         }
+        v2::SubjectRef::SelfObject if ctx.is_spell_body => Ok(Some(StackOpSpec::copy_stack(
+            StackCopyTarget::ResolvingSpell,
+            amount,
+            true,
+        ))),
         _ => Ok(None),
     }
 }

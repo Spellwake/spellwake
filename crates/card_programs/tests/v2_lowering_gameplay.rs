@@ -13,8 +13,10 @@ use spellwake_contracts::creature_types::CreatureTypeVocabulary;
 use spellwake_contracts::names::NameRules;
 use spellwake_engine::{
     combat::CombatRules,
+    damage::DamageSourceId,
     effects::{
-        CopyTargetChoice, DecisionReply, OptionalEffectChoice, ResolutionPaymentReply, SeedCard,
+        CopyTargetChoice, DecisionReply, LibraryTopReply, OptionalEffectChoice,
+        ResolutionPaymentReply, SeedCard,
     },
     game::{GameCommand, GameContext, GameId, GameInput, GameState, NativeCandidate, RuleFrame},
     mana::{CastResource, CastingPayment, FloatingMana, ManaPayment, ManaSpend, ManaType},
@@ -90,10 +92,19 @@ fn compile_card(
 
 fn start_game(
     vocab: Arc<CreatureTypeVocabulary>,
-    mut cards: Vec<SeedCard>,
+    cards: Vec<SeedCard>,
     mana: &[(SeatId, ManaType, i64)],
 ) -> GameState {
-    for i in 0..8u64 {
+    start_game_with_padding(vocab, cards, mana, 8)
+}
+
+fn start_game_with_padding(
+    vocab: Arc<CreatureTypeVocabulary>,
+    mut cards: Vec<SeedCard>,
+    mana: &[(SeatId, ManaType, i64)],
+    library_padding: u64,
+) -> GameState {
+    for i in 0..library_padding {
         cards.push(SeedCard {
             card: CardId(1000 + i),
             owner: ALICE,
@@ -788,5 +799,461 @@ fn wave2_redirect_next_damage_and_spell_cast_copy_retarget() {
         life(&game2, BOB),
         16.into(),
         "original 2 damage + copied 2 damage should leave Bob at 16 life"
+    );
+}
+
+#[test]
+fn wave3_fabled_passage_search_last_moved_untaps_land() {
+    let vocab = test_vocab();
+    let fabled_passage = compile_card(
+        &vocab,
+        "Fabled Passage",
+        "Land",
+        None,
+        None,
+        "{T}, Sacrifice this land: Search your library for a basic land card, put it onto the battlefield tapped, then shuffle. Then if you control four or more lands, untap that land.",
+    );
+    let plains = compile_card(
+        &vocab,
+        "Plains",
+        "Basic Land \u{2014} Plains",
+        None,
+        None,
+        "",
+    );
+    let mountain = compile_card(
+        &vocab,
+        "Mountain",
+        "Basic Land \u{2014} Mountain",
+        None,
+        None,
+        "",
+    );
+
+    let mut game = start_game_with_padding(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: fabled_passage,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: plains.clone(),
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: plains.clone(),
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: plains,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryTop,
+                program: mountain,
+            },
+        ],
+        &[],
+        1,
+    );
+
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateUntargetedAbility {
+            source: object(&game, 1).id(),
+            ability: first_activated_id(&game, 1),
+            payment: None,
+        },
+    )
+    .into_state();
+    assert_eq!(object(&game, 1).zone(), ObjectZone::Graveyard(ALICE));
+
+    game = resolve_top(&game);
+    let mountain_lib_id = object(&game, 5).id();
+    let pending = game.pending_decision().expect("expected library search");
+    assert!(matches!(pending.frame(), RuleFrame::LibraryTop(_)));
+    game = reply(
+        &game,
+        DecisionReply::LibraryTop(LibraryTopReply::Search {
+            selected: Some(mountain_lib_id),
+        }),
+    );
+
+    assert_eq!(
+        object(&game, 5).zone(),
+        ObjectZone::Battlefield,
+        "searched basic land should enter battlefield"
+    );
+    assert_eq!(
+        object(&game, 5).tapped(),
+        Some(false),
+        "with 4 lands on battlefield, ObjectQuery::LastMoved should untap the fetched land"
+    );
+}
+
+#[test]
+fn wave3_converge_player_hexproof_adapt_and_support() {
+    let vocab = test_vocab();
+    let converge_draw = compile_card(
+        &vocab,
+        "Painful Truths",
+        "Sorcery",
+        Some("{2}{B}"),
+        None,
+        "Converge \u{2014} You draw X cards and you lose X life, where X is the number of colors of mana spent to cast this spell.",
+    );
+    let hexproof_spell = compile_card(
+        &vocab,
+        "Aegis Ward",
+        "Instant",
+        Some("{W}"),
+        None,
+        "You gain 2 life. You gain hexproof until end of turn.",
+    );
+    let adapter = compile_card(
+        &vocab,
+        "Simic Ooze",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "{1}{G}: Adapt 2.",
+    );
+    let supporter = compile_card(
+        &vocab,
+        "Rally Support",
+        "Sorcery",
+        Some("{1}{W}"),
+        None,
+        "Support 2.",
+    );
+    let ally = compile_card(
+        &vocab,
+        "Field Ally",
+        "Creature \u{2014} Soldier",
+        Some("{W}"),
+        Some(("1", "1")),
+        "",
+    );
+    let bolt = compile_card(
+        &vocab,
+        "Spark Ping",
+        "Instant",
+        Some("{R}"),
+        None,
+        "Spark Ping deals 2 damage to any target.",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: converge_draw,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: hexproof_spell,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: adapter,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: supporter,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: ally,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: BOB,
+                destination: ObjectDestination::Hand,
+                program: bolt,
+            },
+        ],
+        &[
+            (ALICE, ManaType::White, 3),
+            (ALICE, ManaType::Blue, 1),
+            (ALICE, ManaType::Black, 1),
+            (ALICE, ManaType::Green, 2),
+            (ALICE, ManaType::Colourless, 3),
+            (BOB, ManaType::Red, 1),
+        ],
+    );
+
+    // 1. Converge with 3 colors ({W}{U}{B}): draw 3 cards, lose 3 life (20 -> 17).
+    let hand_before = hand_count(&game, ALICE);
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[
+                    (ManaType::White, 1),
+                    (ManaType::Blue, 1),
+                    (ManaType::Black, 1),
+                ]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(life(&game, ALICE), 17.into());
+    assert_eq!(hand_count(&game, ALICE), hand_before + 2);
+
+    // 2. PlayerGrantKeyword (hexproof): Alice gains 2 life (17 -> 19) and Bob cannot target Alice.
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 2).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::White, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(life(&game, ALICE), 19.into());
+    let bob_prio = pass(&game);
+    let illegal_bolt = bob_prio.advance(GameInput {
+        basis: bob_prio.basis().clone(),
+        actor: BOB,
+        command: GameCommand::CastWithResources {
+            spell: object(&bob_prio, 6).id(),
+            target: Some(TargetRef::Player(ALICE)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    });
+    assert!(
+        illegal_bolt.is_err(),
+        "Bob must not be able to target Alice while Alice has hexproof"
+    );
+
+    // 3. Adapt 2: first activation adds two +1/+1 counters (2/2 -> 4/4); second activation adds 0.
+    for _ in 0..2 {
+        game = advance(
+            &game,
+            ALICE,
+            GameCommand::ActivateUntargetedAbility {
+                source: object(&game, 3).id(),
+                ability: first_activated_id(&game, 3),
+                payment: pay_mana(&[(ManaType::Green, 1), (ManaType::Colourless, 1)]),
+            },
+        )
+        .into_state();
+        game = resolve_top(&game);
+    }
+    let ooze_pt = game
+        .execution()
+        .current_characteristics(object(&game, 3).id())
+        .unwrap()
+        .unwrap()
+        .power_toughness
+        .unwrap();
+    assert_eq!(ooze_pt.derived.power, 4.into());
+    assert_eq!(ooze_pt.derived.toughness, 4.into());
+
+    // 4. Support 2: puts one +1/+1 counter on each of two target creatures (4/4 -> 5/5, 1/1 -> 2/2).
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::White, 1), (ManaType::Colourless, 1)]),
+                permanent_targets: vec![
+                    TargetRef::Object(object(&game, 3).id()),
+                    TargetRef::Object(object(&game, 5).id()),
+                ],
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let ooze_pt2 = game
+        .execution()
+        .current_characteristics(object(&game, 3).id())
+        .unwrap()
+        .unwrap()
+        .power_toughness
+        .unwrap();
+    let ally_pt = game
+        .execution()
+        .current_characteristics(object(&game, 5).id())
+        .unwrap()
+        .unwrap()
+        .power_toughness
+        .unwrap();
+    assert_eq!(ooze_pt2.derived.power, 5.into());
+    assert_eq!(ally_pt.derived.power, 2.into());
+}
+
+#[test]
+fn wave3_conditional_alt_cost_and_chosen_source_damage_prevention() {
+    let vocab = test_vocab();
+    let snuff_out = compile_card(
+        &vocab,
+        "Snuff Out",
+        "Instant",
+        Some("{3}{B}"),
+        None,
+        "If you control a Swamp, you may pay 4 life rather than pay this spell's mana cost.\nDestroy target nonblack creature. It can't be regenerated.",
+    );
+    let swamp = compile_card(&vocab, "Swamp", "Basic Land \u{2014} Swamp", None, None, "");
+    let bear = compile_card(
+        &vocab,
+        "Grizzly Bears",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+    let pentagram = compile_card(
+        &vocab,
+        "Pentagram of the Ages",
+        "Artifact",
+        Some("{4}"),
+        None,
+        "{4}, {T}: Prevent all damage that would be dealt to you this turn by a source of your choice.",
+    );
+    let pinger = compile_card(
+        &vocab,
+        "Goblin Pinger",
+        "Creature \u{2014} Goblin",
+        Some("{R}"),
+        Some(("1", "1")),
+        "Haste\n{T}: This creature deals 3 damage to any target.",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: snuff_out,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: swamp,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: bear,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: pentagram,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: pinger,
+            },
+        ],
+        &[(ALICE, ManaType::Colourless, 4)],
+    );
+
+    // 1. Cast Snuff Out for 0 mana + 4 life via conditional alternative cost.
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: Some(TargetRef::Object(object(&game, 3).id())),
+            payment: CastingPayment {
+                use_alternative: true,
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    assert_eq!(life(&game, ALICE), 16.into());
+    game = resolve_top(&game);
+    assert_eq!(object(&game, 3).zone(), ObjectZone::Graveyard(BOB));
+
+    // 2. Activate Pentagram of the Ages, choosing Bob's Goblin Pinger as the prevented source.
+    let pinger_id = object(&game, 5).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateUntargetedAbility {
+            source: object(&game, 4).id(),
+            ability: first_activated_id(&game, 4),
+            payment: pay_mana(&[(ManaType::Colourless, 4)]),
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let pending = game
+        .pending_decision()
+        .expect("expected damage source choice");
+    assert!(matches!(pending.frame(), RuleFrame::DamageSourceChoice(_)));
+    game = reply(
+        &game,
+        DecisionReply::ChooseDamageSource(DamageSourceId::Object(pinger_id)),
+    );
+
+    // Bob activates Goblin Pinger targeting Alice -> all 3 damage prevented (Alice stays at 16).
+    game = pass(&game);
+    game = advance(
+        &game,
+        BOB,
+        GameCommand::ActivateAbility {
+            source: object(&game, 5).id(),
+            ability: first_activated_id(&game, 5),
+            target: TargetRef::Player(ALICE),
+            payment: None,
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        life(&game, ALICE),
+        16.into(),
+        "chosen-source turn prevention should prevent all 3 damage from Goblin Pinger"
     );
 }

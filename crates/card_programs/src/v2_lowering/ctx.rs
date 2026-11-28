@@ -62,6 +62,7 @@ pub(crate) struct LowerCtx<'a> {
     pub last_succeeded_binding: Option<BindingId>,
     pub self_antecedent: bool,
     pub delayed_tag_key: Option<TagKey>,
+    pub is_spell_body: bool,
 }
 
 impl<'a> LowerCtx<'a> {
@@ -90,6 +91,7 @@ impl<'a> LowerCtx<'a> {
             last_succeeded_binding: None,
             self_antecedent: false,
             delayed_tag_key: None,
+            is_spell_body: false,
         }
     }
 

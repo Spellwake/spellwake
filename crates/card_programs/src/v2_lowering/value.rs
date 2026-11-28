@@ -351,8 +351,8 @@ pub(crate) fn lower_value_expr(
                 Err(LoweringError::Unsupported("v2:value:speed-other-player"))
             }
         }
-        v2::ValueExpr::SnowManaSpent => Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::SnowManaSpentToCast,
+        v2::ValueExpr::SnowManaSpent => Ok(EngineValueExpr::EventValue(
+            EventValueKind::SnowManaSpentToCast,
         )),
         v2::ValueExpr::DistinctManaValues(zone) => {
             if zone.zone != v2::ZoneKind::Graveyard {
@@ -377,11 +377,11 @@ pub(crate) fn lower_value_expr(
             };
             Ok(EngineValueExpr::DistinctManaValuesInGraveyard(player))
         }
-        v2::ValueExpr::ManaPaidThisWay => Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::ManaSpentToCast,
-        )),
-        v2::ValueExpr::ColorsOfManaSpent => Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::ColorsSpentToCast,
+        v2::ValueExpr::ManaPaidThisWay => {
+            Ok(EngineValueExpr::EventValue(EventValueKind::ManaSpentToCast))
+        }
+        v2::ValueExpr::ColorsOfManaSpent => Ok(EngineValueExpr::EventValue(
+            EventValueKind::ColorsSpentToCast,
         )),
         v2::ValueExpr::TargetsBeyondFirst => {
             Err(LoweringError::Unsupported("v2:value:targets-beyond-first"))
@@ -925,8 +925,8 @@ fn lower_mana_spent_from_filter(filter: &v2::ObjectFilter) -> LowerResult<Engine
         && filter.subtypes[0].eq_ignore_ascii_case("treasure")
         && filter.required_supertypes.is_empty()
     {
-        return Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::TreasureManaSpentToCast,
+        return Ok(EngineValueExpr::EventValue(
+            EventValueKind::TreasureManaSpentToCast,
         ));
     }
     if filter.subtypes.is_empty()
@@ -934,8 +934,8 @@ fn lower_mana_spent_from_filter(filter: &v2::ObjectFilter) -> LowerResult<Engine
         && filter.all_types.is_empty()
         && filter.any_types.is_empty()
     {
-        return Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::SnowManaSpentToCast,
+        return Ok(EngineValueExpr::EventValue(
+            EventValueKind::SnowManaSpentToCast,
         ));
     }
     if filter.subtypes.is_empty()
@@ -943,8 +943,8 @@ fn lower_mana_spent_from_filter(filter: &v2::ObjectFilter) -> LowerResult<Engine
         && ((filter.all_types == ast::CardTypeMask::CREATURE && filter.any_types.is_empty())
             || (filter.any_types == ast::CardTypeMask::CREATURE && filter.all_types.is_empty()))
     {
-        return Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::CreatureManaSpentToCast,
+        return Ok(EngineValueExpr::EventValue(
+            EventValueKind::CreatureManaSpentToCast,
         ));
     }
 

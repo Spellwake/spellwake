@@ -2882,6 +2882,16 @@ fn lower_anaphora_to_query(
                         }
                         return Ok(ObjectQuery::LastMoved);
                     }
+                    Instruction::SearchLibrary { .. } => {
+                        return Ok(ObjectQuery::LastMoved);
+                    }
+                    Instruction::ApplyContinuous(spec) => {
+                        if let Some(sel) = &spec.selector
+                            && !matches!(sel, ObjectQuery::Empty)
+                        {
+                            return Ok(sel.clone());
+                        }
+                    }
                     _ => {}
                 }
             }
