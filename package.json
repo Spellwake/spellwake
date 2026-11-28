@@ -20,7 +20,7 @@
     "play:dev": "bun run --cwd apps/play dev",
     "play:build": "bun run --cwd apps/play build",
     "play:check": "bun run --cwd apps/play check",
-    "play:test": "bun test ./benchmarks/browser-rendering/src/*.test.ts ./packages/application-contracts/src/custom-cards.test.ts ./apps/play/src/custom-cards/*.test.ts ./apps/play/src/collection/data/*.test.ts ./apps/play/src/data/*.test.ts ./apps/play/src/league/*.test.ts ./apps/play/src/match/*.test.ts ./apps/play/src/messaging/*.test.ts ./apps/play/src/play/*.test.ts ./packages/deck-box/src/*.test.ts ./packages/booster-pack/src/*.test.ts",
+    "play:test": "bun test ./benchmarks/browser-rendering/src/*.test.ts ./packages/application-contracts/src/custom-cards.test.ts ./apps/play/src/cosmetics/*.test.ts ./apps/play/src/custom-cards/*.test.ts ./apps/play/src/collection/data/*.test.ts ./apps/play/src/data/*.test.ts ./apps/play/src/league/*.test.ts ./apps/play/src/match/*.test.ts ./apps/play/src/messaging/*.test.ts ./apps/play/src/play/*.test.ts ./packages/deck-box/src/*.test.ts ./packages/booster-pack/src/*.test.ts",
     "play:verify": "bun run play:check && bun run play:test && bun run play:build",
     "play:qualify-frame": "bun apps/play/scripts/qualify-frame.ts",
     "play:qualify-account": "bun apps/play/scripts/qualify-account.ts",
@@ -49,8 +49,6 @@
     "release:assets": "bun apps/play/scripts/fetch-release-assets.ts",
     "web:release:check": "bun apps/play/scripts/public-web-check.ts",
     "controls:build": "bun run --cwd apps/control-gallery build",
-    "controls:guidance:replay": "bun apps/control-gallery/scripts/guidance.ts",
-    "controls:guidance": "modern-web-guidance",
     "controls:check": "bun run --cwd apps/control-gallery check"
   },
   "devDependencies": {
@@ -61,7 +59,6 @@
     "@types/react-dom": "latest",
     "eslint": "10.14.0",
     "eslint-config-prettier": "10.1.8",
-    "modern-web-guidance": "1.0.1",
     "prettier": "latest",
     "typescript": "^5.9.3",
     "typescript-eslint": "8.72.1"

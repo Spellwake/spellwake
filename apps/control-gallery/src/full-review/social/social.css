@@ -24,7 +24,7 @@
     Georgia,
     serif;
   background: #05111c
-    url("../../../../../.impeccable/review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
+    url("../../../../../assets/ui-review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
     center/cover;
   isolation: isolate;
   color-scheme: dark;
@@ -978,7 +978,7 @@
   transform-origin: top left;
   background:
     linear-gradient(135deg, #0a151dde, #031019ed),
-    url("../../../../../.impeccable/review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
+    url("../../../../../assets/ui-review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
       center/cover;
   font:
     17px/1.26 Lora,
@@ -1229,7 +1229,7 @@
 .soc-scene[data-social-view="SP-09"] .soc-artboard > div {
   background:
     linear-gradient(#03101a60, #05111a75),
-    url("../../../../../.impeccable/review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
+    url("../../../../../assets/ui-review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
       center/cover;
 }
 .soc-read-profile > .soc-x,
@@ -1286,7 +1286,7 @@
 .soc-scene[data-social-view="ML-11"] .soc-artboard > div {
   background:
     linear-gradient(#04101af2, #06111ad9),
-    url("../../../../../.impeccable/review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
+    url("../../../../../assets/ui-review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
       center/cover;
 }
 .soc-scene[data-social-view="ML-11"] .soc-place h1 {
@@ -1331,7 +1331,7 @@
   > div {
   background:
     linear-gradient(#05111bab, #061019bd),
-    url("../../../../../.impeccable/review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
+    url("../../../../../assets/ui-review/open-play/approved-screens/implementation/social-screen-art/courtyard.webp")
       center/cover;
 }
 .soc-scene[data-social-view="PC-04"] .soc-place h2 {

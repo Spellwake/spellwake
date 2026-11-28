@@ -194,7 +194,7 @@ export type PngMetadataExtractResult =
 /**
  * Extract and validate a Spellwake `iTXt` (`spellwake-card-v1`) chunk from PNG bytes.
  * Returns `{ kind: "none" }` cleanly for ordinary external PNGs so the UI can fall back
- * to Codex Vision OCR.
+ * to Vision OCR.
  */
 export function extractMetadataFromPng(pngBytes: Uint8Array): PngMetadataExtractResult {
   if (!isPngSignature(pngBytes)) {

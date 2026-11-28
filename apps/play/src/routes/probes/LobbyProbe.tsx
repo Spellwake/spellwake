@@ -57,7 +57,7 @@ const host: Ready = {
     seat({
       id: "ai",
       kind: "ai",
-      name: "AI player",
+      name: "AI Bot",
       isReady: true,
       deck: "random",
       difficulty: "normal",
@@ -118,7 +118,7 @@ const member: Ready = {
     seat({
       id: "ai",
       kind: "ai",
-      name: "AI player",
+      name: "AI Bot",
       isReady: true,
       deck: "random",
       difficulty: "normal",

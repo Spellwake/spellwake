@@ -45,7 +45,16 @@ export const duplicateDeckAckSchema = z.object({
 
 export const richCosmeticSchema = z.object({
   id: identifierSchema,
-  kind: z.enum(["back", "sleeve", "dice", "playmat", "pet"]),
+  kind: z.enum([
+    "back",
+    "sleeve",
+    "dice",
+    "playmat",
+    "pet",
+    "card_effect",
+    "sleeve_effect",
+    "playmat_effect",
+  ]),
   name: z.string(),
   description: z.string().nullable(),
   assetRef: z.string(),

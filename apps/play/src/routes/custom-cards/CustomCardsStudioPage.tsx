@@ -1654,10 +1654,10 @@ export function CustomCardsStudioPage({
               }}
             >
               <span style={{ fontSize: "12.5px", color: "#ebe1cf" }}>
-                Let AI also play this custom card
+                Let bots also play this custom card
               </span>
               <SettingSwitch
-                label="Let AI also play this custom card"
+                label="Let bots also play this custom card"
                 checked={aiPlaysCustom}
                 onCheckedChange={setAiPlaysCustom}
               />

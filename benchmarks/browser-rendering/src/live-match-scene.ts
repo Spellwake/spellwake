@@ -21,15 +21,31 @@ import {
   SLEEVE_WIDTH,
 } from "./card-geometry";
 import { createSceneLifecycle } from "./scene-lifecycle";
+import {
+  createPlaymatThreeTexture,
+  resolvePlaymat,
+} from "./playmats";
+import type { PlaymatEffectSelection } from "./playmat-effects";
+import {
+  cardWearTierSpec,
+  createCardWearProfile,
+  createCardWearTextures,
+  createNestedSleeveStackPlate,
+  createSleeveWearProfile,
+  createSleeveWearTextures,
+  createWornSleeveGeometries,
+  normalizeWearSeed,
+  patchCardFaceMaterial,
+  patchSleeveBackMaterial,
+  patchSleeveFrontMaterial,
+  sleeveWearTierSpec,
+  type CardWearUniforms,
+  type SleeveWearUniforms,
+  type WearEffectSelection,
+} from "./wear-effects";
 
 export type LiveCardRim =
-  | "playable"
-  | "offered"
-  | "teal"
-  | "eligible"
-  | "copper"
-  | "ivory"
-  | "gold";
+  "playable" | "offered" | "teal" | "eligible" | "copper" | "ivory" | "gold";
 
 export type LiveCardFallback = {
   name: string;
@@ -81,8 +97,20 @@ export type ProjectedCardRect = {
 };
 
 export type LiveMatchSceneOptions = {
-  /** Publication-cleared sleeve SVG URL (e.g. `${BASE_URL}cards/spellwake-sleeve-midnight.svg`). */
+  /** Sleeve image URL. Remote textures must allow cross-origin access. */
   sleeveUrl: string;
+  /** Use this texture if the selected sleeve cannot be loaded. */
+  sleeveFallbackUrl?: string;
+  /** Optional equipped Card Effect (defaults to Near Mint / bypassed). */
+  cardEffect?: WearEffectSelection | undefined;
+  /** Optional equipped Sleeve Effect (defaults to Near Mint / bypassed). */
+  sleeveEffect?: WearEffectSelection | undefined;
+  /** Optional equipped Playmat ID, slug, or asset ref (null/undefined = bare tabletop). */
+  playmatId?: string | null | undefined;
+  /** Optional equipped Playmat Effect (Clean = zero overhead / bypassed). */
+  playmatEffect?: PlaymatEffectSelection | undefined;
+  /** Base URL prefix where raster playmat artwork (`playmats/<slug>.jpg`) is served. */
+  playmatAssetBaseUrl?: string | undefined;
   /** Emitted whenever rendered 3D card screen projections change. */
   onProject?: (rects: ReadonlyMap<string, ProjectedCardRect>) => void;
   /** Optional abort signal bound to host lifecycle. */
@@ -115,7 +143,9 @@ const RIM_COLORS: Record<LiveCardRim, number> = {
 
 /** Pure helper: compute camera distance for the table plane at `y = 0`. */
 export function tableCameraDistance(fovDeg = FOV_DEG): number {
-  return WORLD_TABLE_HEIGHT / 2 / Math.tan(THREE.MathUtils.degToRad(fovDeg / 2));
+  return (
+    WORLD_TABLE_HEIGHT / 2 / Math.tan(THREE.MathUtils.degToRad(fovDeg / 2))
+  );
 }
 
 /** Pure helper: map a stage CSS pixel placement onto world coordinates at `y = 0`. */
@@ -243,7 +273,9 @@ function createFeltTexture(): THREE.CanvasTexture {
 }
 
 /** Programmatic card-face fallback texture when no printing image is available. */
-function createFallbackCardTexture(fallback: LiveCardFallback): THREE.CanvasTexture {
+function createFallbackCardTexture(
+  fallback: LiveCardFallback,
+): THREE.CanvasTexture {
   const width = 400;
   const height = 560;
   const canvas = document.createElement("canvas");
@@ -355,7 +387,9 @@ export function mountLiveMatchScene(
     antialias: true,
     powerPreference: "high-performance",
   });
-  renderer.setPixelRatio(Math.min(2, Math.max(window.devicePixelRatio || 1, 1)));
+  renderer.setPixelRatio(
+    Math.min(2, Math.max(window.devicePixelRatio || 1, 1)),
+  );
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.9;
@@ -419,6 +453,106 @@ export function mountLiveMatchScene(
   tableMesh.receiveShadow = true;
   scene.add(tableMesh);
 
+  // Optional equipped physical 3D playmat resting on the tabletop (null = bare table).
+  let cancelPlaymatLoad: (() => void) | null = null;
+  const equippedPlaymat = resolvePlaymat(options.playmatId);
+  if (equippedPlaymat) {
+    const matW = 44.8;
+    const matH = 28.0;
+    const matR = 0.88;
+    const matShape = new THREE.Shape();
+    const hx = matW / 2;
+    const hy = matH / 2;
+    matShape.moveTo(-hx + matR, -hy);
+    matShape.lineTo(hx - matR, -hy);
+    matShape.quadraticCurveTo(hx, -hy, hx, -hy + matR);
+    matShape.lineTo(hx, hy - matR);
+    matShape.quadraticCurveTo(hx, hy, hx - matR, hy);
+    matShape.lineTo(-hx + matR, hy);
+    matShape.quadraticCurveTo(-hx, hy, -hx, hy - matR);
+    matShape.lineTo(-hx, -hy + matR);
+    matShape.quadraticCurveTo(-hx, -hy, -hx + matR, -hy);
+
+    const playmatTopGeo = ownGeo(
+      createMappedFaceGeometry(matShape, matW, matH),
+    );
+    const playmatBaseGeo = ownGeo(
+      new THREE.ExtrudeGeometry(matShape, {
+        depth: 0.055,
+        bevelEnabled: false,
+        curveSegments: 10,
+      }),
+    );
+    const { texture: playmatTex, cancel } = createPlaymatThreeTexture(
+      equippedPlaymat,
+      {
+        ...(options.playmatAssetBaseUrl
+          ? { assetBaseUrl: options.playmatAssetBaseUrl }
+          : {}),
+        ...(options.playmatEffect && options.playmatEffect.id !== "clean"
+          ? { effect: options.playmatEffect }
+          : {}),
+        onReady: () => {
+          if (!lifetime.disposed) scheduleRender();
+        },
+      },
+    );
+    cancelPlaymatLoad = cancel;
+    playmatTex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    ownTex(playmatTex);
+
+    const playmatTopMat = ownMat(
+      new THREE.MeshStandardMaterial({
+        map: playmatTex,
+        roughness:
+          equippedPlaymat.group === "material" &&
+          equippedPlaymat.slug.includes("marble")
+            ? 0.42
+            : 0.88,
+        metalness: 0.0,
+      }),
+    );
+    const playmatBaseMat = ownMat(
+      new THREE.MeshStandardMaterial({
+        color: 0x101318,
+        roughness: 0.92,
+        metalness: 0.0,
+      }),
+    );
+
+    const playmatBaseMesh = new THREE.Mesh(playmatBaseGeo, playmatBaseMat);
+    playmatBaseMesh.rotation.x = -Math.PI / 2;
+    playmatBaseMesh.position.y = 0.002;
+    playmatBaseMesh.castShadow = true;
+    playmatBaseMesh.receiveShadow = true;
+    scene.add(playmatBaseMesh);
+
+    const playmatTopMesh = new THREE.Mesh(playmatTopGeo, playmatTopMat);
+    playmatTopMesh.rotation.x = -Math.PI / 2;
+    playmatTopMesh.position.y = 0.06;
+    playmatTopMesh.receiveShadow = true;
+    scene.add(playmatTopMesh);
+  }
+
+  // Resolve equipped Card Effect and Sleeve Effect (Near Mint bypasses wear cleanly).
+  const cardSpec = cardWearTierSpec(options.cardEffect?.tier ?? "nm");
+  const sleeveSpec = sleeveWearTierSpec(options.sleeveEffect?.tier ?? "nm");
+  const hasCardWear = cardSpec.wear > 0.001 || cardSpec.bend > 0.001;
+  const hasSleeveWear =
+    sleeveSpec.cornerBend > 0.001 ||
+    sleeveSpec.grimeHaze > 0.001 ||
+    sleeveSpec.lipWave > 0.001;
+  const cardWearSeed = normalizeWearSeed(
+    options.cardEffect?.seed,
+    cardSpec.defaultSeed || 456,
+  );
+  const sleeveWearSeed = normalizeWearSeed(
+    options.sleeveEffect?.seed,
+    sleeveSpec.defaultSeed || 523,
+  );
+  const effectiveStackLayerStep =
+    STACK_LAYER_STEP * (1 + (hasSleeveWear ? sleeveSpec.lipWave * 0.22 : 0));
+
   // Shared approved card, pressed soft-sleeve, rim, and instanced deck-layer geometries.
   const cardShape = createCardSilhouette();
   const faceGeo = ownGeo(
@@ -430,19 +564,112 @@ export function mountLiveMatchScene(
   ownGeo(sleeveGeos.stock);
   ownGeo(sleeveGeos.seam);
   ownGeo(sleeveGeos.frontFilm);
-  const deckLayerGeo = ownGeo(createDeckLayerGeometry());
   const rimGeo = ownGeo(createRimGeometry(0.085));
+
+  const sleeveWearProfile = hasSleeveWear
+    ? createSleeveWearProfile(sleeveWearSeed)
+    : null;
+  const wornBoardSleeveGeos = sleeveWearProfile
+    ? createWornSleeveGeometries(
+        sleeveWearProfile,
+        sleeveSpec.cornerBend,
+        sleeveSpec.lipWave,
+        false,
+      )
+    : null;
+  const wornDeckSleeveGeos = sleeveWearProfile
+    ? createWornSleeveGeometries(
+        sleeveWearProfile,
+        sleeveSpec.cornerBend,
+        sleeveSpec.lipWave,
+        true,
+      )
+    : null;
+  if (wornBoardSleeveGeos) {
+    ownGeo(wornBoardSleeveGeos.frontFilm);
+    ownGeo(wornBoardSleeveGeos.backFace);
+    ownGeo(wornBoardSleeveGeos.seam);
+  }
+  if (wornDeckSleeveGeos) {
+    ownGeo(wornDeckSleeveGeos.frontFilm);
+    ownGeo(wornDeckSleeveGeos.backFace);
+    ownGeo(wornDeckSleeveGeos.seam);
+  }
+  const deckLayerGeo = ownGeo(
+    sleeveWearProfile
+      ? createNestedSleeveStackPlate(
+          sleeveWearProfile,
+          sleeveSpec.cornerBend,
+          sleeveSpec.lipWave,
+        )
+      : createDeckLayerGeometry(),
+  );
+
+  const cardWearPack = hasCardWear
+    ? createCardWearTextures(createCardWearProfile(cardWearSeed), false)
+    : null;
+  if (cardWearPack) {
+    ownTex(cardWearPack.maskTex);
+    ownTex(cardWearPack.normalTex);
+  }
+  const cardWearUniforms: CardWearUniforms | null = cardWearPack
+    ? {
+        wearAmount: { value: cardSpec.wear },
+        bendAmount: { value: Math.min(cardSpec.bend, 0.14) },
+        wearMask: { value: cardWearPack.maskTex },
+      }
+    : null;
+
+  const sleeveWearFrontPack = sleeveWearProfile
+    ? createSleeveWearTextures(sleeveWearProfile, false)
+    : null;
+  const sleeveWearBackPack = sleeveWearProfile
+    ? createSleeveWearTextures(sleeveWearProfile, true)
+    : null;
+  if (sleeveWearFrontPack) {
+    ownTex(sleeveWearFrontPack.maskTex);
+    ownTex(sleeveWearFrontPack.normalTex);
+  }
+  if (sleeveWearBackPack) {
+    ownTex(sleeveWearBackPack.maskTex);
+    ownTex(sleeveWearBackPack.normalTex);
+  }
+  const sleeveWearUniforms: SleeveWearUniforms | null =
+    sleeveWearFrontPack && sleeveWearBackPack
+      ? {
+          bend: { value: sleeveSpec.cornerBend },
+          grime: { value: sleeveSpec.grimeHaze },
+          maskFront: { value: sleeveWearFrontPack.maskTex },
+          maskBack: { value: sleeveWearBackPack.maskTex },
+        }
+      : null;
 
   // Shared materials.
   const stockMat = ownMat(
-    new THREE.MeshStandardMaterial({ color: 0x8c8a7d, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({
+      color: hasCardWear
+        ? new THREE.Color(
+            0.55 + cardSpec.wear * 0.14,
+            0.54 + cardSpec.wear * 0.08,
+            0.49 + cardSpec.wear * 0.01,
+          )
+        : 0x8c8a7d,
+      roughness: 0.92,
+    }),
   );
   const sleeveStockMat = ownMat(
     new THREE.MeshStandardMaterial({ color: 0x182233, roughness: 0.68 }),
   );
+  const sleeveSeamColor = new THREE.Color(0x1d283a);
+  if (hasSleeveWear) {
+    sleeveSeamColor.lerp(
+      new THREE.Color(0x4a525c),
+      sleeveSpec.grimeHaze * 0.25,
+    );
+  }
   const sleeveSeamMat = ownMat(
     new THREE.MeshPhysicalMaterial({
-      color: 0x1d283a,
+      color: sleeveSeamColor,
       roughness: 0.52,
       specularIntensity: 0.35,
       side: THREE.DoubleSide,
@@ -450,17 +677,30 @@ export function mountLiveMatchScene(
   );
   const sleeveFrontMat = ownMat(
     new THREE.MeshPhysicalMaterial({
-      color: 0xffffff,
+      color: hasSleeveWear ? 0xf4f8ff : 0xffffff,
       transparent: true,
-      opacity: 0.035,
-      roughness: 0.22,
-      clearcoat: 0.22,
-      clearcoatRoughness: 0.24,
+      opacity: hasSleeveWear ? 0.04 : 0.035,
+      roughness: hasSleeveWear ? 0.1 : 0.22,
+      clearcoat: hasSleeveWear ? 0.85 : 0.22,
+      clearcoatRoughness: hasSleeveWear ? 0.1 : 0.24,
       depthWrite: false,
     }),
   );
+  if (sleeveWearUniforms && sleeveWearFrontPack) {
+    patchSleeveFrontMaterial(
+      sleeveFrontMat,
+      sleeveWearUniforms,
+      sleeveWearFrontPack.normalTex,
+      sleeveSpec.cornerBend,
+      sleeveSpec.grimeHaze,
+    );
+  }
+  const deckLayerColor = new THREE.Color(0x202c3f);
+  if (hasSleeveWear) {
+    deckLayerColor.lerp(new THREE.Color(0x3a434f), sleeveSpec.grimeHaze * 0.45);
+  }
   const deckLayerMat = ownMat(
-    new THREE.MeshStandardMaterial({ color: 0x202c3f, roughness: 0.72 }),
+    new THREE.MeshStandardMaterial({ color: deckLayerColor, roughness: 0.72 }),
   );
 
   const textureLoader = new THREE.TextureLoader();
@@ -477,8 +717,17 @@ export function mountLiveMatchScene(
       envMapIntensity: 0.25,
     }),
   );
+  if (sleeveWearUniforms && sleeveWearBackPack) {
+    patchSleeveBackMaterial(
+      sleeveBackMat,
+      sleeveWearUniforms,
+      sleeveWearBackPack.normalTex,
+      sleeveSpec.cornerBend,
+      sleeveSpec.grimeHaze,
+    );
+  }
 
-  // Load the publication-cleared Spellwake sleeve SVG asynchronously.
+  // Load the selected sleeve asynchronously.
   let dirty = true;
   let rafId = 0;
   let lastTick = 0;
@@ -503,7 +752,7 @@ export function mountLiveMatchScene(
     rafId = requestAnimationFrame(renderFrame);
   }
 
-  // Rasterize the publication-cleared vector sleeve onto a crisp HiDPI canvas texture
+  // Rasterize the sleeve onto a HiDPI canvas texture
   // so WebGL2 mipmaps and anisotropic filtering work deterministically across browsers.
   const sleeveImg = new Image();
   sleeveImg.crossOrigin = "anonymous";
@@ -524,15 +773,26 @@ export function mountLiveMatchScene(
     sleeveBackMat.needsUpdate = true;
     scheduleRender();
   };
+  let sleeveUrl = options.sleeveUrl;
   sleeveImg.onerror = () => {
+    if (lifetime.disposed) return;
+    if (options.sleeveFallbackUrl && options.sleeveFallbackUrl !== sleeveUrl) {
+      console.warn(
+        "Unable to load sleeve texture, using default sleeve",
+        sleeveUrl,
+      );
+      sleeveUrl = options.sleeveFallbackUrl;
+      sleeveImg.src = sleeveUrl;
+      return;
+    }
     if (!lifetime.disposed) {
       console.warn(
         "Unable to load sleeve texture, using solid fallback",
-        options.sleeveUrl,
+        sleeveUrl,
       );
     }
   };
-  sleeveImg.src = options.sleeveUrl;
+  sleeveImg.src = sleeveUrl;
 
   function fallbackTextureFor(fallback: LiveCardFallback): THREE.Texture {
     const cacheKey = `${fallback.name}|${fallback.typeLine ?? ""}|${fallback.stats ?? ""}`;
@@ -544,7 +804,11 @@ export function mountLiveMatchScene(
     return created;
   }
 
-  function requestFaceTexture(url: string, actor: CardActor, sourceKey: string): void {
+  function requestFaceTexture(
+    url: string,
+    actor: CardActor,
+    sourceKey: string,
+  ): void {
     const cached = urlTextures.get(url);
     if (cached) {
       actor.faceMaterial.map = cached;
@@ -572,7 +836,8 @@ export function mountLiveMatchScene(
       urlPending.set(url, promise);
     }
     void promise.then((tex) => {
-      if (lifetime.disposed || !tex || actor.faceSourceKey !== sourceKey) return;
+      if (lifetime.disposed || !tex || actor.faceSourceKey !== sourceKey)
+        return;
       actor.faceMaterial.map = tex;
       actor.faceMaterial.color.setHex(0xffffff);
       actor.faceMaterial.needsUpdate = true;
@@ -588,35 +853,70 @@ export function mountLiveMatchScene(
     stockMesh.receiveShadow = card.zone !== "hand";
     group.add(stockMesh);
 
-    const sleeveStockMesh = new THREE.Mesh(sleeveGeos.stock, sleeveStockMat);
-    sleeveStockMesh.castShadow = card.zone !== "hand";
-    group.add(sleeveStockMesh);
+    const activeWornSleeve =
+      card.kind === "library" ? wornDeckSleeveGeos : wornBoardSleeveGeos;
+    if (activeWornSleeve) {
+      const sleeveSeamMesh = new THREE.Mesh(
+        activeWornSleeve.seam,
+        sleeveSeamMat,
+      );
+      sleeveSeamMesh.castShadow = card.zone !== "hand";
+      group.add(sleeveSeamMesh);
 
-    const sleeveSeamMesh = new THREE.Mesh(sleeveGeos.seam, sleeveSeamMat);
-    group.add(sleeveSeamMesh);
+      const sleeveBackMesh = new THREE.Mesh(
+        activeWornSleeve.backFace,
+        sleeveBackMat,
+      );
+      sleeveBackMesh.castShadow = card.zone !== "hand";
+      sleeveBackMesh.receiveShadow = card.zone !== "hand";
+      group.add(sleeveBackMesh);
+    } else {
+      const sleeveStockMesh = new THREE.Mesh(sleeveGeos.stock, sleeveStockMat);
+      sleeveStockMesh.castShadow = card.zone !== "hand";
+      group.add(sleeveStockMesh);
 
-    const sleeveBackMesh = new THREE.Mesh(sleeveGeos.backFace, sleeveBackMat);
-    sleeveBackMesh.rotation.y = Math.PI;
-    sleeveBackMesh.position.z = -0.0265 * CARD_THICKNESS_SCALE;
-    group.add(sleeveBackMesh);
+      const sleeveSeamMesh = new THREE.Mesh(sleeveGeos.seam, sleeveSeamMat);
+      group.add(sleeveSeamMesh);
+
+      const sleeveBackMesh = new THREE.Mesh(sleeveGeos.backFace, sleeveBackMat);
+      sleeveBackMesh.rotation.y = Math.PI;
+      sleeveBackMesh.position.z = -0.0265 * CARD_THICKNESS_SCALE;
+      group.add(sleeveBackMesh);
+    }
 
     const faceMaterial = ownMat(
       new THREE.MeshPhysicalMaterial({
         color: 0xd8d0be,
-        roughness: 0.78,
+        roughness: hasCardWear ? 0.48 : 0.78,
         metalness: 0,
-        specularIntensity: 0.1,
-        clearcoat: 0.02,
-        clearcoatRoughness: 0.6,
-        envMapIntensity: 0.12,
+        specularIntensity: hasCardWear ? 0.24 : 0.1,
+        clearcoat: hasCardWear ? 0.1 : 0.02,
+        clearcoatRoughness: hasCardWear ? 0.34 : 0.6,
+        envMapIntensity: hasCardWear ? 0.3 : 0.12,
       }),
     );
+    if (cardWearUniforms && cardWearPack) {
+      patchCardFaceMaterial(
+        faceMaterial,
+        cardWearUniforms,
+        cardWearPack.normalTex,
+        cardSpec.wear,
+        Math.min(cardSpec.bend, 0.14),
+      );
+    }
     const faceMesh = new THREE.Mesh(faceGeo, faceMaterial);
     faceMesh.position.z = 0.0096 * CARD_THICKNESS_SCALE;
     group.add(faceMesh);
 
-    const frontFilmMesh = new THREE.Mesh(sleeveGeos.frontFilm, sleeveFrontMat);
-    frontFilmMesh.position.z = 0.024 * CARD_THICKNESS_SCALE;
+    const frontFilmMesh = new THREE.Mesh(
+      activeWornSleeve ? activeWornSleeve.frontFilm : sleeveGeos.frontFilm,
+      sleeveFrontMat,
+    );
+    if (activeWornSleeve) {
+      frontFilmMesh.renderOrder = 3;
+    } else {
+      frontFilmMesh.position.z = 0.024 * CARD_THICKNESS_SCALE;
+    }
     group.add(frontFilmMesh);
 
     const rimMaterial = ownMat(
@@ -686,14 +986,15 @@ export function mountLiveMatchScene(
     // Face-up cards lay with +Z up, so stack plates extend into -Z (toward the table).
     // Face-down libraries flip 180° around Y, so -Z points up and stack plates extend into +Z.
     const stackDir = faceDown ? 1 : -1;
+    const jitterScale = hasSleeveWear ? 1 + sleeveSpec.cornerBend * 1.15 : 1;
     for (let i = 0; i < desiredPlates; i++) {
       const j = stackJitter(i);
       dummy.position.set(
-        j.dx,
-        j.dz,
-        stackDir * ((i + 1) * STACK_LAYER_STEP + 0.022),
+        j.dx * jitterScale,
+        j.dz * jitterScale,
+        stackDir * ((i + 1) * effectiveStackLayerStep + 0.024),
       );
-      dummy.rotation.set(0, 0, j.rot);
+      dummy.rotation.set(0, 0, j.rot * jitterScale);
       dummy.updateMatrix();
       inst.setMatrixAt(i, dummy.matrix);
     }
@@ -814,7 +1115,8 @@ export function mountLiveMatchScene(
           card.width,
           state.stage,
         );
-        const stackHeight = actor.stackCount * STACK_LAYER_STEP * mapped.scale;
+        const stackHeight =
+          actor.stackCount * effectiveStackLayerStep * mapped.scale;
         const hoverLift = isHovered ? 0.16 : 0;
         const layerY =
           0.035 + stackHeight + (card.order % 40) * 0.002 + hoverLift;
@@ -991,6 +1293,7 @@ export function mountLiveMatchScene(
   });
 
   lifetime.add(() => {
+    cancelPlaymatLoad?.();
     sleeveImg.onload = null;
     sleeveImg.onerror = null;
     if (rafId !== 0) {

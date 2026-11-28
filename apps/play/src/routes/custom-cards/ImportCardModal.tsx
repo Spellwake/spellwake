@@ -32,7 +32,7 @@ export interface ImportCardModalProps {
   open: boolean;
   onClose: () => void;
   onImport: (payload: ImportedStudioCardPayload) => void;
-  /** Runs server-side Codex Vision OCR in connected mode, or simulated preview OCR in preview mode. */
+  /** Runs server-side Vision OCR in connected mode, or simulated preview OCR in preview mode. */
   onRunVisionOcr: (input: {
     sourceKind: "external_png" | "external_image";
     imageDataUrl: string;
@@ -254,7 +254,7 @@ export function ImportCardModal({
         zoom: 1,
       }));
       setStaged({
-        sourceLabel: "Codex Vision OCR import",
+        sourceLabel: "Vision OCR import",
         layout: extracted.layout,
         rarity: extracted.rarity,
         collectorNote: extracted.collectorNote,

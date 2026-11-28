@@ -1,5 +1,7 @@
 import {
+  useEffect,
   useId,
+  useRef,
   type CSSProperties,
   type KeyboardEvent,
   type ReactElement,
@@ -11,18 +13,36 @@ import {
   Ban,
   Box,
   Check,
+  Droplets,
   GalleryVerticalEnd,
+  Layers,
   PawPrint,
   RectangleVertical,
+  RotateCcw,
   Scroll,
+  Shuffle,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { LoadingShape, LoadingState } from "@spellwake/ui";
+import {
+  paintPlaymatCanvas,
+  resolvePlaymat,
+} from "spellwake-renderer-benchmark/playmats";
+import type { PlaymatEffectId } from "spellwake-renderer-benchmark/playmat-effects";
+import {
+  paintCardWearPreview,
+  paintSleeveWearPreview,
+  type WearTierId,
+} from "spellwake-renderer-benchmark/wear-effects";
 import {
   KIND_LABEL,
   type CosmeticItem,
   type CosmeticKind,
 } from "../../cosmetics/cosmetic-sources";
+import { usePlaymatEffectSeeds } from "../../cosmetics/playmat-effects";
+import { useActivePlaymat } from "../../cosmetics/use-active-playmat";
+import { useWearSeeds, type WearTarget } from "../../cosmetics/wear-effects";
 import { motionLanguage as m } from "../../lib/motion";
 import * as s from "./cosmetics.css";
 
@@ -31,6 +51,9 @@ const KIND_ICON: Readonly<Record<CosmeticKind, LucideIcon>> = {
   back: RectangleVertical,
   dice: Box,
   playmat: Scroll,
+  card_effect: Sparkles,
+  sleeve_effect: Layers,
+  playmat_effect: Droplets,
   pet: PawPrint,
 };
 /** Pip positions for the five face, which the approved dice show. */
@@ -42,24 +65,265 @@ const FIVE: readonly (readonly [number, number])[] = [
   [72, 72],
 ];
 
+function WearLookCanvas({
+  target,
+  tier,
+  size,
+}: {
+  target: WearTarget;
+  tier: WearTierId;
+  size: "tile" | "preview";
+}): ReactElement {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const { seedFor } = useWearSeeds();
+  const seed = seedFor(target, tier);
+  const width = size === "preview" ? 200 : 120;
+  const height = size === "preview" ? 280 : 168;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    if (target === "card") {
+      paintCardWearPreview(ctx, width, height, tier, seed);
+    } else {
+      paintSleeveWearPreview(ctx, width, height, tier, seed);
+    }
+  }, [target, tier, seed, width, height]);
+
+  return (
+    <span className={s.wearFrame} aria-hidden="true">
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        className={s.wearCanvas}
+      />
+    </span>
+  );
+}
+
+/** Pattern seed display + Randomize / Reset buttons for wear and playmat effects. */
+export function WearSeedControls({
+  item,
+}: {
+  item: CosmeticItem | null;
+}): ReactElement | null {
+  const wearSeeds = useWearSeeds();
+  const playmatSeeds = usePlaymatEffectSeeds();
+
+  if (item?.look && "playmatEffect" in item.look) {
+    const effectId = item.look.playmatEffect.id;
+    if (effectId === "clean") return null;
+    const seed = playmatSeeds.seedFor(effectId);
+    const customized = playmatSeeds.isCustomSeed(effectId);
+    return (
+      <div className={s.seedControls}>
+        <span className={s.seedTag}>
+          Pattern #{seed}
+          {customized ? " · Custom" : " · Default"}
+        </span>
+        <div className={s.seedActions}>
+          <button
+            type="button"
+            className={s.seedButton}
+            onClick={() => playmatSeeds.randomizeSeed(effectId)}
+          >
+            <Shuffle aria-hidden="true" />
+            <span>Randomize</span>
+          </button>
+          {customized && (
+            <button
+              type="button"
+              className={s.seedButton}
+              onClick={() => playmatSeeds.resetSeed(effectId)}
+            >
+              <RotateCcw aria-hidden="true" />
+              <span>Reset</span>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (!item?.look || !("wear" in item.look)) return null;
+  const { target, tier } = item.look.wear;
+  if (tier === "nm") return null;
+  const seed = wearSeeds.seedFor(target, tier);
+  const customized = wearSeeds.isCustomSeed(target, tier);
+  return (
+    <div className={s.seedControls}>
+      <span className={s.seedTag}>
+        Pattern #{seed}
+        {customized ? " · Custom" : " · Default"}
+      </span>
+      <div className={s.seedActions}>
+        <button
+          type="button"
+          className={s.seedButton}
+          onClick={() => wearSeeds.randomizeSeed(target, tier)}
+        >
+          <Shuffle aria-hidden="true" />
+          <span>Randomize</span>
+        </button>
+        {customized && (
+          <button
+            type="button"
+            className={s.seedButton}
+            onClick={() => wearSeeds.resetSeed(target, tier)}
+          >
+            <RotateCcw aria-hidden="true" />
+            <span>Reset</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const PLAYMAT_TILE_CACHE = new Map<string, string>();
+
+function PlaymatLookCanvas({
+  playmatId,
+  size,
+}: {
+  playmatId: string;
+  size: "tile" | "preview";
+}): ReactElement {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const spec = resolvePlaymat(playmatId);
+  const width = size === "preview" ? 560 : 240;
+  const height = size === "preview" ? 350 : 150;
+  const cacheKey = `${playmatId}:${width}x${height}`;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx || !spec) return;
+
+    if (size === "tile") {
+      const cached = PLAYMAT_TILE_CACHE.get(cacheKey);
+      if (cached) {
+        const img = new Image();
+        img.onload = () => {
+          ctx.clearRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0, width, height);
+        };
+        img.src = cached;
+        return;
+      }
+    }
+
+    return paintPlaymatCanvas(ctx, width, height, spec, {
+      assetBaseUrl: import.meta.env.BASE_URL,
+      onReady: () => {
+        if (size === "tile") {
+          try {
+            PLAYMAT_TILE_CACHE.set(cacheKey, canvas.toDataURL("image/jpeg", 0.88));
+          } catch {
+            // Canvas may be tainted in non-standard preview hosts; skip caching.
+          }
+        }
+      },
+    });
+  }, [spec, size, width, height, cacheKey]);
+
+  return (
+    <span className={s.playmatFrame} aria-hidden="true">
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        className={s.playmatCanvas}
+      />
+    </span>
+  );
+}
+
+function PlaymatEffectLookCanvas({
+  effectId,
+  size,
+}: {
+  effectId: PlaymatEffectId;
+  size: "tile" | "preview";
+}): ReactElement {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const equippedPlaymatId = useActivePlaymat();
+  const { seedFor } = usePlaymatEffectSeeds();
+  const seed = seedFor(effectId);
+  const width = size === "preview" ? 560 : 240;
+  const height = size === "preview" ? 350 : 150;
+  // Preview on the player's equipped playmat when set; otherwise on a crisp neutral playmat.
+  const baseSpec =
+    resolvePlaymat(equippedPlaymatId) ??
+    resolvePlaymat(effectId === "dusty" ? "obsidian-and-brass" : "woven-natural-linen");
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx || !baseSpec) return;
+    return paintPlaymatCanvas(ctx, width, height, baseSpec, {
+      assetBaseUrl: import.meta.env.BASE_URL,
+      effect: { id: effectId, seed },
+    });
+  }, [baseSpec, effectId, seed, width, height]);
+
+  return (
+    <span className={s.playmatFrame} aria-hidden="true">
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        className={s.playmatCanvas}
+      />
+    </span>
+  );
+}
+
 const paintOf = (item: CosmeticItem): string | null =>
-  !item.look
+  !item.look ||
+  "wear" in item.look ||
+  "playmat" in item.look ||
+  "playmatEffect" in item.look
     ? null
     : "imageUrl" in item.look
       ? `url("${item.look.imageUrl}")`
       : item.look.paint;
 
 /**
- * One item drawn as what it is: a card for sleeves and backs, a die, or a
- * mat. An item with no artwork, and the None choice, draw as an empty frame.
+ * One item drawn as what it is: a card for sleeves and backs, a die, a mat,
+ * or a live procedural wear preview. An item with no artwork draws as an empty frame.
  */
 export function ItemLook({
   item,
   kind,
+  size = "tile",
 }: {
   item: CosmeticItem | null;
   kind: CosmeticKind;
+  size?: "tile" | "preview";
 }): ReactElement {
+  if (item?.look && "wear" in item.look) {
+    return (
+      <WearLookCanvas
+        target={item.look.wear.target}
+        tier={item.look.wear.tier}
+        size={size}
+      />
+    );
+  }
+  if (item?.look && "playmat" in item.look) {
+    return <PlaymatLookCanvas playmatId={item.look.playmat.id} size={size} />;
+  }
+  if (item?.look && "playmatEffect" in item.look) {
+    return (
+      <PlaymatEffectLookCanvas
+        effectId={item.look.playmatEffect.id}
+        size={size}
+      />
+    );
+  }
   const painted = item ? paintOf(item) : null;
   if (!item || !painted) {
     const Icon = item ? KIND_ICON[kind] : Ban;
@@ -101,13 +365,28 @@ export function ItemPreview({
   kind: CosmeticKind;
 }): ReactElement {
   let shown: ReactNode = null;
-  if (item && paintOf(item)) {
+  if (item?.look && "wear" in item.look) {
+    shown = (
+      <span className={s.single}>
+        <ItemLook item={item} kind={kind} size="preview" />
+      </span>
+    );
+  } else if (
+    item?.look &&
+    ("playmat" in item.look || "playmatEffect" in item.look)
+  ) {
+    shown = (
+      <span className={s.bigMat}>
+        <ItemLook item={item} kind={kind} size="preview" />
+      </span>
+    );
+  } else if (item && paintOf(item)) {
     if (kind === "sleeve")
       shown = (
         <span className={s.fan}>
           {(["left", "right", "middle"] as const).map((side) => (
             <span key={side} className={s.fanned} data-side={side}>
-              <ItemLook item={item} kind={kind} />
+              <ItemLook item={item} kind={kind} size="preview" />
             </span>
           ))}
         </span>
@@ -123,13 +402,13 @@ export function ItemPreview({
                 : s.single
           }
         >
-          <ItemLook item={item} kind={kind} />
+          <ItemLook item={item} kind={kind} size="preview" />
         </span>
       );
   } else if (item)
     shown = (
       <span className={s.single}>
-        <ItemLook item={item} kind={kind} />
+        <ItemLook item={item} kind={kind} size="preview" />
       </span>
     );
   return (

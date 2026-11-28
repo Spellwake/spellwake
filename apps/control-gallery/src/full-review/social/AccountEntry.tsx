@@ -5,9 +5,9 @@ import {
   TextField,
   ActionButton,
 } from "@spellwake/ui";
-import google from "../../../../../.impeccable/review/open-play/account-entry/google-symbol.svg?inline";
-import appleSvg from "../../../../../.impeccable/review/open-play/account-entry/apple-symbol.svg?raw";
-import discord from "../../../../../.impeccable/review/open-play/account-entry/discord-symbol.svg?inline";
+import google from "../../../../../assets/ui-review/open-play/account-entry/google-symbol.svg?inline";
+import appleSvg from "../../../../../assets/ui-review/open-play/account-entry/apple-symbol.svg?raw";
+import discord from "../../../../../assets/ui-review/open-play/account-entry/discord-symbol.svg?inline";
 import type { ScreenProps } from "../../review-types";
 import { Board, Notice } from "./shared";
 const providers = [

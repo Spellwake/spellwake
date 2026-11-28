@@ -1,6 +1,6 @@
 import { CombatDamageAssignment, type AssignedDamage } from "@spellwake/ui";
 import { useRef, useState, useEffect } from "react";
-import table from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/table.webp?inline";
+import table from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/table.webp?inline";
 import { attackers } from "./combat-fixture";
 export default function CombatDamageWalkthrough() {
   const [confirmed, setConfirmed] = useState<AssignedDamage[] | null>(null);

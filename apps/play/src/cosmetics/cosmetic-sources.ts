@@ -1,4 +1,6 @@
 import type { Outcome, SourceGap } from "../decks/deck-sources";
+import type { PlaymatEffectId } from "spellwake-renderer-benchmark/playmat-effects";
+import type { WearTierId } from "spellwake-renderer-benchmark/wear-effects";
 
 /**
  * What Default settings and Cosmetics ask of their data. Each screen takes one
@@ -9,17 +11,33 @@ import type { Outcome, SourceGap } from "../decks/deck-sources";
  */
 
 /** Pets are in the approved design. A source lists them only if it has them. */
-export type CosmeticKind = "sleeve" | "back" | "dice" | "playmat" | "pet";
+export type CosmeticKind =
+  | "sleeve"
+  | "back"
+  | "dice"
+  | "playmat"
+  | "card_effect"
+  | "sleeve_effect"
+  | "playmat_effect"
+  | "pet";
 export const COSMETIC_KINDS: readonly CosmeticKind[] = [
   "sleeve",
   "back",
   "dice",
   "playmat",
+  "card_effect",
+  "sleeve_effect",
+  "playmat_effect",
   "pet",
 ];
 
-/** How an item is drawn: artwork, or a pattern painted in code where there is none yet. */
-export type CosmeticLook = { imageUrl: string } | { paint: string };
+/** How an item is drawn: artwork, a playmat surface, a procedural wear effect, or a pattern painted in code. */
+export type CosmeticLook =
+  | { imageUrl: string }
+  | { paint: string }
+  | { playmat: { id: string } }
+  | { playmatEffect: { id: PlaymatEffectId } }
+  | { wear: { target: "card" | "sleeve"; tier: WearTierId } };
 
 export type CosmeticItem = {
   id: string;
@@ -102,6 +120,9 @@ export const KIND_LABEL: Readonly<Record<CosmeticKind, string>> = {
   back: "Card backs",
   dice: "Dice",
   playmat: "Playmats",
+  card_effect: "Card effects",
+  sleeve_effect: "Sleeve effects",
+  playmat_effect: "Playmat effects",
   pet: "Pets",
 };
 /** How one item of a kind is described under its name. */
@@ -110,6 +131,9 @@ export const KIND_NOUN: Readonly<Record<CosmeticKind, string>> = {
   back: "Card back",
   dice: "Dice",
   playmat: "Playmat",
+  card_effect: "Card effect",
+  sleeve_effect: "Sleeve effect",
+  playmat_effect: "Playmat effect",
   pet: "Pet",
 };
 

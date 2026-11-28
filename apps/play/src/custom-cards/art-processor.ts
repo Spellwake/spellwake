@@ -4,7 +4,7 @@
  * - Rejects SVG / non-raster uploads.
  * - Re-encodes uploaded face artwork via Canvas into WebP (or PNG fallback) <= 128 KiB,
  *   stripping all EXIF/GPS metadata automatically.
- * - Downscales external card screenshots <= 512 KiB for Codex Vision OCR fallback.
+ * - Downscales external card screenshots <= 512 KiB for Vision OCR fallback.
  * - Applies normalized `artCropBox` cropping returned by Vision OCR cleanly.
  */
 
@@ -135,7 +135,7 @@ export async function processFaceArtFile(
 }
 
 /**
- * Downscale an external PNG/JPEG/WebP card screenshot under 512 KiB for Codex Vision OCR.
+ * Downscale an external PNG/JPEG/WebP card screenshot under 512 KiB for Vision OCR.
  */
 export async function prepareVisionOcrUpload(file: Blob): Promise<{
   mimeType: "image/png" | "image/jpeg" | "image/webp";

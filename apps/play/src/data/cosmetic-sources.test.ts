@@ -17,6 +17,9 @@ const selection: DefaultSelection = {
   back: "b1",
   dice: "d1",
   playmat: null,
+  card_effect: "ce1",
+  sleeve_effect: "se1",
+  playmat_effect: "pe1",
   pet: null,
 };
 

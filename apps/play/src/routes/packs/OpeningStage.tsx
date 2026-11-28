@@ -6,7 +6,7 @@ import {
 } from "@spellwake/booster-pack";
 import { motionLanguage as m } from "../../lib/motion";
 import { packPrint } from "./pack-palette";
-import { CARD_BACK, useSetSymbol } from "./pack-assets";
+import { useSetSymbol } from "./pack-assets";
 import * as s from "./packs.css";
 
 /** A viewport rectangle, relative to the stage's canvas. */
@@ -25,6 +25,7 @@ export function OpeningStage({
   setName,
   setCode,
   product,
+  cardBackUrl,
   from,
   areaRef,
   slots,
@@ -35,6 +36,7 @@ export function OpeningStage({
   setName: string;
   setCode: string | null;
   product: string;
+  cardBackUrl: string;
   /** The wrapper the pack was opened from, in viewport pixels. */
   from: Rect | undefined;
   /** The part of the stage the waiting pack is framed in. */
@@ -55,7 +57,7 @@ export function OpeningStage({
   // One stage per opening: the props it starts from are read once, after
   // the set's symbol is known, so the wrapper is printed only once.
   const symbol = useSetSymbol(setCode, setName);
-  const start = useRef({ setName, product, from });
+  const start = useRef({ setName, product, from, cardBackUrl });
   useEffect(() => {
     const element = host.current;
     const area = areaRef.current;
@@ -87,7 +89,7 @@ export function OpeningStage({
         hero: m.duration.hero,
         stagger: m.stagger,
       },
-      cardBackUrl: CARD_BACK,
+      cardBackUrl: start.current.cardBackUrl,
       from: origin && toCanvas(origin, element),
       signal: controller.signal,
     })

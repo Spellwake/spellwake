@@ -80,7 +80,7 @@ function CommunityAgreement(): ReactElement {
         </h4>
         <p className={s.body}>
           Open Play lets you build and play with any supported card against
-          friends or AI. Collection Play keeps the heart and soul of a trading
+          friends or AI bots. Collection Play keeps the heart and soul of a trading
           card game intact: earning coins through play, opening packs from a
           shared finite supply and trading with other players, with no way to
           buy your way ahead. Neither mode is behind a paywall.
@@ -150,7 +150,7 @@ function PrivacyPolicy(): ReactElement {
             or stores your card number, only the transaction and entitlement
             records needed to grant or reverse items. If you link Patreon, we
             store only minimal membership and entitlement identifiers to apply
-            your badge, cosmetics and AI allowance, never your Patreon name or
+            your badge, cosmetics and AI bot allowance, never your Patreon name or
             email.
           </li>
           <li className={s.promise}>
@@ -166,7 +166,7 @@ function PrivacyPolicy(): ReactElement {
         </h4>
         <p className={s.body}>
           We use this information to run Open Play, Collection Play, trading,
-          messaging and hosted AI games, verify your sign-in, protect fair play
+          messaging and hosted AI bot games, verify your sign-in, protect fair play
           and deliver cosmetics or supporter perks. We send only essential
           account messages such as one-time sign-in codes or service notices,
           never marketing spam.
@@ -252,7 +252,7 @@ function TermsAndConditions(): ReactElement {
           </li>
           <li className={s.promise}>
             Do not use automated bots, exploit bugs or run multiple accounts to
-            manipulate Collection Play, trading, markets or AI allowances.
+            manipulate Collection Play, trading, markets or AI bot allowances.
           </li>
         </ul>
       </section>
@@ -265,7 +265,7 @@ function TermsAndConditions(): ReactElement {
           stakes exist only inside Spellwake. They have no real-world monetary
           value, cannot be bought with real money and cannot be sold, cashed out
           or traded outside the app. Formats, seasonal supply rules and daily
-          AI-player allowances may evolve as Spellwake grows.
+          AI-bot allowances may evolve as Spellwake grows.
         </p>
       </section>
       <section className={s.part} aria-labelledby="terms-purchases">
@@ -281,7 +281,7 @@ function TermsAndConditions(): ReactElement {
           <li className={s.promise}>
             Cosmetics unlocked through a supporter tier stay in your account
             after normal cancellation. Your supporter badge, Discord role and
-            higher AI allowance require an active membership.
+            higher AI bot allowance require an active membership.
           </li>
           <li className={s.promise}>
             If a payment is refunded or reversed, the cosmetic grant tied to

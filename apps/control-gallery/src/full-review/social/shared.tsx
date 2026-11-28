@@ -16,7 +16,7 @@ export type Go = (id: string) => void;
 export const art: Record<string, string> = {};
 for (const [path, src] of Object.entries(
   import.meta.glob<string>(
-    "../../../../../.impeccable/review/open-play/approved-screens/implementation/social-screen-art/*.webp",
+    "../../../../../assets/ui-review/open-play/approved-screens/implementation/social-screen-art/*.webp",
     { eager: true, query: "?inline", import: "default" },
   ),
 ))

@@ -443,11 +443,7 @@ fn native_rust_ai_pipeline_compacts_decides_schedules_and_advances_real_game() {
 fn live_codex_cli_normal_and_advanced_native_turns() {
     let cli = std::env::var("SPELLWAKE_AI_CODEX_CLI")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(
-                "/Users/quzzar/Projects/ai-harness-test/work/native-cli-update-recovery-001/CodexCLI.app/Contents/MacOS/codex",
-            )
-        });
+        .expect("set SPELLWAKE_AI_CODEX_CLI to the codex CLI binary path");
     let provider = CodexCliProvider::new(cli, AiTierCatalog::from_env()).expect("codex provider");
     let (source, mut state, context) = open_test_game();
     let display = TestDisplay {
@@ -528,11 +524,7 @@ fn live_codex_cli_normal_and_advanced_native_turns() {
 fn live_chatgpt_app_server_normal_and_advanced_with_cache_hits() {
     let cli = std::env::var("SPELLWAKE_AI_CODEX_CLI")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(
-                "/Users/quzzar/Projects/ai-harness-test/work/native-cli-update-recovery-001/CodexCLI.app/Contents/MacOS/codex",
-            )
-        });
+        .expect("set SPELLWAKE_AI_CODEX_CLI to the codex CLI binary path");
     let provider = CodexAppServerProvider::new(CodexAppServerConfig {
         cli_path: cli,
         codex_home: None,

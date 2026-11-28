@@ -28,6 +28,8 @@
     "./live-match-scene": "./src/live-match-scene.ts",
     "./play-area": "./src/play-area.ts",
     "./play-setup": "./src/play-setup.ts",
+    "./playmats": "./src/playmats.ts",
+    "./playmat-effects": "./src/playmat-effects.ts",
     "./wear-effects": "./src/wear-effects.ts"
   }
 }

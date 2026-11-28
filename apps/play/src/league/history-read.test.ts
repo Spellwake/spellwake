@@ -146,7 +146,7 @@ describe("a finished match as its row shows it", () => {
     ).toBe("no-result");
   });
 
-  test("names every other seat in seat order, and the AI by its own name", () => {
+  test("names every other seat in seat order, and the AI bot by its own name", () => {
     const table = seatRows([
       seat(id(14), 3, null),
       seat(ME, 0, "me"),
@@ -159,7 +159,7 @@ describe("a finished match as its row shows it", () => {
       [],
       "Commander",
     );
-    expect(row.opponents).toEqual(["alex", "morgan", "Spellwake AI"]);
+    expect(row.opponents).toEqual(["alex", "morgan", "Spellwake Bot"]);
     // No pair of numbers says a table of four.
     expect(row.games).toBeNull();
   });

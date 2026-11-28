@@ -1,7 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import { atomWithStorage } from "jotai/utils";
+import { ALL_PLAYMATS } from "spellwake-renderer-benchmark/playmats";
 import { succeeded } from "../decks/deck-sources";
+import { MAGIC_CARD_BACK_URL, SPELLWAKE_CARD_BACK_URL } from "./card-backs";
+import {
+  PLAYMAT_EFFECTS,
+  PREVIEW_PLAYMAT_EFFECT_IDS,
+} from "./playmat-effects";
+import {
+  ALL_WEAR_EFFECTS,
+  PREVIEW_CARD_EFFECT_IDS,
+  PREVIEW_SLEEVE_EFFECT_IDS,
+} from "./wear-effects";
 import {
   COSMETIC_KINDS,
   type AppearanceOptions,
@@ -34,7 +45,6 @@ const BOUGHT: ReadonlySet<string> = new Set([
   "sleeve:Storm",
   "back:Moon",
   "dice:Midnight",
-  "playmat:Moonlit",
 ]);
 
 const item = (
@@ -96,12 +106,12 @@ const ITEMS: readonly ShopItem[] = [
     sky("#7a4a9c", "#3c2a66", "#16122e", "#ff9e7a77"),
     "$2.99",
   ),
-  item(
-    "back",
-    "Classic",
-    sky("#21416e", "#142b52", "#0a1730", "#4f7fc455"),
-    null,
-  ),
+  // Preserve the saved ID for the original preview back.
+  {
+    ...item("back", "Classic", { imageUrl: SPELLWAKE_CARD_BACK_URL }, null),
+    name: "Spellwake",
+  },
+  item("back", "Magic", { imageUrl: MAGIC_CARD_BACK_URL }, null),
   item(
     "back",
     "Moon",
@@ -127,18 +137,37 @@ const ITEMS: readonly ShopItem[] = [
     paint("linear-gradient(145deg,#a02a22,#4c1212)"),
     "$3.00",
   ),
-  item(
-    "playmat",
-    "Moonlit",
-    sky("#1b2a4d", "#0e1830", "#070c1a", "#dfe6ff44"),
-    "$4.99",
-  ),
-  item(
-    "playmat",
-    "Forest",
-    sky("#4f7d3a", "#2a4a25", "#0f1f12", "#d9e9a044"),
-    "$4.99",
-  ),
+  // All 53 approved playmats: none free by default; priced $0.99 to $3.99.
+  ...ALL_PLAYMATS.map((entry): ShopItem => ({
+    id: entry.previewId,
+    name: entry.name,
+    kind: "playmat",
+    look: { playmat: { id: entry.slug } },
+    isOwned: false,
+    isSold: true,
+    price: entry.priceLabel,
+  })),
+  // Card & sleeve condition effects: Near Mint (default) and Lightly Played are free;
+  // Moderately Played, Heavily Played, Damaged, and Unplayable are sold at $2.99 each.
+  ...ALL_WEAR_EFFECTS.map((entry): ShopItem => ({
+    id: entry.previewId,
+    name: entry.name,
+    kind: entry.kind,
+    look: { wear: { target: entry.target, tier: entry.tier } },
+    isOwned: entry.isFree,
+    isSold: !entry.isFree,
+    price: entry.priceLabel,
+  })),
+  // Playmat effects: Clean is free by default; the 7 paid effects span $0.49 to $1.49.
+  ...PLAYMAT_EFFECTS.map((entry): ShopItem => ({
+    id: entry.previewId,
+    name: entry.name,
+    kind: "playmat_effect",
+    look: { playmatEffect: { id: entry.id } },
+    isOwned: entry.isFree,
+    isSold: !entry.isFree,
+    price: entry.priceLabel,
+  })),
   // The preview has no pets to show yet, so the category holds only None.
 ];
 const OPTIONAL: readonly CosmeticKind[] = ["playmat", "pet"];
@@ -149,8 +178,24 @@ const FIRST_DEFAULTS: DefaultSelection = {
   back: id("back", "Classic"),
   dice: id("dice", "Ivory"),
   playmat: null,
+  card_effect: PREVIEW_CARD_EFFECT_IDS.nm,
+  sleeve_effect: PREVIEW_SLEEVE_EFFECT_IDS.nm,
+  playmat_effect: PREVIEW_PLAYMAT_EFFECT_IDS.clean,
   pet: null,
 };
+
+function normalizeDefaults(saved: Partial<DefaultSelection>): DefaultSelection {
+  return {
+    sleeve: saved.sleeve ?? FIRST_DEFAULTS.sleeve,
+    back: saved.back ?? FIRST_DEFAULTS.back,
+    dice: saved.dice ?? FIRST_DEFAULTS.dice,
+    playmat: saved.playmat ?? null,
+    card_effect: saved.card_effect ?? FIRST_DEFAULTS.card_effect,
+    sleeve_effect: saved.sleeve_effect ?? FIRST_DEFAULTS.sleeve_effect,
+    playmat_effect: saved.playmat_effect ?? FIRST_DEFAULTS.playmat_effect,
+    pet: saved.pet ?? null,
+  };
+}
 
 const ownedAtom = atomWithStorage<string[]>(
   "spellwake:cosmetics:demo:owned:v1",
@@ -160,6 +205,11 @@ const defaultsAtom = atomWithStorage<DefaultSelection>(
   "spellwake:cosmetics:demo:defaults:v1",
   FIRST_DEFAULTS,
 );
+
+/** Read the preview's saved appearance without loading its cosmetic shop. */
+export function useDemoDefaults(): DefaultSelection {
+  return normalizeDefaults(useAtomValue(defaultsAtom));
+}
 const pause = (ms: number): Promise<void> =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -178,7 +228,8 @@ function useItems(): { items: ShopItem[]; own: (itemId: string) => void } {
 
 export function useDemoDefaultSettings(): DefaultSettingsSource {
   const { items } = useItems();
-  const [saved, setSaved] = useAtom(defaultsAtom);
+  const [rawSaved, setSaved] = useAtom(defaultsAtom);
+  const saved = normalizeDefaults(rawSaved);
   return {
     status: "ready",
     categories: COSMETIC_KINDS,
@@ -187,7 +238,7 @@ export function useDemoDefaultSettings(): DefaultSettingsSource {
     saved,
     save: async (selection) => {
       await pause(600);
-      setSaved(selection);
+      setSaved(normalizeDefaults(selection));
       return succeeded(undefined);
     },
   };
@@ -250,13 +301,13 @@ export function useDemoAppearance(): {
   defaults: DefaultSelection;
 } {
   const { items } = useItems();
-  const [defaults] = useAtom(defaultsAtom);
+  const [rawDefaults] = useAtom(defaultsAtom);
   return {
     options: {
       categories: COSMETIC_KINDS,
       optional: OPTIONAL,
       items: { state: "ready", items: items.filter((entry) => entry.isOwned) },
     },
-    defaults,
+    defaults: normalizeDefaults(rawDefaults),
   };
 }
