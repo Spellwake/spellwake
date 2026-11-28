@@ -539,7 +539,8 @@ fn compile(
 ) -> Result<Program, &'static str> {
     compile_legacy(card, vocabulary, profile).or_else(|reason| {
         if profile == Profile::Current {
-            crate::v2_lowering::compile_v2(card, vocabulary).ok_or(reason)
+            crate::v2_lowering::compile_v2_with_reason(card, vocabulary)
+                .map_err(|err| err.reason_code())
         } else {
             Err(reason)
         }

@@ -13,7 +13,7 @@
     "rust": [
       {
         "kind": "cargo",
-        "label": "oracle compiler real-card semantic suite",
+        "label": "oracle compiler v2 integrity, compositional, and custom-card suites",
         "args": [
           "cargo",
           "test",
@@ -21,7 +21,11 @@
           "-p",
           "spellwake-oracle-compiler",
           "--test",
-          "real_card_semantic_suite"
+          "anti_gaming_integrity_gate",
+          "--test",
+          "v2_compositional_suite",
+          "--test",
+          "custom_card_composability_suite"
         ],
         "cwd": ".",
         "envExtra": {
@@ -54,7 +58,9 @@
   "benchmarks": [],
   "relatedPaths": [
     "crates/oracle_compiler/src",
-    "crates/oracle_compiler/tests/real_card_semantic_suite.rs",
+    "crates/oracle_compiler/tests/anti_gaming_integrity_gate.rs",
+    "crates/oracle_compiler/tests/v2_compositional_suite.rs",
+    "crates/oracle_compiler/tests/custom_card_composability_suite.rs",
     "crates/oracle_compiler/tests/fixtures/real_cards_corpus_sample.json"
   ]
 }

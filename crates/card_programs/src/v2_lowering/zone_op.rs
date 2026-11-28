@@ -591,14 +591,24 @@ fn lower_discard(
         v2::SubjectRef::Each(f) | v2::SubjectRef::All(f) | v2::SubjectRef::Group(f) => {
             (count, Some(f.as_ref()))
         }
+        v2::SubjectRef::Player(p) if *p == actor => {
+            if count.is_none() {
+                return Err(LoweringError::Unsupported("v2:discard-missing-count"));
+            }
+            (count, None)
+        }
         v2::SubjectRef::SelfObject => {
             if count.is_none() && !random {
                 let src = build_source_query(subject, from, except, acc, ctx)?;
                 return emit_zone_op(src, ZoneSelection::All, destination, None, acc, ctx);
             }
-            (count, None)
+            return Err(LoweringError::Unsupported(
+                "v2:discard-self-counted-or-random",
+            ));
         }
-        _ => (count, None),
+        _ => {
+            return Err(LoweringError::Unsupported("v2:discard-unsupported-subject"));
+        }
     };
 
     let (clean_filter, chosen_player, filter_random) = match filter_opt {
@@ -778,27 +788,18 @@ fn lower_draw(
     if !from_ok || !to_ok || except.is_some() {
         return Err(LoweringError::Unsupported("v2:draw-with-zone-clauses"));
     }
-    let eff_count = match (count, subject) {
-        (Some(c), _) => Some(c),
-        (None, v2::SubjectRef::Counted { count: c, .. }) => Some(c),
-        _ => None,
-    };
-    let (amount, is_up_to_one) = match eff_count {
-        None => (EngineValueExpr::literal(1), false),
-        Some(cs) if cs.any_number => {
-            return Err(LoweringError::Unsupported("v2:draw-any-number"));
+    let cs = extract_generic_library_count(actor, subject, count, "v2:draw-unsupported-subject")?;
+    let (amount, is_up_to_one) = if cs.any_number {
+        return Err(LoweringError::Unsupported("v2:draw-any-number"));
+    } else if cs.up_to {
+        if value::lower_value_const(&cs.count) == Some(1) {
+            (EngineValueExpr::literal(1), true)
+        } else {
+            return Err(LoweringError::Unsupported("v2:draw-up-to-multi"));
         }
-        Some(cs) if cs.up_to => {
-            if value::lower_value_const(&cs.count) == Some(1) {
-                (EngineValueExpr::literal(1), true)
-            } else {
-                return Err(LoweringError::Unsupported("v2:draw-up-to-multi"));
-            }
-        }
-        Some(cs) => {
-            effect::register_value_expr_player_targets(&cs.count, acc, ctx)?;
-            (value::lower_value_expr(&cs.count, ctx)?, false)
-        }
+    } else {
+        effect::register_value_expr_player_targets(&cs.count, acc, ctx)?;
+        (value::lower_value_expr(&cs.count, ctx)?, false)
     };
 
     let players = atoms::lower_player_ref(actor, acc, ctx)?;
@@ -847,20 +848,12 @@ fn lower_mill(
         return Err(LoweringError::Unsupported("v2:mill-with-except"));
     }
 
-    let eff_count = match (count, subject) {
-        (Some(c), _) => Some(c),
-        (None, v2::SubjectRef::Counted { count: c, .. }) => Some(c),
-        _ => None,
-    };
-    let amount = match eff_count {
-        None => EngineValueExpr::literal(1),
-        Some(cs) if cs.up_to || cs.any_number => {
-            return Err(LoweringError::Unsupported("v2:mill-variable-bounds"));
-        }
-        Some(cs) => {
-            effect::register_value_expr_player_targets(&cs.count, acc, ctx)?;
-            value::lower_value_expr(&cs.count, ctx)?
-        }
+    let cs = extract_generic_library_count(actor, subject, count, "v2:mill-unsupported-subject")?;
+    let amount = if cs.up_to || cs.any_number {
+        return Err(LoweringError::Unsupported("v2:mill-variable-bounds"));
+    } else {
+        effect::register_value_expr_player_targets(&cs.count, acc, ctx)?;
+        value::lower_value_expr(&cs.count, ctx)?
     };
 
     let players = atoms::lower_player_ref(actor, acc, ctx)?;
@@ -1021,20 +1014,13 @@ fn lower_look_top(
         ));
     }
 
-    let eff_count = match (count, subject) {
-        (Some(c), _) => Some(c),
-        (None, v2::SubjectRef::Counted { count: c, .. }) => Some(c),
-        _ => None,
-    };
-    let amount = match eff_count {
-        None => EngineValueExpr::literal(1),
-        Some(cs) if cs.up_to || cs.any_number => {
-            return Err(LoweringError::Unsupported("v2:look-top-variable-bounds"));
-        }
-        Some(cs) => {
-            effect::register_value_expr_player_targets(&cs.count, acc, ctx)?;
-            value::lower_value_expr(&cs.count, ctx)?
-        }
+    let cs =
+        extract_generic_library_count(actor, subject, count, "v2:look-top-unsupported-subject")?;
+    let amount = if cs.up_to || cs.any_number {
+        return Err(LoweringError::Unsupported("v2:look-top-variable-bounds"));
+    } else {
+        effect::register_value_expr_player_targets(&cs.count, acc, ctx)?;
+        value::lower_value_expr(&cs.count, ctx)?
     };
 
     let viewer = atoms::lower_player_ref(actor, acc, ctx)?;
@@ -1392,9 +1378,23 @@ fn lower_exile_until_reveal(
     effect::register_filter_player_targets(stop_filter, acc, ctx)?;
     let ef = filter::lower_object_filter(stop_filter, ctx)?;
     let eff_count = match (count, subject) {
-        (Some(c), _) => Some(c),
-        (None, v2::SubjectRef::Counted { count: c, .. }) => Some(c),
-        _ => None,
+        (Some(c), v2::SubjectRef::Player(p)) if *p == actor => Some(c),
+        (None, v2::SubjectRef::Player(p)) if *p == actor => None,
+        (Some(c), v2::SubjectRef::Counted { filter, .. })
+            if is_plain_generic_card_filter(filter) =>
+        {
+            Some(c)
+        }
+        (None, v2::SubjectRef::Counted { filter, count: c })
+            if is_plain_generic_card_filter(filter) =>
+        {
+            Some(c)
+        }
+        _ => {
+            return Err(LoweringError::Unsupported(
+                "v2:exile-until-reveal-unsupported-subject",
+            ));
+        }
     };
     let match_count = match eff_count {
         None => EngineValueExpr::literal(1),
@@ -2676,4 +2676,34 @@ fn reject_modifiers(modifiers: &v2::EntryModifiers, code: &'static str) -> Lower
         return Err(LoweringError::Unsupported(code));
     }
     Ok(())
+}
+
+fn is_plain_generic_card_filter(filter: &v2::ObjectFilter) -> bool {
+    *filter
+        == v2::ObjectFilter {
+            any_card: filter.any_card,
+            ..v2::ObjectFilter::default()
+        }
+}
+
+fn extract_generic_library_count<'a>(
+    actor: v2::PlayerRef,
+    subject: &'a v2::SubjectRef,
+    count: Option<&'a v2::CountSpec>,
+    err_code: &'static str,
+) -> LowerResult<&'a v2::CountSpec> {
+    match (count, subject) {
+        (Some(c), v2::SubjectRef::Player(p)) if *p == actor => Ok(c),
+        (Some(c), v2::SubjectRef::Counted { filter, .. })
+            if is_plain_generic_card_filter(filter) =>
+        {
+            Ok(c)
+        }
+        (None, v2::SubjectRef::Counted { filter, count: c })
+            if is_plain_generic_card_filter(filter) =>
+        {
+            Ok(c)
+        }
+        _ => Err(LoweringError::Unsupported(err_code)),
+    }
 }

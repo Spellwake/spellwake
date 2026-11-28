@@ -167,7 +167,7 @@ pub(super) fn feast(card: &InventoryCard, profile: Profile) -> Option<Program> {
     Some(Program::sorcery(fixed_cost("{4}{B}{B}")?, body))
 }
 
-/// Retired bespoke Palace Jailer override; falls through to oracle_lowering.
+/// Retired bespoke Palace Jailer override; falls through to v2_lowering.
 pub(super) fn jailer(
     _card: &InventoryCard,
     _vocabulary: &CreatureTypeVocabulary,

@@ -1470,7 +1470,9 @@ pub(crate) fn lower_resolving_player(
             if ctx.in_trigger {
                 Ok(ResolvingPlayer::TriggerSubjectController)
             } else {
-                Ok(ResolvingPlayer::Controller)
+                Err(LoweringError::Unsupported(
+                    "v2:player:unbound-object-controller",
+                ))
             }
         }
         v2::PlayerRef::ItsOwner => {
@@ -1495,7 +1497,7 @@ pub(crate) fn lower_resolving_player(
             if ctx.in_trigger {
                 Ok(ResolvingPlayer::TriggerSubjectOwner)
             } else {
-                Ok(ResolvingPlayer::SourceOwner)
+                Err(LoweringError::Unsupported("v2:player:unbound-object-owner"))
             }
         }
         v2::PlayerRef::ChosenPlayer => Ok(ResolvingPlayer::ChosenPlayer),
@@ -2811,18 +2813,6 @@ fn lower_anaphora_to_query(
                     }
                     _ => {}
                 }
-            }
-            if matches!(
-                anaph,
-                v2::AnaphoraRef::It
-                    | v2::AnaphoraRef::ThatObject
-                    | v2::AnaphoraRef::ThatCreature
-                    | v2::AnaphoraRef::ThatPermanent
-                    | v2::AnaphoraRef::ThatLand
-                    | v2::AnaphoraRef::ThatCard
-                    | v2::AnaphoraRef::ThatSpell
-            ) {
-                return Ok(ObjectQuery::Source);
             }
             Err(LoweringError::Unsupported("v2:subject:unbound-anaphora"))
         }

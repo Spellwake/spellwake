@@ -277,6 +277,273 @@ mod tests {
     }
 
     #[test]
+    fn c3_unbound_anaphora_fails_closed() {
+        let vocab = test_vocab();
+        let destroy_that = test_card(
+            "Dangling Anaphora Creature",
+            "Sorcery",
+            Some("{1}{B}"),
+            None,
+            "Destroy that creature.",
+        );
+        let err = compile_v2_with_reason(&destroy_that, &vocab)
+            .expect_err("unbound 'that creature' must fail closed");
+        assert_eq!(err.reason_code(), "v2:subject:unbound-anaphora");
+
+        let exile_that = test_card(
+            "Dangling Anaphora Permanent",
+            "Sorcery",
+            Some("{1}{W}"),
+            None,
+            "Exile that permanent.",
+        );
+        let err2 = compile_v2_with_reason(&exile_that, &vocab)
+            .expect_err("unbound 'that permanent' must fail closed");
+        assert_eq!(err2.reason_code(), "v2:subject:unbound-anaphora");
+    }
+
+    #[test]
+    fn c3_unbound_object_controller_and_owner_fail_closed() {
+        let vocab = test_vocab();
+        let unbound_ctrl = test_card(
+            "Dangling Controller",
+            "Sorcery",
+            Some("{B}"),
+            None,
+            "Its controller loses 2 life.",
+        );
+        let err = compile_v2_with_reason(&unbound_ctrl, &vocab)
+            .expect_err("unbound 'its controller' must fail closed");
+        assert_eq!(err.reason_code(), "v2:player:unbound-object-controller");
+
+        // Even when a non-targeted ZoneOp populates `last_moved_binding`, `lower_resolving_player`
+        // cannot express an arbitrary binding id and must fail closed instead of falling back to
+        // `ResolvingPlayer::Controller` or `ResolvingPlayer::SourceOwner`.
+        let mut ctx = LowerCtx::new(&vocab, "Unbound ResolvingPlayer", "Unbound ResolvingPlayer");
+        ctx.last_moved_binding = Some(ctx.alloc_binding().expect("alloc binding"));
+        let mut acc = crate::v2_lowering::ctx::BodyAcc::new();
+        let err_rp_ctrl = crate::v2_lowering::atoms::lower_resolving_player(
+            v2::PlayerRef::ItsController,
+            &mut acc,
+            &ctx,
+        )
+        .expect_err(
+            "lower_resolving_player(ItsController) with only last_moved_binding must fail closed",
+        );
+        assert_eq!(
+            err_rp_ctrl.reason_code(),
+            "v2:player:unbound-object-controller"
+        );
+
+        let err_rp_owner = crate::v2_lowering::atoms::lower_resolving_player(
+            v2::PlayerRef::ItsOwner,
+            &mut acc,
+            &ctx,
+        )
+        .expect_err(
+            "lower_resolving_player(ItsOwner) with only last_moved_binding must fail closed",
+        );
+        assert_eq!(err_rp_owner.reason_code(), "v2:player:unbound-object-owner");
+
+        let unbound_owner = test_card(
+            "Dangling Owner",
+            "Sorcery",
+            Some("{W}"),
+            None,
+            "Its owner gains 3 life.",
+        );
+        let err_owner = compile_v2_with_reason(&unbound_owner, &vocab)
+            .expect_err("unbound 'its owner' must fail closed");
+        assert_eq!(err_owner.reason_code(), "v2:player:unbound-object-owner");
+    }
+
+    #[test]
+    fn c3_zone_op_permissive_subject_wildcards_fail_closed() {
+        let vocab = test_vocab();
+        let mut ctx = LowerCtx::new(&vocab, "ZoneOp Guard Test", "ZoneOp Guard Test");
+        let mut acc = crate::v2_lowering::ctx::BodyAcc::new();
+
+        let creature_filter = v2::ObjectFilter {
+            all_types: spellwake_oracle_compiler::ast::CardTypeMask::CREATURE,
+            ..v2::ObjectFilter::default()
+        };
+        let counted_creatures = v2::SubjectRef::Counted {
+            filter: Box::new(creature_filter),
+            count: v2::CountSpec {
+                count: v2::ValueExpr::Const(2),
+                up_to: false,
+                any_number: false,
+            },
+        };
+        let one = v2::CountSpec {
+            count: v2::ValueExpr::Const(1),
+            up_to: false,
+            any_number: false,
+        };
+        let mods = v2::EntryModifiers::default();
+
+        // Discard: unexpected subject fails closed.
+        let err_discard = crate::v2_lowering::zone_op::lower_zone_op(
+            v2::PlayerRef::You,
+            &v2::ZoneOpKind::Discard {
+                hand: false,
+                random: false,
+            },
+            &v2::SubjectRef::AnyTarget,
+            &[],
+            None,
+            &mods,
+            None,
+            Some(&one),
+            &mut acc,
+            &mut ctx,
+        )
+        .expect_err("discard with unexpected AnyTarget subject must fail closed");
+        assert_eq!(err_discard.reason_code(), "v2:discard-unsupported-subject");
+
+        // Draw: filtered Counted subject and unexpected SelfObject fail closed.
+        let err_draw_filtered = crate::v2_lowering::zone_op::lower_zone_op(
+            v2::PlayerRef::You,
+            &v2::ZoneOpKind::Draw,
+            &counted_creatures,
+            &[],
+            None,
+            &mods,
+            None,
+            None,
+            &mut acc,
+            &mut ctx,
+        )
+        .expect_err("draw with filtered Counted subject must fail closed");
+        assert_eq!(
+            err_draw_filtered.reason_code(),
+            "v2:draw-unsupported-subject"
+        );
+
+        let err_draw_self = crate::v2_lowering::zone_op::lower_zone_op(
+            v2::PlayerRef::You,
+            &v2::ZoneOpKind::Draw,
+            &v2::SubjectRef::SelfObject,
+            &[],
+            None,
+            &mods,
+            None,
+            None,
+            &mut acc,
+            &mut ctx,
+        )
+        .expect_err("draw with SelfObject subject must fail closed");
+        assert_eq!(err_draw_self.reason_code(), "v2:draw-unsupported-subject");
+
+        // Mill: unexpected SelfObject fails closed.
+        let err_mill = crate::v2_lowering::zone_op::lower_zone_op(
+            v2::PlayerRef::You,
+            &v2::ZoneOpKind::Mill,
+            &v2::SubjectRef::SelfObject,
+            &[],
+            None,
+            &mods,
+            None,
+            None,
+            &mut acc,
+            &mut ctx,
+        )
+        .expect_err("mill with SelfObject subject must fail closed");
+        assert_eq!(err_mill.reason_code(), "v2:mill-unsupported-subject");
+
+        // LookTop: filtered Counted subject fails closed.
+        let err_look = crate::v2_lowering::zone_op::lower_zone_op(
+            v2::PlayerRef::You,
+            &v2::ZoneOpKind::LookTop { reveal: false },
+            &counted_creatures,
+            &[],
+            None,
+            &mods,
+            None,
+            None,
+            &mut acc,
+            &mut ctx,
+        )
+        .expect_err("look_top with filtered Counted subject must fail closed");
+        assert_eq!(err_look.reason_code(), "v2:look-top-unsupported-subject");
+
+        // ExileUntilReveal: unexpected SelfObject fails closed.
+        let err_exile_until = crate::v2_lowering::zone_op::lower_zone_op(
+            v2::PlayerRef::You,
+            &v2::ZoneOpKind::ExileUntilReveal {
+                filter: Box::new(v2::ObjectFilter {
+                    all_types: spellwake_oracle_compiler::ast::CardTypeMask::LAND,
+                    ..v2::ObjectFilter::default()
+                }),
+            },
+            &v2::SubjectRef::SelfObject,
+            &[],
+            None,
+            &mods,
+            None,
+            None,
+            &mut acc,
+            &mut ctx,
+        )
+        .expect_err("exile_until_reveal with SelfObject subject must fail closed");
+        assert_eq!(
+            err_exile_until.reason_code(),
+            "v2:exile-until-reveal-unsupported-subject"
+        );
+    }
+
+    #[test]
+    fn c3_custom_card_report_surfaces_v2_reason_and_cost_reuses_counter_lookup() {
+        let vocab = test_vocab();
+        let input = crate::custom_card::CustomCardCompileInput {
+            layout: "normal".to_string(),
+            rarity: "uncommon".to_string(),
+            faces: vec![crate::custom_card::CustomCardFaceRules {
+                name: "Unbound Diagnostic Spell".to_string(),
+                mana_cost: Some("{1}{B}".to_string()),
+                type_line: "Sorcery".to_string(),
+                oracle_text: "Destroy that creature.".to_string(),
+                power: None,
+                toughness: None,
+                loyalty: None,
+                defense: None,
+                color_indicator: None,
+            }],
+        };
+        let compiled_custom = crate::custom_card::compile_custom_card(&input, &vocab);
+        assert!(
+            compiled_custom.program.is_none(),
+            "unbound anaphora spell must not compile"
+        );
+        let report = &compiled_custom.report;
+        assert!(!report.stage2_playable);
+        let stage2_diag = report
+            .diagnostics
+            .iter()
+            .find(|d| d.stage == crate::custom_card::DiagnosticStage::Stage2)
+            .expect("expected a Stage2 diagnostic");
+        assert_ne!(stage2_diag.code, "outside-ordinary-creature-type");
+        assert!(
+            stage2_diag.code.starts_with("v2:"),
+            "expected v2:* blocker reason, got {:?}",
+            stage2_diag.code
+        );
+        assert_eq!(stage2_diag.code, "v2:subject:unbound-anaphora");
+
+        // Cost lowering now delegates to atoms::lower_counter_kind (supports shield/stun/etc.).
+        let shield_cost_card = test_card(
+            "Shield Conduit",
+            "Artifact",
+            Some("{2}"),
+            None,
+            "{T}, Remove a shield counter from Shield Conduit: Draw a card.",
+        );
+        let compiled = compile_v2_with_reason(&shield_cost_card, &vocab)
+            .expect("shield counter removal cost should lower via atoms::lower_counter_kind");
+        assert!(compiled.validate(&vocab).is_ok());
+    }
+
+    #[test]
     #[ignore = "uses saved dated Scryfall bulk corpus and creature vocabulary"]
     fn v2_lowering_corpus_coverage_audit() {
         let (inventory, vocabulary, _registry) =

@@ -14,7 +14,6 @@ use spellwake_engine::{
         SelectedSacrificeFilter, SourceCost, TapCostCount, TapCostFilter,
     },
     characteristics::{ControllerSelector, PermanentSelector},
-    effects::CounterKind as EngineCounterKind,
     mana::{
         AbilityManaClause, ChosenTypeManaScope, CounterManaYield, DynamicManaYield,
         HybridAlternative, HybridSymbol, ManaAbility, ManaCost, ManaOutput, ManaOutputModifier,
@@ -142,134 +141,6 @@ pub(crate) fn lower_v2_mana_bundle(
         return Err(LoweringError::Unsupported("v2:mana:empty-output-bundle"));
     }
     Ok(bundle)
-}
-
-/// Lower a typed `v2::CounterKind` into an engine [`EngineCounterKind`].
-pub(crate) fn lower_v2_counter_kind(kind: &v2::CounterKind) -> LowerResult<EngineCounterKind> {
-    match kind {
-        v2::CounterKind::PlusOnePlusOne => Ok(EngineCounterKind::PlusOne),
-        v2::CounterKind::MinusOneMinusOne => Ok(EngineCounterKind::MinusOne),
-        v2::CounterKind::Loyalty => Ok(EngineCounterKind::Loyalty),
-        v2::CounterKind::Time => Ok(EngineCounterKind::Time),
-        v2::CounterKind::Charge => Ok(EngineCounterKind::Charge),
-        v2::CounterKind::Spore => Ok(EngineCounterKind::Spore),
-        v2::CounterKind::Lore => Ok(EngineCounterKind::Lore),
-        v2::CounterKind::Oil => Ok(EngineCounterKind::Oil),
-        v2::CounterKind::Named(name) => lower_named_counter_kind(name),
-        v2::CounterKind::StunOrKeyword(v2::KeywordKind::Indestructible) => {
-            Ok(EngineCounterKind::Indestructible)
-        }
-        v2::CounterKind::Energy
-        | v2::CounterKind::Poison
-        | v2::CounterKind::Experience
-        | v2::CounterKind::Finality
-        | v2::CounterKind::Stun
-        | v2::CounterKind::Slumber
-        | v2::CounterKind::Shield
-        | v2::CounterKind::StunOrKeyword(_)
-        | v2::CounterKind::Pt(_, _)
-        | v2::CounterKind::Any => Err(LoweringError::Unsupported(
-            "v2:cost:unsupported-counter-kind",
-        )),
-    }
-}
-
-fn lower_named_counter_kind(name: &str) -> LowerResult<EngineCounterKind> {
-    if name.eq_ignore_ascii_case("page") {
-        Ok(EngineCounterKind::Page)
-    } else if name.eq_ignore_ascii_case("quest") {
-        Ok(EngineCounterKind::Quest)
-    } else if name.eq_ignore_ascii_case("verse") {
-        Ok(EngineCounterKind::Verse)
-    } else if name.eq_ignore_ascii_case("suspect") {
-        Ok(EngineCounterKind::Suspect)
-    } else if name.eq_ignore_ascii_case("storage") {
-        Ok(EngineCounterKind::Storage)
-    } else if name.eq_ignore_ascii_case("defense") {
-        Ok(EngineCounterKind::Defense)
-    } else if name.eq_ignore_ascii_case("fade") {
-        Ok(EngineCounterKind::Fade)
-    } else if name.eq_ignore_ascii_case("age") {
-        Ok(EngineCounterKind::Age)
-    } else if name.eq_ignore_ascii_case("corpse") {
-        Ok(EngineCounterKind::Corpse)
-    } else if name.eq_ignore_ascii_case("vow") {
-        Ok(EngineCounterKind::Vow)
-    } else if name.eq_ignore_ascii_case("blessing") {
-        Ok(EngineCounterKind::Blessing)
-    } else if name.eq_ignore_ascii_case("despair") {
-        Ok(EngineCounterKind::Despair)
-    } else if name.eq_ignore_ascii_case("hatchling") {
-        Ok(EngineCounterKind::Hatchling)
-    } else if name.eq_ignore_ascii_case("study") {
-        Ok(EngineCounterKind::Study)
-    } else if name.eq_ignore_ascii_case("eyeball") {
-        Ok(EngineCounterKind::Eyeball)
-    } else if name.eq_ignore_ascii_case("slime") {
-        Ok(EngineCounterKind::Slime)
-    } else if name.eq_ignore_ascii_case("level") {
-        Ok(EngineCounterKind::Level)
-    } else if name.eq_ignore_ascii_case("ki") {
-        Ok(EngineCounterKind::Ki)
-    } else if name.eq_ignore_ascii_case("soul") {
-        Ok(EngineCounterKind::Soul)
-    } else if name.eq_ignore_ascii_case("fuse") {
-        Ok(EngineCounterKind::Fuse)
-    } else if name.eq_ignore_ascii_case("depletion") {
-        Ok(EngineCounterKind::Depletion)
-    } else if name.eq_ignore_ascii_case("bounty") {
-        Ok(EngineCounterKind::Bounty)
-    } else if name.eq_ignore_ascii_case("flood") {
-        Ok(EngineCounterKind::Flood)
-    } else if name.eq_ignore_ascii_case("flame") {
-        Ok(EngineCounterKind::Flame)
-    } else if name.eq_ignore_ascii_case("hour") {
-        Ok(EngineCounterKind::Hour)
-    } else if name.eq_ignore_ascii_case("brick") {
-        Ok(EngineCounterKind::Brick)
-    } else if name.eq_ignore_ascii_case("plague") {
-        Ok(EngineCounterKind::Plague)
-    } else if name.eq_ignore_ascii_case("doom") {
-        Ok(EngineCounterKind::Doom)
-    } else if name.eq_ignore_ascii_case("pressure") {
-        Ok(EngineCounterKind::Pressure)
-    } else if name.eq_ignore_ascii_case("feather") {
-        Ok(EngineCounterKind::Feather)
-    } else if name.eq_ignore_ascii_case("fate") {
-        Ok(EngineCounterKind::Fate)
-    } else if name.eq_ignore_ascii_case("infection") {
-        Ok(EngineCounterKind::Infection)
-    } else if name.eq_ignore_ascii_case("ice") {
-        Ok(EngineCounterKind::Ice)
-    } else if name.eq_ignore_ascii_case("tide") {
-        Ok(EngineCounterKind::Tide)
-    } else if name.eq_ignore_ascii_case("growth") {
-        Ok(EngineCounterKind::Growth)
-    } else if name.eq_ignore_ascii_case("divinity") {
-        Ok(EngineCounterKind::Divinity)
-    } else if name.eq_ignore_ascii_case("fungus") {
-        Ok(EngineCounterKind::Fungus)
-    } else if name.eq_ignore_ascii_case("hit") {
-        Ok(EngineCounterKind::Hit)
-    } else if name.eq_ignore_ascii_case("gold") {
-        Ok(EngineCounterKind::Gold)
-    } else if name.eq_ignore_ascii_case("blood") {
-        Ok(EngineCounterKind::Blood)
-    } else if name.eq_ignore_ascii_case("cage") {
-        Ok(EngineCounterKind::Cage)
-    } else if name.eq_ignore_ascii_case("coin") {
-        Ok(EngineCounterKind::Coin)
-    } else if name.eq_ignore_ascii_case("credit") {
-        Ok(EngineCounterKind::Credit)
-    } else if name.eq_ignore_ascii_case("death") {
-        Ok(EngineCounterKind::Death)
-    } else if name.eq_ignore_ascii_case("delay") {
-        Ok(EngineCounterKind::Delay)
-    } else if name.eq_ignore_ascii_case("devotion") {
-        Ok(EngineCounterKind::Devotion)
-    } else {
-        Err(LoweringError::Unsupported("v2:cost:unknown-named-counter"))
-    }
 }
 
 /// Lower a `v2::Ability::Activated` into either `program.mana` (CR 605.1a pure mana ability)
@@ -741,7 +612,7 @@ pub(crate) fn lower_extra_cost_atom(
             count,
             subject,
         } => {
-            let ck = lower_v2_counter_kind(kind)?;
+            let ck = super::atoms::lower_counter_kind(kind)?;
             if !ck.is_permanent() {
                 return Err(LoweringError::Unsupported("v2:cost:non-permanent-counter"));
             }
@@ -770,7 +641,7 @@ pub(crate) fn lower_extra_cost_atom(
             let ck_opt = match kind {
                 v2::CounterKind::Any => None,
                 other => {
-                    let ck = lower_v2_counter_kind(other)?;
+                    let ck = super::atoms::lower_counter_kind(other)?;
                     if !ck.is_permanent() {
                         return Err(LoweringError::Unsupported("v2:cost:non-permanent-counter"));
                     }
@@ -1315,7 +1186,7 @@ fn try_lower_primary_source_cost(
             count,
             subject: None | Some(v2::SubjectRef::SelfObject),
         } => {
-            let Ok(ck) = lower_v2_counter_kind(kind) else {
+            let Ok(ck) = super::atoms::lower_counter_kind(kind) else {
                 return Ok(None);
             };
             if !ck.is_permanent() {
@@ -1342,7 +1213,7 @@ fn try_lower_primary_source_cost(
             count: v2::ValueExpr::Const(n),
             subject: v2::SubjectRef::SelfObject,
         } if *n > 0 && *n <= i32::from(u8::MAX) => {
-            let Ok(ck) = lower_v2_counter_kind(kind) else {
+            let Ok(ck) = super::atoms::lower_counter_kind(kind) else {
                 return Ok(None);
             };
             if !ck.is_permanent() {

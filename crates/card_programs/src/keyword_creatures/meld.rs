@@ -1,4 +1,4 @@
-//! Retired bespoke meld overrides; falls through to oracle_lowering.
+//! Retired bespoke meld overrides; falls through to v2_lowering.
 use super::*;
 
 pub(super) fn compile(
