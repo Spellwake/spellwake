@@ -254,7 +254,7 @@ fn cmm_mirrorpool_enters_tapped_produces_colorless_and_sacrifices_to_copy_an_own
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(2),
                     false,
@@ -267,7 +267,7 @@ fn cmm_mirrorpool_enters_tapped_produces_colorless_and_sacrifices_to_copy_an_own
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(1),
                     false,

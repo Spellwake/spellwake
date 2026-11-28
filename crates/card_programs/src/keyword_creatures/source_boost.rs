@@ -246,7 +246,7 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                    crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                         spellwake_engine::effects::CounterKind::Charge,
                         spellwake_engine::program::ValueExpr::chosen_x(),
                     ),
@@ -600,13 +600,13 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library(),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top(
+                    crate::keyword_creatures::toolbox_emit::shuffle_own_library(),
+                    crate::keyword_creatures::toolbox_emit::exile_library_top(
                         spellwake_engine::program::ResolvingPlayer::Controller,
                         spellwake_engine::program::ValueExpr::literal(1),
                         false,
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::grant_play_permission(
+                    crate::keyword_creatures::toolbox_emit::grant_play_permission(
                         spellwake_engine::toolbox::ObjectQuery::LastMoved,
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,
@@ -639,15 +639,13 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::SINGLE_CREATURE,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                        spellwake_engine::program::EffectSubject::TargetObject,
-                        neg_x.clone(),
-                        neg_x,
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::modify_group_eot(
+                    spellwake_engine::program::EffectSubject::TargetObject,
+                    neg_x.clone(),
+                    neg_x,
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                )],
             ),
             restriction,
         ));
@@ -661,9 +659,7 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::untap_ability_source(),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::untap_ability_source()],
             ),
             restriction,
         ));
@@ -677,10 +673,7 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_to_hand(
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::return_source_to_hand()],
             ),
             restriction,
         ));
@@ -714,7 +707,7 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 target,
-                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_target()],
+                vec![crate::keyword_creatures::toolbox_emit::regenerate_target()],
             ),
             restriction,
         ));
@@ -728,7 +721,7 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
+                vec![crate::keyword_creatures::toolbox_emit::regenerate_source()],
             ),
             restriction,
         ));
@@ -750,12 +743,12 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::SINGLE_CREATURE,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(amount),
                         false,
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
                             BlockingRestriction::CannotBlock,
@@ -803,13 +796,11 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::SINGLE_CREATURE,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                        spellwake_engine::program::ValueExpr::literal(i64::from(amount)),
-                        false,
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(i64::from(amount)),
+                    false,
+                )],
             ),
             restriction,
         ));
@@ -861,18 +852,16 @@ pub(super) fn parse(
                 BodyTarget::filtered_permanent(
                     ObjectFilter::creature().with_power(PowerFilter::AtMostX),
                 ),
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                            spellwake_engine::toolbox::ObjectQuery::Targets,
-                            spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                    allow_regenerate: true,
-                                },
+                vec![crate::keyword_creatures::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
                             },
-                        ),
+                        },
                     ),
-                ],
+                )],
             ),
             restriction,
         ));
@@ -883,18 +872,16 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::filtered_permanent(ObjectFilter::artifact_or_enchantment()),
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                            spellwake_engine::toolbox::ObjectQuery::Targets,
-                            spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                    allow_regenerate: true,
-                                },
+                vec![crate::keyword_creatures::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
                             },
-                        ),
+                        },
                     ),
-                ],
+                )],
             ),
             restriction,
         ));
@@ -930,18 +917,16 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                        EffectSubject::AbilitySource,
-                        spellwake_engine::program::ValueExpr::object_stat(
-                            spellwake_engine::program::ValueObjectRef::SacrificedPermanent,
-                            spellwake_engine::program::ObjectStatKind::ManaValue,
-                        ),
-                        spellwake_engine::program::ValueExpr::literal(0),
-                        Default::default(),
-                        Default::default(),
+                vec![crate::keyword_creatures::toolbox_emit::modify_group_eot(
+                    EffectSubject::AbilitySource,
+                    spellwake_engine::program::ValueExpr::object_stat(
+                        spellwake_engine::program::ValueObjectRef::SacrificedPermanent,
+                        spellwake_engine::program::ObjectStatKind::ManaValue,
                     ),
-                ],
+                    spellwake_engine::program::ValueExpr::literal(0),
+                    Default::default(),
+                    Default::default(),
+                )],
             ),
             restriction,
         ));
@@ -955,16 +940,14 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                        spellwake_engine::toolbox::PlayerSelector::Resolving(
-                            spellwake_engine::program::ResolvingPlayer::Controller,
-                        ),
-                        spellwake_engine::program::ValueExpr::literal(i64::from(
-                            amount.parse::<u16>().ok()?,
-                        )),
+                vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
-                ],
+                    spellwake_engine::program::ValueExpr::literal(i64::from(
+                        amount.parse::<u16>().ok()?,
+                    )),
+                )],
             ),
             restriction,
         ));
@@ -979,13 +962,11 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::SINGLE_ANY_TARGET,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                        spellwake_engine::program::ValueExpr::literal(amount),
-                        false,
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(amount),
+                    false,
+                )],
             ),
             restriction,
         ));
@@ -1018,7 +999,7 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    crate::keyword_creatures::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::ControllersOf(Box::new(
                             spellwake_engine::toolbox::ObjectQuery::Source,
                         )),
@@ -1026,7 +1007,7 @@ pub(super) fn parse(
                             amount.parse::<u16>().ok()?,
                         )),
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    crate::keyword_creatures::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
                     ),
                 ],
@@ -1043,7 +1024,7 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Union(vec![
                                 spellwake_engine::toolbox::ObjectQuery::zone(
@@ -1066,7 +1047,7 @@ pub(super) fn parse(
                             spellwake_engine::toolbox::ZoneDest::Hand,
                         ),
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::zone(
                                 spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
@@ -1145,12 +1126,12 @@ pub(super) fn parse(
         let body = ExecutableBody::new(
             BodyTarget::filtered_permanent(ObjectFilter::creature().legendary()),
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     ResolvedPartsSpec(vec![ResolvedPartSpec::Type(change)]),
                     ResolvedDuration::NoStatedDuration,
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::literal(1),
                 ),
@@ -1169,7 +1150,7 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::filtered_permanent(target),
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                         spellwake_engine::effects::CounterKind::Indestructible,
                         spellwake_engine::program::ValueExpr::literal(1),
                     ),
@@ -1195,7 +1176,7 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Source,
                         parts,
                         ResolvedDuration::UntilEndOfTurn,
@@ -1211,9 +1192,7 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_all_graveyards(),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::exile_all_graveyards()],
             ),
             restriction,
         ));
@@ -1297,13 +1276,13 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    crate::keyword_creatures::toolbox_emit::gain_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,
                         ),
                         spellwake_engine::program::ValueExpr::literal(amount),
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    crate::keyword_creatures::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
                     ),
                 ],
@@ -1370,23 +1349,19 @@ pub(super) fn parse(
         source_cost,
         ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                    EffectSubject::AbilitySource,
-                    stats
-                        .as_ref()
-                        .map(|pt| spellwake_engine::program::ValueExpr::Literal(pt.power.clone()))
-                        .unwrap_or_else(|| spellwake_engine::program::ValueExpr::literal(0)),
-                    stats
-                        .as_ref()
-                        .map(|pt| {
-                            spellwake_engine::program::ValueExpr::Literal(pt.toughness.clone())
-                        })
-                        .unwrap_or_else(|| spellwake_engine::program::ValueExpr::literal(0)),
-                    keywords,
-                    BTreeSet::new(),
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::modify_group_eot(
+                EffectSubject::AbilitySource,
+                stats
+                    .as_ref()
+                    .map(|pt| spellwake_engine::program::ValueExpr::Literal(pt.power.clone()))
+                    .unwrap_or_else(|| spellwake_engine::program::ValueExpr::literal(0)),
+                stats
+                    .as_ref()
+                    .map(|pt| spellwake_engine::program::ValueExpr::Literal(pt.toughness.clone()))
+                    .unwrap_or_else(|| spellwake_engine::program::ValueExpr::literal(0)),
+                keywords,
+                BTreeSet::new(),
+            )],
         ),
         restriction,
     ))

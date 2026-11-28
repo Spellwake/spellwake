@@ -61,7 +61,7 @@ pub(super) fn padeem(
                         spellwake_engine::program::InterveningCondition::GreatestArtifact,
                     ),
                 )),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                crate::keyword_creatures::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
             ],
@@ -277,11 +277,9 @@ pub(super) fn immortal_sun(card: &InventoryCard, profile: Profile) -> Option<Pro
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                    spellwake_engine::program::ValueExpr::Literal(1.into()),
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            )],
         ),
     });
     Some(program)
@@ -333,7 +331,7 @@ pub(super) fn starfield_mystic(
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::literal(1),
                 ),

@@ -135,7 +135,7 @@ fn cmm_boon_gains_blessing_from_its_own_and_allied_enchantment_entries() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PERMANENT,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -753,7 +753,7 @@ fn cmm_archfiend_prevents_opponent_gains_and_counts_each_opponents_actual_loss()
             hand("Archfiend of Despair"),
             create_spell(
                 2,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(3),
                     false,
@@ -761,7 +761,7 @@ fn cmm_archfiend_prevents_opponent_gains_and_counts_each_opponents_actual_loss()
             ),
             create_spell(
                 3,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                crate::keyword_creatures::toolbox_emit::lose_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         spellwake_engine::program::ResolvingPlayer::TargetPlayer,
                     ),
@@ -770,7 +770,7 @@ fn cmm_archfiend_prevents_opponent_gains_and_counts_each_opponents_actual_loss()
             ),
             create_spell(
                 4,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                crate::keyword_creatures::toolbox_emit::gain_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         spellwake_engine::program::ResolvingPlayer::TargetPlayer,
                     ),
@@ -779,7 +779,7 @@ fn cmm_archfiend_prevents_opponent_gains_and_counts_each_opponents_actual_loss()
             ),
             create_spell(
                 5,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                crate::keyword_creatures::toolbox_emit::gain_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         spellwake_engine::program::ResolvingPlayer::TargetPlayer,
                     ),
@@ -844,7 +844,7 @@ fn cmm_gisela_doubles_opponent_damage_and_prevents_the_rounded_up_half_of_friend
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_ANY_TARGET,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(3),
                     false,

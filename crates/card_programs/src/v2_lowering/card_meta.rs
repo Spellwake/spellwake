@@ -94,7 +94,9 @@ pub(crate) fn build_base_program(
             .as_deref()
             .is_some_and(|s| !s.trim().is_empty())
         {
-            return Err(LoweringError::InvalidMetadata("v2:meta:land-with-mana-cost"));
+            return Err(LoweringError::InvalidMetadata(
+                "v2:meta:land-with-mana-cost",
+            ));
         }
         (None, 0u8, Vec::new(), 0u8)
     } else {
@@ -287,7 +289,9 @@ pub(crate) fn parse_mana_cost_str(raw: &str) -> LowerResult<(ManaCost, u8, Vec<H
             "S" => return Err(LoweringError::Unsupported("v2:meta:snow-mana-cost")),
             _ => {
                 if !sym.bytes().all(|b| b.is_ascii_digit()) {
-                    return Err(LoweringError::InvalidMetadata("v2:meta:unknown-mana-symbol"));
+                    return Err(LoweringError::InvalidMetadata(
+                        "v2:meta:unknown-mana-symbol",
+                    ));
                 }
                 let n: i64 = sym
                     .parse()
@@ -511,7 +515,9 @@ pub(crate) fn parse_type_line(
             i += 1;
             continue;
         }
-        return Err(LoweringError::InvalidMetadata("v2:meta:unsupported-subtype"));
+        return Err(LoweringError::InvalidMetadata(
+            "v2:meta:unsupported-subtype",
+        ));
     }
 
     Ok(parsed)

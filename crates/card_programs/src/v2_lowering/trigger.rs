@@ -116,8 +116,10 @@ pub(crate) fn lower_triggered_ability(
 
     let prev_has_participant = ctx.trigger_has_participant;
     let prev_damage_event = ctx.trigger_damage_event;
-    ctx.trigger_has_participant =
-        !specs.is_empty() && specs.iter().all(|s| trigger_spec_has_participant(s, grouping));
+    ctx.trigger_has_participant = !specs.is_empty()
+        && specs
+            .iter()
+            .all(|s| trigger_spec_has_participant(s, grouping));
     ctx.trigger_damage_event = infer_trigger_damage_event(&specs);
     let exec_body_res = lower_triggered_body(&exec_effects, remaining_cond, ctx);
     ctx.trigger_has_participant = prev_has_participant;
@@ -207,7 +209,9 @@ fn lower_triggered_body_inner(
         for m in modes {
             let mut mb = lower_effect_body(&m.body, ctx)?;
             if mb.instructions.is_empty() || mb.triggered_modes().is_some() {
-                return Err(LoweringError::Unsupported("v2:trigger:modal-option-invalid"));
+                return Err(LoweringError::Unsupported(
+                    "v2:trigger:modal-option-invalid",
+                ));
             }
             if let Some(gc) = guard_cond.clone() {
                 prepend_intervening_if_guard(&mut mb.instructions, gc);
@@ -318,7 +322,8 @@ pub(crate) fn lower_trigger_events(
             && caster == copy_caster
             && (copy_spell.is_none() || copy_spell == spell)
         {
-            let built = lower_spell_cast_event(*caster, spell.as_ref(), *from_outside_hand, true, ctx)?;
+            let built =
+                lower_spell_cast_event(*caster, spell.as_ref(), *from_outside_hand, true, ctx)?;
             lowered_specs.push(built);
             idx += 2;
             continue;
@@ -477,7 +482,9 @@ fn merge_grouping(
         | (TriggerGrouping::OneOrMoreByPlayer, TriggerGrouping::OneOrMoreOnceEachTurn) => {
             Ok(TriggerGrouping::OneOrMoreOnceEachTurn)
         }
-        _ => Err(LoweringError::Unsupported("v2:trigger-incompatible-grouping")),
+        _ => Err(LoweringError::Unsupported(
+            "v2:trigger-incompatible-grouping",
+        )),
     }
 }
 
@@ -865,7 +872,10 @@ fn lower_single_trigger_event(
                 ));
             }
             let (filters, grouping) = match subject {
-                None => (vec![ObjectFilter::self_object()], TriggerGrouping::EachOccurrence),
+                None => (
+                    vec![ObjectFilter::self_object()],
+                    TriggerGrouping::EachOccurrence,
+                ),
                 Some(subj) => lower_trigger_subject_list(subj, ctx)?,
             };
             let specs = filters
@@ -936,9 +946,7 @@ fn lower_single_trigger_event(
             let (filters, grouping) = lower_trigger_subject_list(subject, ctx)?;
             let specs = filters
                 .into_iter()
-                .map(|f| {
-                    EngineTriggerSpec::new(EngineTriggerEvent::BecomesAttached { subject: f })
-                })
+                .map(|f| EngineTriggerSpec::new(EngineTriggerEvent::BecomesAttached { subject: f }))
                 .collect();
             Ok((specs, grouping))
         }
@@ -1255,13 +1263,13 @@ fn lower_deals_damage_trigger(
         None => DamageTriggerRecipient::Any,
         Some(tgt) => lower_damage_trigger_recipient(tgt)?,
     };
-    let grouping =
-        if raw_grouping == TriggerGrouping::OneOrMoreTogether && is_player_damage_recipient(recipient)
-        {
-            TriggerGrouping::OneOrMoreByPlayer
-        } else {
-            raw_grouping
-        };
+    let grouping = if raw_grouping == TriggerGrouping::OneOrMoreTogether
+        && is_player_damage_recipient(recipient)
+    {
+        TriggerGrouping::OneOrMoreByPlayer
+    } else {
+        raw_grouping
+    };
     let specs = sources
         .into_iter()
         .map(|src| EngineTriggerSpec::deals_damage(src, recipient, combat_only))
@@ -1378,7 +1386,9 @@ fn lower_counter_event_trigger(
         ));
     }
     match event {
-        v2::CounterTriggerKind::Removed { while_exiled: false } => {
+        v2::CounterTriggerKind::Removed {
+            while_exiled: false,
+        } => {
             let (filters, grouping) = lower_trigger_subject_list(subject, ctx)?;
             let specs = filters
                 .into_iter()
@@ -1702,7 +1712,9 @@ fn lower_player_object_trigger(
                 ));
             }
             let Some(f) = filter else {
-                return Err(LoweringError::Unsupported("v2:trigger-control-no-unfiltered"));
+                return Err(LoweringError::Unsupported(
+                    "v2:trigger-control-no-unfiltered",
+                ));
             };
             let ef = lower_object_filter(f, ctx)?.controlled();
             let cond = ResolutionCondition {
@@ -1763,9 +1775,7 @@ fn lower_player_object_trigger(
                     TriggerGrouping::EachOccurrence,
                 ))
             } else {
-                Err(LoweringError::Unsupported(
-                    "v2:trigger-card-played-nonland",
-                ))
+                Err(LoweringError::Unsupported("v2:trigger-card-played-nonland"))
             }
         }
         v2::PlayerObjectTriggerKind::TapOpponentCreature => Err(LoweringError::Unsupported(
@@ -1832,7 +1842,9 @@ fn lower_global_trigger(
     Ok((vec![spec], TriggerGrouping::EachOccurrence))
 }
 
-fn lower_trigger_from_zone(zone: Option<v2::ZoneKind>) -> LowerResult<spellwake_engine::program::TriggerFromZone> {
+fn lower_trigger_from_zone(
+    zone: Option<v2::ZoneKind>,
+) -> LowerResult<spellwake_engine::program::TriggerFromZone> {
     use spellwake_engine::program::TriggerFromZone;
     match zone {
         None => Ok(TriggerFromZone::Any),
@@ -1916,9 +1928,10 @@ fn lower_trigger_subject_list(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<(Vec<ObjectFilter>, TriggerGrouping)> {
     match subject {
-        v2::SubjectRef::SelfObject => {
-            Ok((vec![ObjectFilter::self_object()], TriggerGrouping::EachOccurrence))
-        }
+        v2::SubjectRef::SelfObject => Ok((
+            vec![ObjectFilter::self_object()],
+            TriggerGrouping::EachOccurrence,
+        )),
         v2::SubjectRef::Anaphora(anaphora) => match anaphora {
             v2::AnaphoraRef::EnchantedCreature | v2::AnaphoraRef::EquippedCreature => Ok((
                 vec![ObjectFilter::creature().attached_to_self()],
@@ -1970,8 +1983,7 @@ fn lower_trigger_subject_list(
             Ok((vec![ef], TriggerGrouping::OneOrMoreTogether))
         }
         v2::SubjectRef::Counted { filter, count } => {
-            let is_one_or_more = !count.up_to
-                && matches!(count.count, v2::ValueExpr::Const(1));
+            let is_one_or_more = !count.up_to && matches!(count.count, v2::ValueExpr::Const(1));
             if !is_one_or_more {
                 return Err(LoweringError::Unsupported("v2:trigger-counted-subject"));
             }
@@ -1980,7 +1992,9 @@ fn lower_trigger_subject_list(
         }
         v2::SubjectRef::Compound(parts) => {
             if parts.is_empty() {
-                return Err(LoweringError::Unsupported("v2:trigger-empty-compound-subject"));
+                return Err(LoweringError::Unsupported(
+                    "v2:trigger-empty-compound-subject",
+                ));
             }
             let mut out = Vec::new();
             let mut grouping = TriggerGrouping::EachOccurrence;
@@ -2052,8 +2066,8 @@ fn subject_is_creature_or_self(subject: &v2::SubjectRef) -> bool {
         v2::SubjectRef::SelfObject
         | v2::SubjectRef::Anaphora(
             v2::AnaphoraRef::EnchantedCreature
-                | v2::AnaphoraRef::EquippedCreature
-                | v2::AnaphoraRef::ThatCreature,
+            | v2::AnaphoraRef::EquippedCreature
+            | v2::AnaphoraRef::ThatCreature,
         ) => true,
         v2::SubjectRef::All(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::Group(f) => {
             let types = f.all_types.union(f.any_types);

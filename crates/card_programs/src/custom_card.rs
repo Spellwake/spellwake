@@ -275,13 +275,10 @@ pub fn compile_custom_card(
     let stage1_parsed = metadata_valid && ast.strictly_compiled;
     for (face_idx, face_ast) in ast.faces.iter().enumerate() {
         for err in &face_ast.errors {
-            let msg: String = format!(
-                "Could not parse clause ({}): {}",
-                err.message, err.text
-            )
-            .chars()
-            .take(512)
-            .collect();
+            let msg: String = format!("Could not parse clause ({}): {}", err.message, err.text)
+                .chars()
+                .take(512)
+                .collect();
             let clause: String = err.text.chars().take(1024).collect();
             diagnostics.push(CompileDiagnostic {
                 severity: DiagnosticSeverity::Warning,

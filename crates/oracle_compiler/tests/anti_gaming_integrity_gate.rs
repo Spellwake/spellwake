@@ -422,6 +422,10 @@ fn gate_eat_any_phrase_flags_first_entry_over_threshold() {
         ]);
     "#;
     let hits = find_long_eat_phrase_calls(sample, 10);
-    assert_eq!(hits.len(), 1, "expected entry #0 with 11 words to be flagged, got {hits:?}");
+    assert_eq!(
+        hits.len(),
+        1,
+        "expected entry #0 with 11 words to be flagged, got {hits:?}"
+    );
     assert_eq!(hits[0].1, 11);
 }

@@ -338,12 +338,16 @@ fn lower_predefined_token_creation(
         .map_err(|_| LoweringError::Unsupported("v2:predefined-token-validation-failed"))?;
 
     if let Some(host_subj) = &modifiers.attached_to {
-        return lower_attached_aura_token(controller, count, definition, modifiers, host_subj, acc, ctx);
+        return lower_attached_aura_token(
+            controller, count, definition, modifiers, host_subj, acc, ctx,
+        );
     }
 
     effect::register_value_expr_player_targets(count, acc, ctx)?;
     let amount = value::lower_value_expr(count, ctx)?;
-    let attacking_defender = modifiers.attacking.then_some(AttackingDefenderScope::AnyLegal);
+    let attacking_defender = modifiers
+        .attacking
+        .then_some(AttackingDefenderScope::AnyLegal);
 
     emit_with_token_recipients(controller, acc, ctx, |recipients| {
         Instruction::CreateTokens {
@@ -399,9 +403,10 @@ fn lower_custom_token_creation(
     let (printed_pt, base_size) = if is_creature {
         match (power, toughness) {
             (Some(p_ir), Some(t_ir)) => {
-                if let (Some(p_c), Some(t_c)) =
-                    (value::lower_value_const(p_ir), value::lower_value_const(t_ir))
-                {
+                if let (Some(p_c), Some(t_c)) = (
+                    value::lower_value_const(p_ir),
+                    value::lower_value_const(t_ir),
+                ) {
                     (
                         Some(
                             PowerToughness {
@@ -456,19 +461,13 @@ fn lower_custom_token_creation(
         {
             creature_subtypes.insert(ct);
             TokenSubtype::Creature(ct)
-        } else if is_artifact
-            && let Some(art) = LowerCtx::lookup_artifact_subtype(raw)
-        {
+        } else if is_artifact && let Some(art) = LowerCtx::lookup_artifact_subtype(raw) {
             artifact_subtypes.insert(art);
             TokenSubtype::Artifact(art)
-        } else if is_enchantment
-            && let Some(ench) = LowerCtx::lookup_enchantment_subtype(raw)
-        {
+        } else if is_enchantment && let Some(ench) = LowerCtx::lookup_enchantment_subtype(raw) {
             enchantment_subtypes.insert(ench);
             TokenSubtype::Enchantment(ench)
-        } else if is_land
-            && let Some(land) = LowerCtx::lookup_land_type(raw)
-        {
+        } else if is_land && let Some(land) = LowerCtx::lookup_land_type(raw) {
             land_subtypes.insert(land);
             TokenSubtype::Land(land)
         } else {
@@ -533,28 +532,21 @@ fn lower_custom_token_creation(
         attach_entry_counter(&mut program, counter_kind, *counter_count)?;
     }
 
-    let definition = TokenDefinition::new(
-        program,
-        TokenName::Default { ordered_subtypes },
-        ctx.vocab,
-    )
-    .map_err(|_| LoweringError::Unsupported("v2:custom-token-validation-failed"))?;
+    let definition =
+        TokenDefinition::new(program, TokenName::Default { ordered_subtypes }, ctx.vocab)
+            .map_err(|_| LoweringError::Unsupported("v2:custom-token-validation-failed"))?;
 
     if let Some(host_subj) = &modifiers.attached_to {
         return lower_attached_aura_token(
-            controller,
-            count,
-            definition,
-            modifiers,
-            host_subj,
-            acc,
-            ctx,
+            controller, count, definition, modifiers, host_subj, acc, ctx,
         );
     }
 
     effect::register_value_expr_player_targets(count, acc, ctx)?;
     let amount = value::lower_value_expr(count, ctx)?;
-    let attacking_defender = modifiers.attacking.then_some(AttackingDefenderScope::AnyLegal);
+    let attacking_defender = modifiers
+        .attacking
+        .then_some(AttackingDefenderScope::AnyLegal);
 
     emit_with_token_recipients(controller, acc, ctx, |recipients| {
         Instruction::CreateTokens {
@@ -598,7 +590,9 @@ fn lower_attached_aura_token(
         ));
     }
     if value::lower_value_const(count) != Some(1) {
-        return Err(LoweringError::Unsupported("v2:token-attached-count-not-one"));
+        return Err(LoweringError::Unsupported(
+            "v2:token-attached-count-not-one",
+        ));
     }
     let host = atoms::lower_subject_to_query(host_subj, acc, ctx)?;
     acc.push(Instruction::MutateObject(Box::new(
@@ -763,8 +757,8 @@ fn is_stack_only_filter(filter: &v2::ObjectFilter) -> bool {
         return true;
     }
     let spell_bits = ast::CardTypeMask::INSTANT.union(ast::CardTypeMask::SORCERY);
-    let has_spell_types = (filter.all_types.0 & spell_bits.0) != 0
-        || (filter.any_types.0 & spell_bits.0) != 0;
+    let has_spell_types =
+        (filter.all_types.0 & spell_bits.0) != 0 || (filter.any_types.0 & spell_bits.0) != 0;
     let has_perm_types = (filter.all_types.0 & ast::CardTypeMask::PERMANENT.0) != 0
         || (filter.any_types.0 & ast::CardTypeMask::PERMANENT.0) != 0;
     has_spell_types && !has_perm_types && !filter.any_card && !filter.any_permanent
@@ -828,13 +822,10 @@ fn apply_copy_exceptions_to_token_copy(
                 }
                 let engine_kind = atoms::lower_counter_kind(kind)?;
                 let Some(val) = value::lower_value_const(count) else {
-                    return Err(LoweringError::Unsupported(
-                        "v2:token-copy-dynamic-counters",
-                    ));
+                    return Err(LoweringError::Unsupported("v2:token-copy-dynamic-counters"));
                 };
-                let n = u8::try_from(val).map_err(|_| {
-                    LoweringError::Unsupported("v2:token-copy-counter-count-range")
-                })?;
+                let n = u8::try_from(val)
+                    .map_err(|_| LoweringError::Unsupported("v2:token-copy-counter-count-range"))?;
                 if n == 0 {
                     return Err(LoweringError::Unsupported("v2:token-copy-zero-counters"));
                 }
@@ -852,7 +843,10 @@ fn apply_copy_exceptions_to_token_copy(
             } => {
                 match (power, toughness) {
                     (Some(p), Some(t)) => {
-                        spec.override_pt = Some((RulesInteger::from(i64::from(*p)), RulesInteger::from(i64::from(*t))));
+                        spec.override_pt = Some((
+                            RulesInteger::from(i64::from(*p)),
+                            RulesInteger::from(i64::from(*t)),
+                        ));
                     }
                     (None, None) => {}
                     _ => {
@@ -867,9 +861,7 @@ fn apply_copy_exceptions_to_token_copy(
                 }
                 for raw in subtypes {
                     if !*keep_existing_types {
-                        return Err(LoweringError::Unsupported(
-                            "v2:token-copy-replace-subtypes",
-                        ));
+                        return Err(LoweringError::Unsupported("v2:token-copy-replace-subtypes"));
                     }
                     let Some(ct) = ctx.lookup_creature_type(raw) else {
                         return Err(LoweringError::Unsupported(
@@ -880,9 +872,7 @@ fn apply_copy_exceptions_to_token_copy(
                 }
             }
             v2::CopyException::HasThisAbility => {
-                return Err(LoweringError::Unsupported(
-                    "v2:token-copy-has-this-ability",
-                ));
+                return Err(LoweringError::Unsupported("v2:token-copy-has-this-ability"));
             }
             v2::CopyException::AddKeywordsConditional { .. } => {
                 return Err(LoweringError::Unsupported(
@@ -917,9 +907,9 @@ fn build_predefined_token_program(
                     amount: 1.into(),
                     colors: ManaOutput::all_colors(),
                 }
-                .with_modifier(ManaOutputModifier::Sacrifice(ManaSacrificeCost::Source {
-                    tap: true,
-                })),
+                .with_modifier(ManaOutputModifier::Sacrifice(
+                    ManaSacrificeCost::Source { tap: true },
+                )),
             });
             Ok((
                 p,
@@ -1176,9 +1166,9 @@ fn build_predefined_token_program(
                     amount: 1.into(),
                     colors: ManaOutput::all_colors(),
                 }
-                .with_modifier(ManaOutputModifier::Sacrifice(ManaSacrificeCost::Source {
-                    tap: false,
-                })),
+                .with_modifier(ManaOutputModifier::Sacrifice(
+                    ManaSacrificeCost::Source { tap: false },
+                )),
             });
             Ok((
                 p,

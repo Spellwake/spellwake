@@ -33,13 +33,11 @@ fn skyreach_manta_suntouched_myr_and_scab_clan_mauler_enter_with_the_paid_and_de
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SINGLE_PLAYER,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                        spellwake_engine::program::ValueExpr::literal(2),
-                        false,
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(2),
+                    false,
+                )],
             ),
         ),
     });

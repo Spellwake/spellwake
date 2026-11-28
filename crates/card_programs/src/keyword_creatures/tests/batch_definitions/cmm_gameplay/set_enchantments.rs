@@ -13,7 +13,7 @@ fn cmm_arasta_ignores_its_controllers_spell_and_makes_a_reach_spider_for_an_oppo
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PLAYER,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(1),
                     false,

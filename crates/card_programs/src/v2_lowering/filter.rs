@@ -468,11 +468,7 @@ fn build_positive_subtype_filter(
             SingleSubtype::Aura => SubtypeFilter::Aura,
         });
     }
-    if match_any
-        && subs
-            .iter()
-            .all(|s| matches!(s, SingleSubtype::Land(_)))
-    {
+    if match_any && subs.iter().all(|s| matches!(s, SingleSubtype::Land(_))) {
         let mut mask = 0u32;
         for s in subs {
             if let SingleSubtype::Land(lt) = s {
@@ -517,10 +513,7 @@ fn build_negative_subtype_filter(subs: &[SingleSubtype]) -> LowerResult<SubtypeF
     Ok(SubtypeFilter::NoneOfList(list))
 }
 
-fn apply_colors_to_clause(
-    clause: &mut ObjectClause,
-    filter: &v2::ObjectFilter,
-) -> LowerResult<()> {
+fn apply_colors_to_clause(clause: &mut ObjectClause, filter: &v2::ObjectFilter) -> LowerResult<()> {
     let both_colors = filter.flags.contains(v2::FilterFlags::BOTH_COLORS);
     if both_colors && filter.any_colors.0.count_ones() >= 2 {
         return Err(LoweringError::Unsupported("v2:filter:both-colors"));
@@ -594,7 +587,10 @@ fn apply_stat_bounds_to_clause(
             subject,
             stat: rhs_stat,
         } = bound.value.as_ref()
-            && matches!(subject.as_ref(), v2::SubjectRef::Anaphora(v2::AnaphoraRef::It))
+            && matches!(
+                subject.as_ref(),
+                v2::SubjectRef::Anaphora(v2::AnaphoraRef::It)
+            )
         {
             match (bound.stat, bound.op, rhs_stat) {
                 (ast::StatKind::Power, ast::CompareOp::Gt, ast::StatKind::Toughness)
@@ -623,7 +619,9 @@ fn apply_stat_bounds_to_clause(
         match bound.stat {
             ast::StatKind::Power => {
                 if clause.power != PowerFilter::Any {
-                    return Err(LoweringError::Unsupported("v2:filter:multiple-power-bounds"));
+                    return Err(LoweringError::Unsupported(
+                        "v2:filter:multiple-power-bounds",
+                    ));
                 }
                 clause.power = lower_power_filter(bound.op, bound.value.as_ref(), ctx)?;
             }
@@ -721,7 +719,9 @@ fn lower_toughness_filter(
                 .checked_sub(1)
                 .and_then(|v| u16::try_from(v).ok())
                 .map(ToughnessFilter::AtMost)
-                .ok_or(LoweringError::Unsupported("v2:filter:negative-toughness-max")),
+                .ok_or(LoweringError::Unsupported(
+                    "v2:filter:negative-toughness-max",
+                )),
             ast::CompareOp::Eq => i16::try_from(n)
                 .map(ToughnessFilter::Equal)
                 .map_err(|_| LoweringError::Unsupported("v2:filter:toughness-range")),
@@ -976,9 +976,7 @@ fn apply_predicates_to_clause(
                     clause.flags = clause.flags.union(ObjectFilterFlags::WITH_ANY_COUNTER);
                 }
                 v2::CounterKind::PlusOnePlusOne => {
-                    clause.flags = clause
-                        .flags
-                        .union(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER);
+                    clause.flags = clause.flags.union(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER);
                 }
                 v2::CounterKind::MinusOneMinusOne => {
                     clause.flags = clause
@@ -1057,9 +1055,7 @@ fn apply_predicates_to_clause(
                     .ok_or(LoweringError::Unsupported("v2:filter:pred:invalid-name"))?;
                 if let Some(existing) = clause.exact_name {
                     if existing != key {
-                        return Err(LoweringError::Unsupported(
-                            "v2:filter:pred:multiple-names",
-                        ));
+                        return Err(LoweringError::Unsupported("v2:filter:pred:multiple-names"));
                     }
                 } else {
                     clause.exact_name = Some(key);
@@ -1218,10 +1214,7 @@ fn is_self_combat_ref(subj: &v2::SubjectRef, ctx: &LowerCtx<'_>) -> bool {
         ))
 }
 
-fn is_plain_planeswalker_controlled_by(
-    subj: &v2::SubjectRef,
-    want_you: bool,
-) -> bool {
+fn is_plain_planeswalker_controlled_by(subj: &v2::SubjectRef, want_you: bool) -> bool {
     let (v2::SubjectRef::Group(flt) | v2::SubjectRef::All(flt) | v2::SubjectRef::Each(flt)) = subj
     else {
         return false;
@@ -1358,7 +1351,9 @@ fn apply_shares_property(
             }
             ast::StatKind::Power => {
                 if clause.power != PowerFilter::Any {
-                    return Err(LoweringError::Unsupported("v2:filter:multiple-power-bounds"));
+                    return Err(LoweringError::Unsupported(
+                        "v2:filter:multiple-power-bounds",
+                    ));
                 }
                 clause.power = PowerFilter::CompareAnchor { op, anchor };
             }
@@ -1535,8 +1530,7 @@ fn apply_excluded_group_filter(
         ));
     }
     if has_types {
-        if ex.all_types.0.count_ones() + ex.any_types.0.count_ones() > 1
-            && !ex.all_types.is_empty()
+        if ex.all_types.0.count_ones() + ex.any_types.0.count_ones() > 1 && !ex.all_types.is_empty()
         {
             return Err(LoweringError::Unsupported(
                 "v2:filter:pred:conjunctive-type-exclude",
@@ -1819,9 +1813,7 @@ pub(crate) fn lower_object_filter(
             ))
         }
         (None, Some((c1, c2))) => Ok(EngineObjectFilter::Either(c1, c2)),
-        (Some(_), Some(_)) => Err(LoweringError::Unsupported(
-            "v2:filter:double-disjunction",
-        )),
+        (Some(_), Some(_)) => Err(LoweringError::Unsupported("v2:filter:double-disjunction")),
     }
 }
 
@@ -1896,11 +1888,11 @@ pub(crate) fn lower_permanent_selector(
         v2::SubjectRef::SelfObject
         | v2::SubjectRef::Anaphora(
             v2::AnaphoraRef::It
-                | v2::AnaphoraRef::ThatCreature
-                | v2::AnaphoraRef::ThatPermanent
-                | v2::AnaphoraRef::ThatLand
-                | v2::AnaphoraRef::ThatObject
-                | v2::AnaphoraRef::ThatSource,
+            | v2::AnaphoraRef::ThatCreature
+            | v2::AnaphoraRef::ThatPermanent
+            | v2::AnaphoraRef::ThatLand
+            | v2::AnaphoraRef::ThatObject
+            | v2::AnaphoraRef::ThatSource,
         ) => Ok(PermanentSelector {
             controller: ControllerSelector::SourceItself,
             ..PermanentSelector::default()
@@ -1923,7 +1915,9 @@ pub(crate) fn lower_permanent_selector(
         v2::SubjectRef::Each(filter)
         | v2::SubjectRef::All(filter)
         | v2::SubjectRef::Group(filter) => lower_filter_to_permanent_selector(filter, ctx),
-        _ => Err(LoweringError::Unsupported("v2:selector:unsupported-subject")),
+        _ => Err(LoweringError::Unsupported(
+            "v2:selector:unsupported-subject",
+        )),
     }
 }
 
@@ -1944,12 +1938,13 @@ fn lower_filter_to_permanent_selector(
         ));
     }
 
-    let mut sel = PermanentSelector::default();
-
-    // Card types.
-    sel.required_types = lower_card_type_set(filter.all_types);
-    sel.any_types = lower_card_type_set(filter.any_types);
-    sel.forbidden_types = lower_card_type_set(filter.forbidden_types);
+    let mut sel = PermanentSelector {
+        // Card types.
+        required_types: lower_card_type_set(filter.all_types),
+        any_types: lower_card_type_set(filter.any_types),
+        forbidden_types: lower_card_type_set(filter.forbidden_types),
+        ..Default::default()
+    };
 
     // Supertypes (including `HISTORIC`).
     if (filter.required_supertypes.0 & ast::SupertypeMask::HISTORIC.0) != 0 {
@@ -1991,12 +1986,15 @@ fn lower_filter_to_permanent_selector(
     }
 
     // Colors.
-    if filter.flags.contains(v2::FilterFlags::BOTH_COLORS)
-        && filter.any_colors.0.count_ones() >= 2
+    if filter.flags.contains(v2::FilterFlags::BOTH_COLORS) && filter.any_colors.0.count_ones() >= 2
     {
         return Err(LoweringError::Unsupported("v2:selector:both-colors"));
     }
-    sel.color = lower_selector_color(filter.any_colors, filter.forbidden_colors, filter.color_arity)?;
+    sel.color = lower_selector_color(
+        filter.any_colors,
+        filter.forbidden_colors,
+        filter.color_arity,
+    )?;
 
     // Controller and owner.
     if let Some(rel) = filter.controller {
@@ -2071,7 +2069,10 @@ fn lower_filter_to_permanent_selector(
             subject,
             stat: rhs_stat,
         } = bound.value.as_ref()
-            && matches!(subject.as_ref(), v2::SubjectRef::Anaphora(v2::AnaphoraRef::It))
+            && matches!(
+                subject.as_ref(),
+                v2::SubjectRef::Anaphora(v2::AnaphoraRef::It)
+            )
             && ((bound.stat == ast::StatKind::Toughness
                 && bound.op == ast::CompareOp::Gt
                 && *rhs_stat == ast::StatKind::Power)
@@ -2344,7 +2345,9 @@ fn lower_selector_color(
             ast::ColorArity::Multicolored if any_set.is_empty() && forb_set.is_empty() => {
                 Ok(ColorFilter::Multicolored)
             }
-            _ => Err(LoweringError::Unsupported("v2:selector:color-arity-and-mask")),
+            _ => Err(LoweringError::Unsupported(
+                "v2:selector:color-arity-and-mask",
+            )),
         };
     }
 

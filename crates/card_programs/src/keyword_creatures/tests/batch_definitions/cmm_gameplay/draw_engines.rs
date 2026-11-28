@@ -21,7 +21,7 @@ fn cmm_zones_armorcraft_judge_counts_own_counter_bearing_creatures_once_each() {
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::Literal(count.into()),
                 ),
@@ -217,7 +217,7 @@ fn cmm_zones_abundance_allows_a_failed_search_without_an_actual_draw() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    crate::keyword_creatures::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
                     ),
                 ),
@@ -279,7 +279,7 @@ fn cmm_zones_alms_collector_leaves_single_draws_and_allows_the_affected_player_t
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PLAYER,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                crate::keyword_creatures::toolbox_emit::draw_target_player(
                     spellwake_engine::program::ValueExpr::Literal(count.into()),
                 ),
             ),

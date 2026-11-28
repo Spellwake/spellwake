@@ -375,11 +375,9 @@ fn original_werewolf_upkeeps_count_the_spells_of_each_player() {
             spellwake_engine::mana::ManaCost::free(),
             spellwake_engine::program::ExecutableBody::new(
                 spellwake_engine::program::BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                        spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(0.into()),
+                )],
             ),
         ),
     };
@@ -506,14 +504,12 @@ fn original_transform_choices_reveal_without_moving_and_use_starting_life() {
             mana(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                        spellwake_engine::toolbox::PlayerSelector::Resolving(
-                            spellwake_engine::program::ResolvingPlayer::Controller,
-                        ),
-                        spellwake_engine::program::ValueExpr::Literal(amount),
+                vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
-                ],
+                    spellwake_engine::program::ValueExpr::Literal(amount),
+                )],
             ),
         )
     };

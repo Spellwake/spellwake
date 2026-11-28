@@ -138,26 +138,22 @@ fn scenarios(vocabulary: Arc<CreatureTypeVocabulary>, afterlife: Program, fabric
             card: CardId(3),
             owner: A,
             destination: ObjectDestination::Hand,
-            program: instant(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                        spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ZoneDest::Graveyard {
-                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                allow_regenerate: true,
-                            },
+            program: instant(crate::keyword_creatures::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
                         },
-                    ),
+                    },
                 ),
-            ),
+            )),
         },
         SeedCard {
             card: CardId(4),
             owner: A,
             destination: ObjectDestination::Hand,
-            program: instant(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
-            ),
+            program: instant(crate::keyword_creatures::toolbox_emit::return_to_owners_hand()),
         },
     ];
     let seed = GameSeed::with_uniform_life(

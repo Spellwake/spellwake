@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn incremental_evaluation_matches_full_evaluation_and_isolates_preview_cards() {
-        // Unoptimized debug frames in `spellwake-oracle-compiler` + `oracle_lowering` exceed
+        // Unoptimized debug frames in `spellwake-oracle-compiler` + `v2_lowering` exceed
         // libtest's default 2 MiB worker stack; run with an explicit 16 MiB stack so plain
         // `cargo test --locked --workspace` passes without requiring `RUST_MIN_STACK`.
         let handle = std::thread::Builder::new()

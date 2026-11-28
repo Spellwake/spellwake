@@ -85,17 +85,15 @@ pub(super) fn compile(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                            spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
-                                spellwake_engine::program::DamageRecipientsRef::Group(
-                                    DamageGroup::Opponents,
-                                ),
-                            )),
-                            spellwake_engine::program::ValueExpr::literal(2),
-                            false,
-                        ),
-                    ],
+                    vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                            spellwake_engine::program::DamageRecipientsRef::Group(
+                                DamageGroup::Opponents,
+                            ),
+                        )),
+                        spellwake_engine::program::ValueExpr::literal(2),
+                        false,
+                    )],
                 ),
             });
         } else if line
@@ -112,10 +110,12 @@ pub(super) fn compile(
                     BodyTarget::filtered_permanent(
                         ObjectFilter::creature_or_enchantment().controlled(),
                     ),
-                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
-                        spellwake_engine::effects::CounterKind::PlusOne,
-                        spellwake_engine::program::ValueExpr::literal(1),
-                    )],
+                    vec![
+                        crate::keyword_creatures::toolbox_emit::put_counters_on_target(
+                            spellwake_engine::effects::CounterKind::PlusOne,
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                    ],
                 ),
             });
         } else if line
@@ -136,13 +136,13 @@ pub(super) fn compile(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 2,
                         },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_life(
+                        crate::keyword_creatures::toolbox_emit::pay_life(
                             spellwake_engine::toolbox::PlayerSelector::Resolving(
                                 ResolvingPlayer::Controller,
                             ),
                             spellwake_engine::program::ValueExpr::literal(2),
                         ),
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        crate::keyword_creatures::toolbox_emit::draw_controller(
                             spellwake_engine::program::ValueExpr::Literal(1.into()),
                         ),
                     ],
@@ -189,11 +189,13 @@ pub(super) fn compile(
                     source_cost,
                     body: ExecutableBody::new(
                         target,
-                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
-                            spellwake_engine::toolbox::ObjectQuery::Targets,
-                            ResolvedPartsSpec(vec![part]),
-                            ResolvedDuration::UntilEndOfTurn,
-                        )],
+                        vec![
+                            crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![part]),
+                                ResolvedDuration::UntilEndOfTurn,
+                            ),
+                        ],
                     ),
                 });
                 continue;

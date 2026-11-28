@@ -76,7 +76,7 @@ pub(crate) fn compile(
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::Literal(amount.into()),
                 ),

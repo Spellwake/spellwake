@@ -69,13 +69,13 @@ pub(super) fn compile(
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    crate::keyword_creatures::toolbox_emit::gain_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,
                         ),
                         spellwake_engine::program::ValueExpr::literal(i64::from(life)),
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    crate::keyword_creatures::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
                     ),
                 ],

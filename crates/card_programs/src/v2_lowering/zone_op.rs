@@ -130,9 +130,18 @@ pub(crate) fn lower_zone_op(
         v2::ZoneOpKind::Move => {
             lower_move(actor, subject, from, to, modifiers, except, count, acc, ctx)
         }
-        v2::ZoneOpKind::Destroy { can_regenerate } => {
-            lower_destroy(actor, *can_regenerate, subject, from, to, modifiers, except, count, acc, ctx)
-        }
+        v2::ZoneOpKind::Destroy { can_regenerate } => lower_destroy(
+            actor,
+            *can_regenerate,
+            subject,
+            from,
+            to,
+            modifiers,
+            except,
+            count,
+            acc,
+            ctx,
+        ),
         v2::ZoneOpKind::Exile {
             face_down,
             counters,
@@ -152,9 +161,9 @@ pub(crate) fn lower_zone_op(
         v2::ZoneOpKind::Sacrifice => {
             lower_sacrifice(actor, subject, from, to, modifiers, except, count, acc, ctx)
         }
-        v2::ZoneOpKind::Discard { hand, random } => {
-            lower_discard(actor, *hand, *random, subject, from, to, modifiers, except, count, acc, ctx)
-        }
+        v2::ZoneOpKind::Discard { hand, random } => lower_discard(
+            actor, *hand, *random, subject, from, to, modifiers, except, count, acc, ctx,
+        ),
         v2::ZoneOpKind::Draw => {
             lower_draw(actor, subject, from, to, modifiers, except, count, acc, ctx)
         }
@@ -166,10 +175,23 @@ pub(crate) fn lower_zone_op(
             shuffle,
             exact,
         } => lower_search_library(
+            actor, *reveal, *shuffle, *exact, subject, from, to, modifiers, except, count, acc, ctx,
+        ),
+        v2::ZoneOpKind::Shuffle => {
+            lower_shuffle(actor, subject, from, to, modifiers, except, count, acc, ctx)
+        }
+        v2::ZoneOpKind::LookTop { reveal } => lower_look_top(
+            actor, *reveal, subject, from, to, modifiers, except, count, acc, ctx,
+        ),
+        v2::ZoneOpKind::LookAt => {
+            lower_look_at(actor, subject, from, to, modifiers, except, count, acc, ctx)
+        }
+        v2::ZoneOpKind::Reveal => {
+            lower_reveal(actor, subject, from, to, modifiers, except, count, acc, ctx)
+        }
+        v2::ZoneOpKind::CounterSpell { unless_pay } => lower_counter_spell(
             actor,
-            *reveal,
-            *shuffle,
-            *exact,
+            unless_pay.as_deref(),
             subject,
             from,
             to,
@@ -179,21 +201,6 @@ pub(crate) fn lower_zone_op(
             acc,
             ctx,
         ),
-        v2::ZoneOpKind::Shuffle => {
-            lower_shuffle(actor, subject, from, to, modifiers, except, count, acc, ctx)
-        }
-        v2::ZoneOpKind::LookTop { reveal } => {
-            lower_look_top(actor, *reveal, subject, from, to, modifiers, except, count, acc, ctx)
-        }
-        v2::ZoneOpKind::LookAt => {
-            lower_look_at(actor, subject, from, to, modifiers, except, count, acc, ctx)
-        }
-        v2::ZoneOpKind::Reveal => {
-            lower_reveal(actor, subject, from, to, modifiers, except, count, acc, ctx)
-        }
-        v2::ZoneOpKind::CounterSpell { unless_pay } => {
-            lower_counter_spell(actor, unless_pay.as_deref(), subject, from, to, modifiers, except, count, acc, ctx)
-        }
         v2::ZoneOpKind::SeparateIntoPiles {
             pile_count,
             face_down_piles,
@@ -211,7 +218,9 @@ pub(crate) fn lower_zone_op(
             ctx,
         ),
         v2::ZoneOpKind::ChoosePile => Err(LoweringError::Unsupported("v2:zone-op-choose-pile")),
-        v2::ZoneOpKind::ExileUntilReveal { filter: stop_filter } => lower_exile_until_reveal(
+        v2::ZoneOpKind::ExileUntilReveal {
+            filter: stop_filter,
+        } => lower_exile_until_reveal(
             actor,
             stop_filter,
             subject,
@@ -376,19 +385,21 @@ fn lower_sacrifice(
     if let Some(dest) = to
         && dest.zone != v2::ZoneKind::Graveyard
     {
-        return Err(LoweringError::Unsupported("v2:sacrifice-non-graveyard-dest"));
+        return Err(LoweringError::Unsupported(
+            "v2:sacrifice-non-graveyard-dest",
+        ));
     }
     if !from.is_empty() && from.iter().any(|z| z.zone != v2::ZoneKind::Battlefield) {
-        return Err(LoweringError::Unsupported("v2:sacrifice-non-battlefield-zone"));
+        return Err(LoweringError::Unsupported(
+            "v2:sacrifice-non-battlefield-zone",
+        ));
     }
 
     let destination = EngineZoneDest::Graveyard {
         semantics: GraveyardSemantics::Sacrifice,
     };
 
-    if matches!(subject, v2::SubjectRef::OneOfThem(_))
-        || subject_has_among_prior(subject)
-    {
+    if matches!(subject, v2::SubjectRef::OneOfThem(_)) || subject_has_among_prior(subject) {
         let built =
             build_source_and_selection(actor, subject, from, except, count, false, acc, ctx)?;
         return emit_zone_op_with_prior(built, destination, None, acc, ctx);
@@ -408,14 +419,14 @@ fn lower_sacrifice(
             Some(f) => filter::lower_object_filter(f, ctx)?,
             None => EngineObjectFilter::any(),
         };
-        let constraint = clean_filter.as_ref().and_then(selection_constraint_from_filter);
+        let constraint = clean_filter
+            .as_ref()
+            .and_then(selection_constraint_from_filter);
         let (min, max) = match cs_opt {
             Some(cs) => lower_count_bounds(cs, acc, ctx)?,
             None => (EngineValueExpr::literal(1), EngineValueExpr::literal(1)),
         };
-        if is_random
-            && cs_opt.is_some_and(|cs| cs.up_to || cs.any_number)
-        {
+        if is_random && cs_opt.is_some_and(|cs| cs.up_to || cs.any_number) {
             return Err(LoweringError::Unsupported("v2:sacrifice-random-up-to"));
         }
         let exc_q = except
@@ -557,9 +568,7 @@ fn lower_discard(
     }
 
     // Explicit targeted, anaphoric, prior-card, or one-of-them discard.
-    if matches!(subject, v2::SubjectRef::OneOfThem(_))
-        || subject_has_among_prior(subject)
-    {
+    if matches!(subject, v2::SubjectRef::OneOfThem(_)) || subject_has_among_prior(subject) {
         let built =
             build_source_and_selection(actor, subject, from, except, count, true, acc, ctx)?;
         return emit_zone_op_with_prior(built, destination, None, acc, ctx);
@@ -606,7 +615,9 @@ fn lower_discard(
         Some(f) => filter::lower_object_filter(f, ctx)?,
         None => EngineObjectFilter::any(),
     };
-    let constraint = clean_filter.as_ref().and_then(selection_constraint_from_filter);
+    let constraint = clean_filter
+        .as_ref()
+        .and_then(selection_constraint_from_filter);
     let exc_q = except
         .map(|e| atoms::lower_subject_to_query(e, acc, ctx))
         .transpose()?;
@@ -659,10 +670,7 @@ fn lower_discard(
 
         let actor_sel = atoms::lower_player_ref(actor, acc, ctx)?;
         let chooser = resolve_choice_player(actor, chosen_player, &actor_sel, acc, ctx)?;
-        let mut src = ObjectQuery::zone(
-            QueryZone::Hand(Box::new(actor_sel)),
-            engine_filter,
-        );
+        let mut src = ObjectQuery::zone(QueryZone::Hand(Box::new(actor_sel)), engine_filter);
         if let Some(eq) = exc_q {
             src = ObjectQuery::difference(src, eq);
         }
@@ -696,10 +704,7 @@ fn lower_discard(
         };
         ctx.in_loop_player = prev_loop;
         let (chooser, hidden) = chooser_res?;
-        let mut src = ObjectQuery::zone(
-            QueryZone::Hand(Box::new(loop_player)),
-            engine_filter,
-        );
+        let mut src = ObjectQuery::zone(QueryZone::Hand(Box::new(loop_player)), engine_filter);
         if let Some(eq) = exc_q {
             src = ObjectQuery::difference(src, eq);
         }
@@ -735,10 +740,7 @@ fn lower_discard(
     let actor_sel = atoms::lower_player_ref(actor, acc, ctx)?;
     let chooser = resolve_choice_player(actor, chosen_player, &actor_sel, acc, ctx)?;
     let hidden = chooser == actor_sel;
-    let mut src = ObjectQuery::zone(
-        QueryZone::Hand(Box::new(actor_sel)),
-        engine_filter,
-    );
+    let mut src = ObjectQuery::zone(QueryZone::Hand(Box::new(actor_sel)), engine_filter);
     if let Some(eq) = exc_q {
         src = ObjectQuery::difference(src, eq);
     }
@@ -1014,7 +1016,9 @@ fn lower_look_top(
 ) -> LowerResult<()> {
     reject_modifiers(modifiers, "v2:look-top-with-modifiers")?;
     if to.is_some() || except.is_some() {
-        return Err(LoweringError::Unsupported("v2:look-top-with-dest-or-except"));
+        return Err(LoweringError::Unsupported(
+            "v2:look-top-with-dest-or-except",
+        ));
     }
 
     let eff_count = match (count, subject) {
@@ -1090,13 +1094,7 @@ fn lower_look_at(
         );
     }
     let built = build_source_and_selection(actor, subject, from, except, count, false, acc, ctx)?;
-    emit_zone_op_with_prior(
-        built,
-        EngineZoneDest::LookOnly { viewer },
-        None,
-        acc,
-        ctx,
-    )
+    emit_zone_op_with_prior(built, EngineZoneDest::LookOnly { viewer }, None, acc, ctx)
 }
 
 // Parameters mirror the orthogonal fields of `v2::Effect::ZoneOp` and lowering accumulators.
@@ -1213,10 +1211,14 @@ fn lower_counter_spell(
 ) -> LowerResult<()> {
     reject_modifiers(modifiers, "v2:counter-spell-with-modifiers")?;
     if actor != v2::PlayerRef::You {
-        return Err(LoweringError::Unsupported("v2:counter-spell-non-controller"));
+        return Err(LoweringError::Unsupported(
+            "v2:counter-spell-non-controller",
+        ));
     }
     if !from.is_empty() && from.iter().any(|z| z.zone != v2::ZoneKind::Stack) {
-        return Err(LoweringError::Unsupported("v2:counter-spell-non-stack-zone"));
+        return Err(LoweringError::Unsupported(
+            "v2:counter-spell-non-stack-zone",
+        ));
     }
     if except.is_some() || count.is_some() {
         return Err(LoweringError::Unsupported(
@@ -1526,8 +1528,10 @@ fn build_source_and_selection(
     {
         let (f1, chosen_player) = strip_of_chosen_player(f);
         let (f2, among_prior) = strip_among_prior_cards(&f1);
-        let (f3, prior_action_bound) =
-            strip_prior_action_for_binding(&f2, ctx.last_moved_binding.is_some() && from.is_empty());
+        let (f3, prior_action_bound) = strip_prior_action_for_binding(
+            &f2,
+            ctx.last_moved_binding.is_some() && from.is_empty(),
+        );
         let (f_clean, is_random) = strip_at_random(&f3);
         let from_prior = among_prior || prior_action_bound;
 
@@ -1535,10 +1539,9 @@ fn build_source_and_selection(
             effect::register_filter_player_targets(&f_clean, acc, ctx)?;
             let ef = filter::lower_object_filter(&f_clean, ctx)?;
             let prior_source_binding = if from_prior {
-                Some(
-                    ctx.last_moved_binding
-                        .ok_or(LoweringError::Unsupported("v2:filter:pred:among-prior-cards"))?,
-                )
+                Some(ctx.last_moved_binding.ok_or(LoweringError::Unsupported(
+                    "v2:filter:pred:among-prior-cards",
+                ))?)
             } else {
                 None
             };
@@ -2165,14 +2168,16 @@ fn should_loop_zone_op_per_player(
 }
 
 fn rewrite_loop_zone_owner(mut z: v2::ZoneRef, actor: v2::PlayerRef) -> v2::ZoneRef {
-    let matches_actor = match (actor, z.owner) {
-        (v2::PlayerRef::EachPlayer | v2::PlayerRef::EachOtherPlayer, v2::ZoneOwner::EachPlayer)
-        | (
+    let matches_actor = matches!(
+        (actor, z.owner),
+        (
+            v2::PlayerRef::EachPlayer | v2::PlayerRef::EachOtherPlayer,
+            v2::ZoneOwner::EachPlayer
+        ) | (
             v2::PlayerRef::EachOpponent | v2::PlayerRef::EachOtherOpponent,
             v2::ZoneOwner::Opponent | v2::ZoneOwner::Opponents,
-        ) => true,
-        _ => false,
-    };
+        )
+    );
     if matches_actor {
         z.owner = v2::ZoneOwner::ThatPlayer;
     }
@@ -2217,7 +2222,9 @@ fn lower_search_source(from: &[v2::ZoneRef], acc: &mut BodyAcc) -> LowerResult<S
             return Ok(SearchSource::OwnLibraryOrGraveyard);
         }
     }
-    Err(LoweringError::Unsupported("v2:search-multi-zone-unsupported"))
+    Err(LoweringError::Unsupported(
+        "v2:search-multi-zone-unsupported",
+    ))
 }
 
 fn lower_search_matcher<'a>(

@@ -580,7 +580,7 @@ fn wurmcoil_larva_death_uses_last_controller_and_creates_both_tokens_together() 
     let larva = source(LARVA, A, ObjectDestination::Hand);
     let mut escape = free_instant(
         BodyTarget::None,
-        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+        crate::keyword_creatures::toolbox_emit::draw_controller(
             spellwake_engine::program::ValueExpr::Literal(0.into()),
         ),
     );
@@ -592,7 +592,7 @@ fn wurmcoil_larva_death_uses_last_controller_and_creates_both_tokens_together() 
     for exile in [false, true] {
         let seize = free_instant(
             BodyTarget::SINGLE_PERMANENT,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+            crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
                 ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
                     ControlRecipient::ResolvingController,
@@ -925,7 +925,7 @@ fn cmm_sliver_stat_lords_apply_to_correct_controllers_and_end_on_departure() {
         let other = Program::creature(None, 4.into(), 4.into(), BTreeSet::new());
         let removal = free_instant(
             BodyTarget::SINGLE_CREATURE,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+            crate::keyword_creatures::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     spellwake_engine::toolbox::ZoneDest::Graveyard {

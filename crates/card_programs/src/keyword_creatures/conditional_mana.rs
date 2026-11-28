@@ -42,18 +42,16 @@ pub(super) fn tomb_of_spirit_dragon(card: &InventoryCard, profile: Profile) -> O
         source_cost: spellwake_engine::activated::SourceCost::Tap,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::count_battlefield(
-                        spellwake_engine::program::ObjectFilter::creature()
-                            .controlled()
-                            .with_color(spellwake_engine::program::ObjectColorFilter::Colorless),
-                    ),
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::count_battlefield(
+                    spellwake_engine::program::ObjectFilter::creature()
+                        .controlled()
+                        .with_color(spellwake_engine::program::ObjectColorFilter::Colorless),
+                ),
+            )],
         ),
     });
     Some(program)
@@ -104,7 +102,7 @@ pub(super) fn mage_ring(card: &InventoryCard, profile: Profile) -> Option<Progra
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                     spellwake_engine::effects::CounterKind::Storage,
                     spellwake_engine::program::ValueExpr::literal(1),
                 ),
@@ -251,14 +249,12 @@ pub(super) fn beacon(card: &InventoryCard, profile: Profile) -> Option<Program> 
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(1),
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::literal(1),
+            )],
         ),
     });
     Some(program)

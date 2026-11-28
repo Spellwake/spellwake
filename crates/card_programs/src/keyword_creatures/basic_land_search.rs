@@ -576,7 +576,7 @@ fn triggered(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 1,
                         },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        crate::keyword_creatures::toolbox_emit::draw_controller(
                             spellwake_engine::program::ValueExpr::Literal(1.into()),
                         ),
                     ],

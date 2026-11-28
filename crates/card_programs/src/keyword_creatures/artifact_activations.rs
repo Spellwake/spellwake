@@ -34,7 +34,7 @@ pub(super) fn compile(
     let (target, op) = match effect {
         "Destroy target permanent." => (
             BodyTarget::SINGLE_PERMANENT,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+            crate::keyword_creatures::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -47,7 +47,7 @@ pub(super) fn compile(
         ),
         "It deals 2 damage to target creature." => (
             BodyTarget::SINGLE_CREATURE,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            crate::keyword_creatures::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(2),
                 false,

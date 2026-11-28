@@ -136,7 +136,7 @@ fn cmm_spikeshot_goblin_pays_red_and_taps_to_deal_its_power_at_resolution_to_eac
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PERMANENT,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {

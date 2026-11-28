@@ -117,13 +117,11 @@ fn cmm_bloodchief_ascension_counts_each_end_step_and_at_three_quests_offers_a_li
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SINGLE_PLAYER,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                    spellwake_engine::program::ValueExpr::literal(2),
-                    false,
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(2),
+                false,
+            )],
         ),
     };
     let mut cards = draw_pile();
@@ -143,7 +141,7 @@ fn cmm_bloodchief_ascension_counts_each_end_step_and_at_three_quests_offers_a_li
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                crate::keyword_creatures::toolbox_emit::gain_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         spellwake_engine::program::ResolvingPlayer::Controller,
                     ),

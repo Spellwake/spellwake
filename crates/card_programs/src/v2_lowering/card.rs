@@ -169,7 +169,9 @@ fn lower_granted_face_inner(
         || scratch.cipher
         || scratch.printed_toxic.is_some()
     {
-        return Err(LoweringError::Unsupported("v2:granted:auxiliary-program-state"));
+        return Err(LoweringError::Unsupported(
+            "v2:granted:auxiliary-program-state",
+        ));
     }
 
     let mut activated = Vec::with_capacity(scratch.activated.len());
@@ -182,7 +184,9 @@ fn lower_granted_face_inner(
         }
     }
     if !scratch.activation_restrictions.is_empty() {
-        return Err(LoweringError::Unsupported("v2:granted:auxiliary-program-state"));
+        return Err(LoweringError::Unsupported(
+            "v2:granted:auxiliary-program-state",
+        ));
     }
 
     let mut statics = Vec::new();
@@ -212,7 +216,14 @@ pub(crate) fn lower_face_v2(
     opts: &FaceMetaOptions,
     vocab: &CreatureTypeVocabulary,
 ) -> LowerResult<Program> {
-    lower_face_v2_inner(card, face, compiled, opts, vocab, FaceLayoutFlags::default())
+    lower_face_v2_inner(
+        card,
+        face,
+        compiled,
+        opts,
+        vocab,
+        FaceLayoutFlags::default(),
+    )
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -380,7 +391,9 @@ fn lower_face_v2_inner(
         && parsed_tl.is_aura
         && program.permanent().is_some_and(|p| p.attachment.is_none())
     {
-        return Err(LoweringError::InvalidMetadata("v2:meta:aura-missing-enchant"));
+        return Err(LoweringError::InvalidMetadata(
+            "v2:meta:aura-missing-enchant",
+        ));
     }
 
     // 3. Lower replacement effects.
@@ -416,23 +429,22 @@ fn lower_face_v2_inner(
                 }
                 let prev_act_len = program.activated.len();
                 lower_activated_ability(cost, body, restrictions, &mut program, &mut ctx)?;
-                if is_class
-                    && let Some(lvl) = current_class_level
-                {
+                if is_class && let Some(lvl) = current_class_level {
                     for added in &program.activated[prev_act_len..] {
                         let existing = program.activation_restrictions.remove(&added.id);
                         program.activation_restrictions.insert(
                             added.id,
-                            combine_restrictions(existing, ActivationRestriction::MinClassLevel(lvl)),
+                            combine_restrictions(
+                                existing,
+                                ActivationRestriction::MinClassLevel(lvl),
+                            ),
                         );
                     }
                 }
             }
             v2::Ability::Triggered { trigger, body } => {
                 let mut lowered = lower_triggered_ability(trigger, body, &mut ctx)?;
-                if is_class
-                    && let Some(lvl) = current_class_level
-                {
+                if is_class && let Some(lvl) = current_class_level {
                     let gate = TriggerCondition::SourceClassLevelAtLeast(lvl);
                     for tr in &mut lowered {
                         let is_level_reached = matches!(
@@ -575,7 +587,13 @@ pub fn compile_v2_with_inventory(
                 .oracle_id
                 .as_deref()
                 .and_then(|id| inventory.and_then(|inv| inv.back_color_indicator(id)));
-            compile_v2_transforming_inner(card, inventory, vocab, indicator, loyalty_source_verified)
+            compile_v2_transforming_inner(
+                card,
+                inventory,
+                vocab,
+                indicator,
+                loyalty_source_verified,
+            )
         }
         "modal_dfc" => {
             let indicator = card
@@ -603,8 +621,14 @@ pub fn compile_v2_transforming(
     indicator: Option<&[String]>,
     loyalty_source_verified: bool,
 ) -> Option<Program> {
-    compile_v2_transforming_inner(card, Some(inventory), vocab, indicator, loyalty_source_verified)
-        .ok()
+    compile_v2_transforming_inner(
+        card,
+        Some(inventory),
+        vocab,
+        indicator,
+        loyalty_source_verified,
+    )
+    .ok()
 }
 
 /// Strictly compile a modal double-faced card via `v2` with optional source-authenticated loyalty
@@ -617,8 +641,14 @@ pub fn compile_v2_modal_dfc(
     indicator: Option<&[String]>,
     loyalty_source_verified: bool,
 ) -> Option<Program> {
-    compile_v2_modal_dfc_inner(card, Some(inventory), vocab, indicator, loyalty_source_verified)
-        .ok()
+    compile_v2_modal_dfc_inner(
+        card,
+        Some(inventory),
+        vocab,
+        indicator,
+        loyalty_source_verified,
+    )
+    .ok()
 }
 
 /// Strictly compile a single-face planeswalker card via `v2` with source-authenticated loyalty.
@@ -653,7 +683,9 @@ fn compile_v2_single_face(
     loyalty_source_verified: bool,
 ) -> LowerResult<Program> {
     let [face] = card.faces.as_slice() else {
-        return Err(LoweringError::InvalidMetadata("v2:meta:multi-face-single-layout"));
+        return Err(LoweringError::InvalidMetadata(
+            "v2:meta:multi-face-single-layout",
+        ));
     };
     if face.name != card.name {
         return Err(LoweringError::InvalidMetadata("v2:meta:face-name-mismatch"));
@@ -663,17 +695,18 @@ fn compile_v2_single_face(
         .as_deref()
         .ok_or(LoweringError::InvalidMetadata("v2:meta:missing-type-line"))?;
     let parsed_tl = parse_type_line(type_line, vocab)?;
-    let printed_loyalty = if loyalty_source_verified
-        && parsed_tl.card_types.contains(&CardType::Planeswalker)
-    {
-        lookup_loyalty(inventory, card.oracle_id.as_deref(), 0)
-    } else {
-        None
-    };
+    let printed_loyalty =
+        if loyalty_source_verified && parsed_tl.card_types.contains(&CardType::Planeswalker) {
+            lookup_loyalty(inventory, card.oracle_id.as_deref(), 0)
+        } else {
+            None
+        };
 
     let compiled_card = run_v2_compiler(card, &[face], vocab)?;
     let [compiled_face] = compiled_card.faces.as_slice() else {
-        return Err(LoweringError::InvalidMetadata("v2:meta:face-count-mismatch"));
+        return Err(LoweringError::InvalidMetadata(
+            "v2:meta:face-count-mismatch",
+        ));
     };
 
     let program = lower_face_v2(
@@ -747,7 +780,9 @@ fn compile_v2_split(card: &InventoryCard, vocab: &CreatureTypeVocabulary) -> Low
         fuse,
     }
     .into_program()
-    .ok_or(LoweringError::InvalidMetadata("v2:meta:split-combine-failed"))?;
+    .ok_or(LoweringError::InvalidMetadata(
+        "v2:meta:split-combine-failed",
+    ))?;
     combined.validate(vocab)?;
     Ok(combined)
 }
@@ -757,14 +792,22 @@ fn compile_v2_adventure(
     vocab: &CreatureTypeVocabulary,
 ) -> LowerResult<Program> {
     let [front_face, adv_face] = card.faces.as_slice() else {
-        return Err(LoweringError::InvalidMetadata("v2:meta:adventure-face-count"));
+        return Err(LoweringError::InvalidMetadata(
+            "v2:meta:adventure-face-count",
+        ));
     };
     let compiled_card = run_v2_compiler(card, &[front_face, adv_face], vocab)?;
     let [front_ir, adv_ir] = compiled_card.faces.as_slice() else {
         return Err(LoweringError::InvalidMetadata("v2:meta:adventure-ir-count"));
     };
 
-    let mut front = lower_face_v2(card, front_face, front_ir, &FaceMetaOptions::default(), vocab)?;
+    let mut front = lower_face_v2(
+        card,
+        front_face,
+        front_ir,
+        &FaceMetaOptions::default(),
+        vocab,
+    )?;
     let mut adventure = lower_face_v2(card, adv_face, adv_ir, &FaceMetaOptions::default(), vocab)?;
     front.names = single_face_name(&front_face.name)?;
     adventure.names = single_face_name(&adv_face.name)?;
@@ -782,11 +825,21 @@ fn compile_v2_transforming_inner(
     loyalty_source_verified: bool,
 ) -> LowerResult<Program> {
     let [front_face, back_face] = card.faces.as_slice() else {
-        return Err(LoweringError::InvalidMetadata("v2:meta:transform-face-count"));
+        return Err(LoweringError::InvalidMetadata(
+            "v2:meta:transform-face-count",
+        ));
     };
-    if card.layout != "transform" || !back_face.mana_cost.as_deref().unwrap_or("").trim().is_empty()
+    if card.layout != "transform"
+        || !back_face
+            .mana_cost
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
     {
-        return Err(LoweringError::InvalidMetadata("v2:meta:transform-invalid-back"));
+        return Err(LoweringError::InvalidMetadata(
+            "v2:meta:transform-invalid-back",
+        ));
     }
 
     let front_tl = front_face
@@ -800,20 +853,18 @@ fn compile_v2_transforming_inner(
     let front_parsed = parse_type_line(front_tl, vocab)?;
     let back_parsed = parse_type_line(back_tl, vocab)?;
 
-    let front_loyalty = if loyalty_source_verified
-        && front_parsed.card_types.contains(&CardType::Planeswalker)
-    {
-        lookup_loyalty(inventory, card.oracle_id.as_deref(), 0)
-    } else {
-        None
-    };
-    let back_loyalty = if loyalty_source_verified
-        && back_parsed.card_types.contains(&CardType::Planeswalker)
-    {
-        lookup_loyalty(inventory, card.oracle_id.as_deref(), 1)
-    } else {
-        None
-    };
+    let front_loyalty =
+        if loyalty_source_verified && front_parsed.card_types.contains(&CardType::Planeswalker) {
+            lookup_loyalty(inventory, card.oracle_id.as_deref(), 0)
+        } else {
+            None
+        };
+    let back_loyalty =
+        if loyalty_source_verified && back_parsed.card_types.contains(&CardType::Planeswalker) {
+            lookup_loyalty(inventory, card.oracle_id.as_deref(), 1)
+        } else {
+            None
+        };
     let front_defense = if front_parsed.card_types.contains(&CardType::Battle) {
         lookup_defense(inventory, card.oracle_id.as_deref(), 0)
     } else {
@@ -922,20 +973,18 @@ fn compile_v2_modal_dfc_inner(
     let front_parsed = parse_type_line(front_tl, vocab)?;
     let back_parsed = parse_type_line(back_tl, vocab)?;
 
-    let front_loyalty = if loyalty_source_verified
-        && front_parsed.card_types.contains(&CardType::Planeswalker)
-    {
-        lookup_loyalty(inventory, card.oracle_id.as_deref(), 0)
-    } else {
-        None
-    };
-    let back_loyalty = if loyalty_source_verified
-        && back_parsed.card_types.contains(&CardType::Planeswalker)
-    {
-        lookup_loyalty(inventory, card.oracle_id.as_deref(), 1)
-    } else {
-        None
-    };
+    let front_loyalty =
+        if loyalty_source_verified && front_parsed.card_types.contains(&CardType::Planeswalker) {
+            lookup_loyalty(inventory, card.oracle_id.as_deref(), 0)
+        } else {
+            None
+        };
+    let back_loyalty =
+        if loyalty_source_verified && back_parsed.card_types.contains(&CardType::Planeswalker) {
+            lookup_loyalty(inventory, card.oracle_id.as_deref(), 1)
+        } else {
+            None
+        };
 
     let compiled_card = run_v2_compiler(card, &[front_face, back_face], vocab)?;
     let [front_ir, back_ir] = compiled_card.faces.as_slice() else {
@@ -992,7 +1041,13 @@ fn compile_v2_flip(card: &InventoryCard, vocab: &CreatureTypeVocabulary) -> Lowe
         return Err(LoweringError::InvalidMetadata("v2:meta:flip-ir-count"));
     };
 
-    let mut front = lower_face_v2(card, front_face, front_ir, &FaceMetaOptions::default(), vocab)?;
+    let mut front = lower_face_v2(
+        card,
+        front_face,
+        front_ir,
+        &FaceMetaOptions::default(),
+        vocab,
+    )?;
     let mut back = lower_face_v2(
         card,
         back_face,
@@ -1032,8 +1087,20 @@ fn compile_v2_prepare(
         return Err(LoweringError::InvalidMetadata("v2:meta:prepare-ir-count"));
     };
 
-    let mut front = lower_face_v2(card, front_face, front_ir, &FaceMetaOptions::default(), vocab)?;
-    let mut spell = lower_face_v2(card, spell_face, spell_ir, &FaceMetaOptions::default(), vocab)?;
+    let mut front = lower_face_v2(
+        card,
+        front_face,
+        front_ir,
+        &FaceMetaOptions::default(),
+        vocab,
+    )?;
+    let mut spell = lower_face_v2(
+        card,
+        spell_face,
+        spell_ir,
+        &FaceMetaOptions::default(),
+        vocab,
+    )?;
     front.names = single_face_name(&front_face.name)?;
     spell.names = single_face_name(&spell_face.name)?;
     front.prepare_spell = Some(Box::new(spell));
@@ -1300,9 +1367,7 @@ fn lower_cast_timing_restrictions(
                 v2::CombatStepKind::DeclareAttackers => {
                     CastTimingRestriction::DuringDeclareAttackers
                 }
-                v2::CombatStepKind::DeclareBlockers => {
-                    CastTimingRestriction::DuringDeclareBlockers
-                }
+                v2::CombatStepKind::DeclareBlockers => CastTimingRestriction::DuringDeclareBlockers,
                 v2::CombatStepKind::CombatDamage => {
                     CastTimingRestriction::DuringStep(Step::CombatDamage)
                 }
@@ -1335,7 +1400,9 @@ fn lower_cast_timing_restrictions(
             | v2::ActivationRestriction::AllowedPlayer(_)
             | v2::ActivationRestriction::AsInstant
             | v2::ActivationRestriction::ControlledContinuously => {
-                return Err(LoweringError::Unsupported("v2:spell:cast-timing-restriction"));
+                return Err(LoweringError::Unsupported(
+                    "v2:spell:cast-timing-restriction",
+                ));
             }
         };
         items.push(lowered);
@@ -1425,13 +1492,12 @@ fn find_die_roll_in_trigger(program: &Program) -> Option<bool> {
         if body_has_empty_die_roll(&spell.body) {
             return Some(false);
         }
-        if let Some(modes) = &spell.modes {
-            if modes.prefix.as_deref().is_some_and(body_has_empty_die_roll)
+        if let Some(modes) = &spell.modes
+            && (modes.prefix.as_deref().is_some_and(body_has_empty_die_roll)
                 || modes.suffix.as_deref().is_some_and(body_has_empty_die_roll)
-                || modes.additional.iter().any(body_has_empty_die_roll)
-            {
-                return Some(false);
-            }
+                || modes.additional.iter().any(body_has_empty_die_roll))
+        {
+            return Some(false);
         }
     }
     if program

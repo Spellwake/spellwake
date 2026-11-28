@@ -26,7 +26,7 @@ fn monarch_game(name: &str, price: &[(ManaType, i64)]) -> (GameState, GameState)
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                crate::keyword_creatures::toolbox_emit::become_monarch(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
@@ -258,7 +258,7 @@ fn cmm_loyal_apprentice_drake_guardian_and_subordinate_check_their_own_commander
                     ObjectDestination::LibraryBottom,
                     free_instant(
                         BodyTarget::SINGLE_CREATURE,
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        crate::keyword_creatures::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
                                 spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -370,7 +370,7 @@ fn cmm_angelic_field_marshal_gains_two_power_and_toughness_and_grants_vigilance_
                 ObjectDestination::LibraryBottom,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -784,7 +784,7 @@ fn partners_with_campfire() -> GameState {
                 ObjectDestination::LibraryBottom,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {

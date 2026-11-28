@@ -114,11 +114,9 @@ fn game(name: &str, active: SeatId, cast_source: bool) -> GameState {
     let body = || {
         ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                    spellwake_engine::program::ValueExpr::Literal(1.into()),
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            )],
         )
     };
     let mut cards = vec![

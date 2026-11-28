@@ -51,9 +51,8 @@ fn scan_subject_player_target(subject: &v2::SubjectRef) -> Option<BodyTarget> {
         v2::SubjectRef::Each(flt) | v2::SubjectRef::All(flt) | v2::SubjectRef::Group(flt) => {
             scan_filter_player_target(flt)
         }
-        v2::SubjectRef::Counted { filter, count } => {
-            scan_filter_player_target(filter).or_else(|| scan_value_expr_player_target(&count.count))
-        }
+        v2::SubjectRef::Counted { filter, count } => scan_filter_player_target(filter)
+            .or_else(|| scan_value_expr_player_target(&count.count)),
         v2::SubjectRef::Compound(parts) => parts.iter().find_map(scan_subject_player_target),
         _ => None,
     }
@@ -222,9 +221,9 @@ pub(crate) fn lower_value_expr(
             let roles = lookup_party_roles(ctx)?;
             Ok(EngineValueExpr::PartyCount(Box::new(roles)))
         }
-        v2::ValueExpr::TimesKicked => Ok(EngineValueExpr::EventValue(
-            EventValueKind::KickerCount(0),
-        )),
+        v2::ValueExpr::TimesKicked => {
+            Ok(EngineValueExpr::EventValue(EventValueKind::KickerCount(0)))
+        }
         v2::ValueExpr::ColorCount(subject) => match subject.as_ref() {
             v2::SubjectRef::Each(filter)
             | v2::SubjectRef::All(filter)
@@ -397,9 +396,7 @@ pub(crate) fn lower_value_expr(
         v2::ValueExpr::DistinctCounterKinds(_) => Err(LoweringError::Unsupported(
             "v2:value:distinct-counter-kinds",
         )),
-        v2::ValueExpr::DistinctCardTypesAmong(filter) => {
-            lower_distinct_card_types_among(filter)
-        }
+        v2::ValueExpr::DistinctCardTypesAmong(filter) => lower_distinct_card_types_among(filter),
         v2::ValueExpr::PlayersWhoDidThisTurn { .. } => Err(LoweringError::Unsupported(
             "v2:value:players-who-did-this-turn",
         )),
@@ -421,9 +418,9 @@ pub(crate) fn lower_value_expr(
             ))
         }
         v2::ValueExpr::ConvokedCount => Err(LoweringError::Unsupported("v2:value:convoked-count")),
-        v2::ValueExpr::VisitedAttractionsThisTurn => Err(LoweringError::Unsupported(
-            "v2:value:visited-attractions",
-        )),
+        v2::ValueExpr::VisitedAttractionsThisTurn => {
+            Err(LoweringError::Unsupported("v2:value:visited-attractions"))
+        }
         v2::ValueExpr::Add(a, b) => Ok(EngineValueExpr::Add(
             Box::new(lower_value_expr(a, ctx)?),
             Box::new(lower_value_expr(b, ctx)?),
@@ -534,9 +531,9 @@ fn lower_prior_action_count(
         v2::PriorActionKind::LookedAtScryingThisWay => {
             Err(LoweringError::Unsupported("v2:value:prior-scry-count"))
         }
-        v2::PriorActionKind::CountersRemovedThisWay => {
-            Err(LoweringError::Unsupported("v2:value:prior-counters-removed"))
-        }
+        v2::PriorActionKind::CountersRemovedThisWay => Err(LoweringError::Unsupported(
+            "v2:value:prior-counters-removed",
+        )),
         v2::PriorActionKind::LifePaidAsEntered => {
             Err(LoweringError::Unsupported("v2:value:life-paid-as-entered"))
         }
@@ -619,9 +616,10 @@ fn lower_count_expr(
                     Some(ResolvingPlayer::TargetPlayer)
                 }
                 v2::ZoneOwner::DefendingPlayer => Some(ResolvingPlayer::DefendingPlayer),
-                v2::ZoneOwner::ThatPlayer => {
-                    Some(lower_world_resolving_player(v2::PlayerRef::ThatPlayer, ctx)?)
-                }
+                v2::ZoneOwner::ThatPlayer => Some(lower_world_resolving_player(
+                    v2::PlayerRef::ThatPlayer,
+                    ctx,
+                )?),
                 v2::ZoneOwner::Opponent | v2::ZoneOwner::Opponents => {
                     if let Some(existing) = cleaned.controller
                         && !matches!(
@@ -695,8 +693,8 @@ fn lower_counter_count_expr(
             }
         }
         v2::SubjectRef::Player(player) => {
-            let concrete = engine_kind
-                .ok_or(LoweringError::Unsupported("v2:value:player-any-counter"))?;
+            let concrete =
+                engine_kind.ok_or(LoweringError::Unsupported("v2:value:player-any-counter"))?;
             return lower_player_counter_subject_expr(*player, concrete, ctx);
         }
         _ => {
@@ -875,9 +873,7 @@ fn lower_event_count_this_turn(
             EngineValueExpr::PlayerStat(PlayerStatExpr::ControlledCreatureDiedThisTurn)
         }
         _ => {
-            return Err(LoweringError::Unsupported(
-                "v2:value:event-count-this-turn",
-            ));
+            return Err(LoweringError::Unsupported("v2:value:event-count-this-turn"));
         }
     };
 

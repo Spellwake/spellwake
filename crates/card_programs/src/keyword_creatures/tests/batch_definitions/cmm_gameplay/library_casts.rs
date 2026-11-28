@@ -20,7 +20,7 @@ fn cmm_zones_melek_copies_a_library_spell_and_changes_the_copy_target() {
                 ObjectDestination::LibraryBottom,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -40,7 +40,7 @@ fn cmm_zones_melek_copies_a_library_spell_and_changes_the_copy_target() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -151,14 +151,12 @@ fn cmm_zones_kaho_searches_for_instants_and_casts_only_its_linked_card_at_x() {
             ManaCost::generic(value.into()),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                        spellwake_engine::toolbox::PlayerSelector::Resolving(
-                            spellwake_engine::program::ResolvingPlayer::Controller,
-                        ),
-                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
-                ],
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                )],
             ),
         )
     };
@@ -318,7 +316,7 @@ fn cmm_zones_cunning_rhetoric_lets_the_defender_play_an_exiled_land_or_spend_any
 fn cmm_zones_torrential_gearhulk_flashes_in_casts_a_graveyard_instant_and_exiles_it() {
     let price = [(ManaType::Colourless, 4), (ManaType::Blue, 2)];
     let gain = |n: i64| {
-        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+        crate::keyword_creatures::toolbox_emit::gain_life(
             spellwake_engine::toolbox::PlayerSelector::Resolving(
                 spellwake_engine::program::ResolvingPlayer::Controller,
             ),

@@ -1,4 +1,4 @@
-//! Retired bespoke Destiny Spinner override; falls through to oracle_lowering.
+//! Retired bespoke Destiny Spinner override; falls through to v2_lowering.
 use super::*;
 
 pub(super) fn compile(

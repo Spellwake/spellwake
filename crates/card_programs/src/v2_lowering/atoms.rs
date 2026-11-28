@@ -127,12 +127,15 @@ pub(crate) fn lower_mana_cost(
                         alternative: HybridAlternative::TwoGeneric,
                     });
                 } else {
-                    return Err(LoweringError::Unsupported("v2:mana-cost:unsupported-hybrid"));
+                    return Err(LoweringError::Unsupported(
+                        "v2:mana-cost:unsupported-hybrid",
+                    ));
                 }
             }
             v2::ManaSymbol::Phyrexian(inner) => {
-                let first = lower_single_mana_type(inner)
-                    .ok_or(LoweringError::Unsupported("v2:mana-cost:unsupported-phyrexian"))?;
+                let first = lower_single_mana_type(inner).ok_or(LoweringError::Unsupported(
+                    "v2:mana-cost:unsupported-phyrexian",
+                ))?;
                 add_mana_unit(&mut required, first, 1);
                 hybrids.push(HybridSymbol {
                     first,
@@ -167,7 +170,9 @@ pub(crate) fn lower_mana_cost(
 }
 
 fn add_mana_unit(map: &mut BTreeMap<ManaType, RulesInteger>, mana_type: ManaType, count: i64) {
-    let entry = map.entry(mana_type).or_insert_with(|| RulesInteger::from(0));
+    let entry = map
+        .entry(mana_type)
+        .or_insert_with(|| RulesInteger::from(0));
     *entry = entry.plus(&RulesInteger::from(count));
 }
 
@@ -225,7 +230,9 @@ fn all_five_mana_colors() -> BTreeSet<ManaType> {
     ])
 }
 
-fn single_type_bundle(bundle: &BTreeMap<ManaType, RulesInteger>) -> Option<(ManaType, RulesInteger)> {
+fn single_type_bundle(
+    bundle: &BTreeMap<ManaType, RulesInteger>,
+) -> Option<(ManaType, RulesInteger)> {
     if bundle.len() == 1 {
         bundle.iter().next().map(|(k, v)| (*k, v.clone()))
     } else {
@@ -264,9 +271,7 @@ fn lower_bundle_choices(
             break;
         }
     }
-    if all_uniform
-        && let Some(amt) = uniform_amount
-    {
+    if all_uniform && let Some(amt) = uniform_amount {
         return Ok(EffectManaYield::Choice {
             colors,
             amount: EngineValueExpr::literal(amt),
@@ -283,8 +288,7 @@ fn collect_choice_bundles(
         v2::ManaSpec::Exact(cost) => {
             if cost.symbols.len() == 1
                 && let v2::ManaSymbol::Hybrid(a, b) = &cost.symbols[0]
-                && let (Some(m1), Some(m2)) =
-                    (lower_single_mana_type(a), lower_single_mana_type(b))
+                && let (Some(m1), Some(m2)) = (lower_single_mana_type(a), lower_single_mana_type(b))
             {
                 out.push(BTreeMap::from([(m1, RulesInteger::from(1))]));
                 out.push(BTreeMap::from([(m2, RulesInteger::from(1))]));
@@ -326,8 +330,7 @@ pub(crate) fn lower_mana_spec(
         v2::ManaSpec::Exact(cost) => {
             if cost.symbols.len() == 1
                 && let v2::ManaSymbol::Hybrid(a, b) = &cost.symbols[0]
-                && let (Some(m1), Some(m2)) =
-                    (lower_single_mana_type(a), lower_single_mana_type(b))
+                && let (Some(m1), Some(m2)) = (lower_single_mana_type(a), lower_single_mana_type(b))
             {
                 return Ok(EffectManaYield::Choice {
                     colors: BTreeSet::from([m1, m2]),
@@ -409,9 +412,9 @@ pub(crate) fn lower_mana_spec(
                             "v2:mana-spec:scaled-any-combination",
                         ));
                     }
-                    let factor = lower_value_const(amount)
-                        .filter(|&k| k > 0)
-                        .ok_or(LoweringError::Unsupported("v2:mana-spec:scaled-nonconst-base"))?;
+                    let factor = lower_value_const(amount).filter(|&k| k > 0).ok_or(
+                        LoweringError::Unsupported("v2:mana-spec:scaled-nonconst-base"),
+                    )?;
                     let total = scale_expr(lowered_scale, factor);
                     Ok(EffectManaYield::Choice {
                         colors: all_five_mana_colors(),
@@ -419,9 +422,9 @@ pub(crate) fn lower_mana_spec(
                     })
                 }
                 v2::ManaSpec::ChosenColor(amount) => {
-                    let factor = lower_value_const(amount)
-                        .filter(|&k| k > 0)
-                        .ok_or(LoweringError::Unsupported("v2:mana-spec:scaled-nonconst-base"))?;
+                    let factor = lower_value_const(amount).filter(|&k| k > 0).ok_or(
+                        LoweringError::Unsupported("v2:mana-spec:scaled-nonconst-base"),
+                    )?;
                     let total = scale_expr(lowered_scale, factor);
                     Ok(EffectManaYield::SourceChosenColor { amount: total })
                 }
@@ -984,8 +987,9 @@ fn lower_hexproof_from(
 ) -> LowerResult<KeywordAbility> {
     match param {
         v2::KeywordParam::Color(mask) => {
-            let color = single_color_from_mask(*mask)
-                .ok_or(LoweringError::Unsupported("v2:keyword:hexproof-multi-color"))?;
+            let color = single_color_from_mask(*mask).ok_or(LoweringError::Unsupported(
+                "v2:keyword:hexproof-multi-color",
+            ))?;
             Ok(KeywordAbility::HexproofFrom(HexproofQuality::Color(color)))
         }
         v2::KeywordParam::Filter(f) => {
@@ -1010,15 +1014,15 @@ fn lower_hexproof_from(
                 && f.any_colors.is_empty()
             {
                 return match arity {
-                    ast::ColorArity::Monocolored => Ok(KeywordAbility::HexproofFrom(
-                        HexproofQuality::Monocolored,
-                    )),
-                    ast::ColorArity::Multicolored => Ok(KeywordAbility::HexproofFrom(
-                        HexproofQuality::Multicolored,
-                    )),
-                    ast::ColorArity::Colorless | ast::ColorArity::Colored => {
-                        Err(LoweringError::Unsupported("v2:keyword:hexproof-color-arity"))
+                    ast::ColorArity::Monocolored => {
+                        Ok(KeywordAbility::HexproofFrom(HexproofQuality::Monocolored))
                     }
+                    ast::ColorArity::Multicolored => {
+                        Ok(KeywordAbility::HexproofFrom(HexproofQuality::Multicolored))
+                    }
+                    ast::ColorArity::Colorless | ast::ColorArity::Colored => Err(
+                        LoweringError::Unsupported("v2:keyword:hexproof-color-arity"),
+                    ),
                 };
             }
             if !f.any_colors.is_empty()
@@ -1027,8 +1031,9 @@ fn lower_hexproof_from(
                 && f.subtypes.is_empty()
                 && f.color_arity.is_none()
             {
-                let color = single_color_from_mask(f.any_colors)
-                    .ok_or(LoweringError::Unsupported("v2:keyword:hexproof-multi-color"))?;
+                let color = single_color_from_mask(f.any_colors).ok_or(
+                    LoweringError::Unsupported("v2:keyword:hexproof-multi-color"),
+                )?;
                 return Ok(KeywordAbility::HexproofFrom(HexproofQuality::Color(color)));
             }
             if f.subtypes.len() == 1
@@ -1081,9 +1086,7 @@ fn lower_protection_from(
                 && f.any_colors.is_empty()
             {
                 return match arity {
-                    ast::ColorArity::Multicolored => {
-                        Ok(KeywordAbility::ProtectionFromMulticolored)
-                    }
+                    ast::ColorArity::Multicolored => Ok(KeywordAbility::ProtectionFromMulticolored),
                     ast::ColorArity::Monocolored => Ok(KeywordAbility::ProtectionFrom(
                         ProtectionFromQuality::Monocolored,
                     )),
@@ -1181,8 +1184,7 @@ fn lower_landwalk_filter(f: &v2::ObjectFilter) -> LowerResult<KeywordAbility> {
 
     let types = f.all_types.0 | f.any_types.0;
     let is_land_or_empty = types == 0 || types == ast::CardTypeMask::LAND.0;
-    let is_artifact_land =
-        types == (ast::CardTypeMask::ARTIFACT.0 | ast::CardTypeMask::LAND.0);
+    let is_artifact_land = types == (ast::CardTypeMask::ARTIFACT.0 | ast::CardTypeMask::LAND.0);
 
     if is_artifact_land
         && f.required_supertypes.is_empty()
@@ -1197,8 +1199,7 @@ fn lower_landwalk_filter(f: &v2::ObjectFilter) -> LowerResult<KeywordAbility> {
     }
 
     if f.subtypes.is_empty() {
-        if f.forbidden_supertypes == ast::SupertypeMask::BASIC && f.required_supertypes.is_empty()
-        {
+        if f.forbidden_supertypes == ast::SupertypeMask::BASIC && f.required_supertypes.is_empty() {
             return Ok(KeywordAbility::NonbasicLandwalk);
         }
         if f.required_supertypes == ast::SupertypeMask::LEGENDARY
@@ -1224,14 +1225,10 @@ fn lower_landwalk_filter(f: &v2::ObjectFilter) -> LowerResult<KeywordAbility> {
             (false, spellwake_engine::land::LandType::Plains) => Ok(KeywordAbility::Plainswalk),
             (false, spellwake_engine::land::LandType::Island) => Ok(KeywordAbility::Islandwalk),
             (false, spellwake_engine::land::LandType::Swamp) => Ok(KeywordAbility::Swampwalk),
-            (false, spellwake_engine::land::LandType::Mountain) => {
-                Ok(KeywordAbility::Mountainwalk)
-            }
+            (false, spellwake_engine::land::LandType::Mountain) => Ok(KeywordAbility::Mountainwalk),
             (false, spellwake_engine::land::LandType::Forest) => Ok(KeywordAbility::Forestwalk),
             (false, spellwake_engine::land::LandType::Desert) => Ok(KeywordAbility::Desertwalk),
-            (true, spellwake_engine::land::LandType::Forest) => {
-                Ok(KeywordAbility::SnowForestwalk)
-            }
+            (true, spellwake_engine::land::LandType::Forest) => Ok(KeywordAbility::SnowForestwalk),
             (true, spellwake_engine::land::LandType::Swamp) => Ok(KeywordAbility::SnowSwampwalk),
             _ => Err(LoweringError::Unsupported("v2:keyword:landwalk-subtype")),
         };
@@ -1294,15 +1291,15 @@ pub(crate) fn lower_duration(dur: &v2::Duration) -> LowerResult<ResolvedDuration
             Err(LoweringError::Unsupported("v2:duration:for-as-long-as"))
         }
         v2::Duration::Instant => Err(LoweringError::Unsupported("v2:duration:instant")),
-        v2::Duration::UntilYourNextEndStep => {
-            Err(LoweringError::Unsupported("v2:duration:until-next-end-step"))
-        }
+        v2::Duration::UntilYourNextEndStep => Err(LoweringError::Unsupported(
+            "v2:duration:until-next-end-step",
+        )),
         v2::Duration::UntilYourNextUpkeep => {
             Err(LoweringError::Unsupported("v2:duration:until-next-upkeep"))
         }
-        v2::Duration::ForAsLongAsExiled => {
-            Err(LoweringError::Unsupported("v2:duration:for-as-long-as-exiled"))
-        }
+        v2::Duration::ForAsLongAsExiled => Err(LoweringError::Unsupported(
+            "v2:duration:for-as-long-as-exiled",
+        )),
     }
 }
 
@@ -1504,9 +1501,7 @@ pub(crate) fn lower_resolving_player(
         v2::PlayerRef::ChosenPlayer => Ok(ResolvingPlayer::ChosenPlayer),
         v2::PlayerRef::AnyOpponent => Err(LoweringError::Unsupported("v2:player:any-opponent")),
         v2::PlayerRef::AnyPlayer => Err(LoweringError::Unsupported("v2:player:any-player")),
-        v2::PlayerRef::LowestLifePlayer => {
-            Err(LoweringError::Unsupported("v2:player:lowest-life"))
-        }
+        v2::PlayerRef::LowestLifePlayer => Err(LoweringError::Unsupported("v2:player:lowest-life")),
         v2::PlayerRef::HighestLifePlayer => {
             Err(LoweringError::Unsupported("v2:player:highest-life"))
         }
@@ -1532,7 +1527,9 @@ pub(crate) fn lower_affected_players(
         v2::PlayerRef::EachOtherOpponent => {
             Err(LoweringError::Unsupported("v2:player:each-other-opponent"))
         }
-        other => Ok(AffectedPlayers::One(lower_resolving_player(other, acc, ctx)?)),
+        other => Ok(AffectedPlayers::One(lower_resolving_player(
+            other, acc, ctx,
+        )?)),
     }
 }
 
@@ -1697,7 +1694,9 @@ pub(crate) fn lower_world_resolving_player(
             if ctx.in_loop_player {
                 Ok(ResolvingPlayer::LoopPlayer)
             } else {
-                Err(LoweringError::Unsupported("v2:player:world-group-as-single"))
+                Err(LoweringError::Unsupported(
+                    "v2:player:world-group-as-single",
+                ))
             }
         }
         v2::PlayerRef::EachOtherOpponent => {
@@ -1705,9 +1704,7 @@ pub(crate) fn lower_world_resolving_player(
         }
         v2::PlayerRef::AnyOpponent => Err(LoweringError::Unsupported("v2:player:any-opponent")),
         v2::PlayerRef::AnyPlayer => Err(LoweringError::Unsupported("v2:player:any-player")),
-        v2::PlayerRef::LowestLifePlayer => {
-            Err(LoweringError::Unsupported("v2:player:lowest-life"))
-        }
+        v2::PlayerRef::LowestLifePlayer => Err(LoweringError::Unsupported("v2:player:lowest-life")),
         v2::PlayerRef::HighestLifePlayer => {
             Err(LoweringError::Unsupported("v2:player:highest-life"))
         }
@@ -1763,9 +1760,9 @@ pub(crate) fn lower_static_controller(
         ast::ControllerRelation::ItsController => {
             Err(LoweringError::Unsupported("v2:controller:its-controller"))
         }
-        ast::ControllerRelation::OwnerThatPlayer => {
-            Err(LoweringError::Unsupported("v2:controller:owner-that-player"))
-        }
+        ast::ControllerRelation::OwnerThatPlayer => Err(LoweringError::Unsupported(
+            "v2:controller:owner-that-player",
+        )),
         ast::ControllerRelation::ChosenPlayer => {
             Err(LoweringError::Unsupported("v2:controller:chosen-player"))
         }
@@ -1811,9 +1808,9 @@ fn lower_zone_owner_selector(
             Ok(PlayerSelector::Resolving(ResolvingPlayer::DefendingPlayer))
         }
         v2::ZoneOwner::ThatPlayer => lower_player_ref(v2::PlayerRef::ThatPlayer, acc, ctx),
-        v2::ZoneOwner::ItsOwner
-        | v2::ZoneOwner::TheirOwners
-        | v2::ZoneOwner::ThatCreatureOwner => lower_player_ref(v2::PlayerRef::ItsOwner, acc, ctx),
+        v2::ZoneOwner::ItsOwner | v2::ZoneOwner::TheirOwners | v2::ZoneOwner::ThatCreatureOwner => {
+            lower_player_ref(v2::PlayerRef::ItsOwner, acc, ctx)
+        }
     }
 }
 
@@ -1866,9 +1863,7 @@ pub(crate) fn lower_zone_ref(
             | v2::ZoneOwner::EachPlayer => Ok(QueryZone::Command),
             _ => Err(LoweringError::Unsupported("v2:zone:scoped-command")),
         },
-        v2::ZoneKind::OutsideTheGame => {
-            Err(LoweringError::Unsupported("v2:zone:outside-the-game"))
-        }
+        v2::ZoneKind::OutsideTheGame => Err(LoweringError::Unsupported("v2:zone:outside-the-game")),
     }
 }
 
@@ -1939,9 +1934,7 @@ pub(crate) fn lower_world_query_zone(
             | v2::ZoneOwner::EachPlayer => Ok(QueryZone::Command),
             _ => Err(LoweringError::Unsupported("v2:zone:scoped-command")),
         },
-        v2::ZoneKind::OutsideTheGame => {
-            Err(LoweringError::Unsupported("v2:zone:outside-the-game"))
-        }
+        v2::ZoneKind::OutsideTheGame => Err(LoweringError::Unsupported("v2:zone:outside-the-game")),
     }
 }
 
@@ -2013,9 +2006,9 @@ pub(crate) fn lower_zone_kind_to_source_zone_kind(
         v2::ZoneKind::CommandZone => Ok(SourceZoneKind::Command),
         v2::ZoneKind::Stack => Ok(SourceZoneKind::Stack),
         v2::ZoneKind::Library => Ok(SourceZoneKind::Library),
-        v2::ZoneKind::OutsideTheGame => {
-            Err(LoweringError::Unsupported("v2:source-zone:outside-the-game"))
-        }
+        v2::ZoneKind::OutsideTheGame => Err(LoweringError::Unsupported(
+            "v2:source-zone:outside-the-game",
+        )),
     }
 }
 
@@ -2041,10 +2034,9 @@ pub(crate) fn lower_source_zone_filter(zone: v2::ZoneRef) -> LowerResult<SourceZ
             v2::ZoneKind::Graveyard,
             v2::ZoneOwner::Any | v2::ZoneOwner::All | v2::ZoneOwner::EachPlayer,
         ) => Ok(SourceZoneFilter::AnyGraveyard),
-        (
-            v2::ZoneKind::Graveyard,
-            v2::ZoneOwner::TargetPlayer | v2::ZoneOwner::TargetOpponent,
-        ) => Ok(SourceZoneFilter::TargetPlayerGraveyard),
+        (v2::ZoneKind::Graveyard, v2::ZoneOwner::TargetPlayer | v2::ZoneOwner::TargetOpponent) => {
+            Ok(SourceZoneFilter::TargetPlayerGraveyard)
+        }
         (v2::ZoneKind::Battlefield, v2::ZoneOwner::You) => Ok(SourceZoneFilter::Battlefield),
         (
             v2::ZoneKind::Battlefield,
@@ -2069,10 +2061,7 @@ pub(crate) fn lower_source_zone_filter(zone: v2::ZoneRef) -> LowerResult<SourceZ
         }
         (
             v2::ZoneKind::CommandZone,
-            v2::ZoneOwner::Default
-            | v2::ZoneOwner::You
-            | v2::ZoneOwner::Any
-            | v2::ZoneOwner::All,
+            v2::ZoneOwner::Default | v2::ZoneOwner::You | v2::ZoneOwner::Any | v2::ZoneOwner::All,
         ) => Ok(SourceZoneFilter::CommandZone),
         _ => Err(LoweringError::Unsupported("v2:source-zone:unsupported")),
     }
@@ -2093,11 +2082,9 @@ pub(crate) fn lower_zone_dest(
                 ));
             }
             let controller = match dest.under_control.unwrap_or(dest.owner) {
-                v2::ZoneOwner::Default | v2::ZoneOwner::You => {
-                    ZoneController::Player(Box::new(PlayerSelector::Resolving(
-                        ResolvingPlayer::Controller,
-                    )))
-                }
+                v2::ZoneOwner::Default | v2::ZoneOwner::You => ZoneController::Player(Box::new(
+                    PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                )),
                 v2::ZoneOwner::ItsOwner
                 | v2::ZoneOwner::TheirOwners
                 | v2::ZoneOwner::ThatCreatureOwner => ZoneController::Owner,
@@ -2113,14 +2100,14 @@ pub(crate) fn lower_zone_dest(
                         ResolvingPlayer::TargetPlayer,
                     )))
                 }
-                v2::ZoneOwner::ThatPlayer => ZoneController::Player(Box::new(
-                    lower_player_ref(v2::PlayerRef::ThatPlayer, acc, ctx)?,
+                v2::ZoneOwner::ThatPlayer => ZoneController::Player(Box::new(lower_player_ref(
+                    v2::PlayerRef::ThatPlayer,
+                    acc,
+                    ctx,
+                )?)),
+                v2::ZoneOwner::DefendingPlayer => ZoneController::Player(Box::new(
+                    PlayerSelector::Resolving(ResolvingPlayer::DefendingPlayer),
                 )),
-                v2::ZoneOwner::DefendingPlayer => {
-                    ZoneController::Player(Box::new(PlayerSelector::Resolving(
-                        ResolvingPlayer::DefendingPlayer,
-                    )))
-                }
                 v2::ZoneOwner::Opponent
                 | v2::ZoneOwner::Opponents
                 | v2::ZoneOwner::EachPlayer
@@ -2229,16 +2216,16 @@ pub(crate) fn lower_zone_dest(
                 ));
             }
             let position = match (dest.library_position, dest.library_order) {
-                (None | Some(v2::LibraryPosition::Top), None | Some(v2::LibraryOrder::AnyOrder)) => {
-                    LibraryOrderPos::Top
-                }
+                (
+                    None | Some(v2::LibraryPosition::Top),
+                    None | Some(v2::LibraryOrder::AnyOrder),
+                ) => LibraryOrderPos::Top,
                 (Some(v2::LibraryPosition::Bottom), Some(v2::LibraryOrder::RandomOrder)) => {
                     LibraryOrderPos::BottomRandom
                 }
-                (
-                    Some(v2::LibraryPosition::Bottom),
-                    None | Some(v2::LibraryOrder::AnyOrder),
-                ) => LibraryOrderPos::Bottom,
+                (Some(v2::LibraryPosition::Bottom), None | Some(v2::LibraryOrder::AnyOrder)) => {
+                    LibraryOrderPos::Bottom
+                }
                 (
                     Some(v2::LibraryPosition::TopOrBottom),
                     None | Some(v2::LibraryOrder::AnyOrder),
@@ -2260,9 +2247,7 @@ pub(crate) fn lower_zone_dest(
             };
             Ok(EngineZoneDest::Library { position })
         }
-        v2::ZoneKind::CommandZone => {
-            Err(LoweringError::Unsupported("v2:zone-dest:command-zone"))
-        }
+        v2::ZoneKind::CommandZone => Err(LoweringError::Unsupported("v2:zone-dest:command-zone")),
         v2::ZoneKind::Stack => Err(LoweringError::Unsupported("v2:zone-dest:stack")),
         v2::ZoneKind::OutsideTheGame => {
             Err(LoweringError::Unsupported("v2:zone-dest:outside-the-game"))
@@ -2341,7 +2326,10 @@ fn subject_is_targeting(subj: &v2::SubjectRef) -> bool {
         | v2::SubjectRef::TargetPlayer { .. }
         | v2::SubjectRef::TargetObject { .. } => true,
         v2::SubjectRef::Player(p) | v2::SubjectRef::HandOf(p) => {
-            matches!(p, v2::PlayerRef::TargetPlayer | v2::PlayerRef::TargetOpponent)
+            matches!(
+                p,
+                v2::PlayerRef::TargetPlayer | v2::PlayerRef::TargetOpponent
+            )
         }
         v2::SubjectRef::Compound(parts) => parts.iter().any(subject_is_targeting),
         _ => false,
@@ -2529,9 +2517,7 @@ fn lower_target_object_filter(
             | v2::ZoneKind::Library
             | v2::ZoneKind::CommandZone
             | v2::ZoneKind::OutsideTheGame
-            | v2::ZoneKind::Stack => {
-                Err(LoweringError::Unsupported("v2:target:unsupported-zone"))
-            }
+            | v2::ZoneKind::Stack => Err(LoweringError::Unsupported("v2:target:unsupported-zone")),
         };
     }
 
@@ -2558,15 +2544,15 @@ fn apply_zone_owner_to_bf_filter(
         v2::ZoneOwner::TargetPlayer => ast::ControllerRelation::TargetPlayer,
         v2::ZoneOwner::DefendingPlayer => ast::ControllerRelation::DefendingPlayer,
         v2::ZoneOwner::ThatPlayer => ast::ControllerRelation::ThatPlayer,
-        v2::ZoneOwner::ItsOwner
-        | v2::ZoneOwner::TheirOwners
-        | v2::ZoneOwner::ThatCreatureOwner => {
+        v2::ZoneOwner::ItsOwner | v2::ZoneOwner::TheirOwners | v2::ZoneOwner::ThatCreatureOwner => {
             return Err(LoweringError::Unsupported("v2:target:bf-owner-ref"));
         }
     };
     if let Some(existing) = filter.controller {
         if existing != rel {
-            return Err(LoweringError::Unsupported("v2:target:conflicting-controller"));
+            return Err(LoweringError::Unsupported(
+                "v2:target:conflicting-controller",
+            ));
         }
     } else {
         filter.controller = Some(rel);
@@ -2696,7 +2682,9 @@ pub(crate) fn lower_subject_to_query(
         | v2::SubjectRef::Group(filter) => lower_group_filter_to_query(filter, acc, ctx),
         v2::SubjectRef::Counted { filter, count } => {
             if count.up_to || count.any_number {
-                return Err(LoweringError::Unsupported("v2:subject:counted-choice-query"));
+                return Err(LoweringError::Unsupported(
+                    "v2:subject:counted-choice-query",
+                ));
             }
             if let Some(target) = scan_value_expr_player_target(&count.count) {
                 acc.register_target(target, v2::TargetCount::Exact(1))?;
@@ -2743,12 +2731,8 @@ pub(crate) fn lower_subject_to_query(
         v2::SubjectRef::TargetPlayer { .. } => {
             Err(LoweringError::Unsupported("v2:subject:player-as-object"))
         }
-        v2::SubjectRef::Player(_) => {
-            Err(LoweringError::Unsupported("v2:subject:player-as-object"))
-        }
-        v2::SubjectRef::OneOfThem(_) => {
-            Err(LoweringError::Unsupported("v2:subject:one-of-them"))
-        }
+        v2::SubjectRef::Player(_) => Err(LoweringError::Unsupported("v2:subject:player-as-object")),
+        v2::SubjectRef::OneOfThem(_) => Err(LoweringError::Unsupported("v2:subject:one-of-them")),
         v2::SubjectRef::PlayersDealtCombatDamageBy { .. } => Err(LoweringError::Unsupported(
             "v2:subject:players-dealt-combat-damage",
         )),

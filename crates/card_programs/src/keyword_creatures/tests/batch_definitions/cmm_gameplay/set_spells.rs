@@ -436,11 +436,9 @@ fn cmm_swift_response_requires_a_tapped_creature_at_announcement_and_resolution(
                 6,
                 A,
                 ObjectDestination::Hand,
-                change_one_permanent(
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(
-                        false,
-                    ),
-                ),
+                change_one_permanent(crate::keyword_creatures::toolbox_emit::set_targets_tapped(
+                    false,
+                )),
             ),
         ],
         &[],
@@ -968,7 +966,7 @@ fn cmm_removal_reads_target_power_control_and_flying_at_resolution() {
                     A,
                     ObjectDestination::Hand,
                     change_one_permanent(
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             ResolvedPartsSpec(parts),
                             ResolvedDuration::UntilEndOfTurn,

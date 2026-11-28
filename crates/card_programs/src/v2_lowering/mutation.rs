@@ -33,8 +33,8 @@ use spellwake_engine::{
         ObjectCombatOp, ObjectMutation as EngineObjectMutation, ObjectQuery, ObjectStateMarkerOp,
         OrientationOp, PlayerDesignationOp, PlayerKeywordAction,
         PlayerMutation as EnginePlayerMutation, PlayerSelector, QuerySlice, QueryZone,
-        SelectionConstraint, SideDeckKind, SideDeckOpKind, SideDeckOpSpec, StackOpSpec,
-        TapStateOp, ZoneDest as EngineZoneDest, ZoneOpSpec, ZoneSelection,
+        SelectionConstraint, SideDeckKind, SideDeckOpKind, SideDeckOpSpec, StackOpSpec, TapStateOp,
+        ZoneDest as EngineZoneDest, ZoneOpSpec, ZoneSelection,
     },
 };
 use spellwake_oracle_compiler::v2::ir as v2;
@@ -156,7 +156,10 @@ pub(crate) fn lower_object_mutation(
             if kws.len() == 1
                 && kws[0].kind == v2::KeywordKind::Flashback
                 && kws[0].param.is_none()
-                && matches!(duration, v2::Duration::Instant | v2::Duration::UntilEndOfTurn)
+                && matches!(
+                    duration,
+                    v2::Duration::Instant | v2::Duration::UntilEndOfTurn
+                )
             {
                 let (source, selection) = lower_mutation_source_and_selection(subject, acc, ctx)?;
                 return emit_object_mutation_selected(
@@ -301,7 +304,13 @@ pub(crate) fn lower_object_mutation(
                     amount,
                 }
             };
-            emit_object_mutation_selected(source, selection, EngineObjectMutation::Counters(op), acc, ctx)
+            emit_object_mutation_selected(
+                source,
+                selection,
+                EngineObjectMutation::Counters(op),
+                acc,
+                ctx,
+            )
         }
         v2::ObjectMutation::MoveCounters {
             from,
@@ -316,9 +325,7 @@ pub(crate) fn lower_object_mutation(
             };
             effect::register_value_expr_player_targets(count, acc, ctx)?;
             let amount = value::lower_value_expr(count, ctx)?;
-            if !acc.target_set
-                && try_emit_two_target_pair(from, to, acc, ctx)?
-            {
+            if !acc.target_set && try_emit_two_target_pair(from, to, acc, ctx)? {
                 return emit_object_mutation(
                     ObjectQuery::LinkedTarget { index: 0 },
                     EngineObjectMutation::Counters(CounterOp::Move {
@@ -452,9 +459,7 @@ pub(crate) fn lower_object_mutation(
                     ResolvedPartSpec::ChosenBasicLandType { add: false }
                 }
                 v2::CharacteristicKind::CreatureType => {
-                    return Err(LoweringError::Unsupported(
-                        "v2:become-chosen-creature-type",
-                    ));
+                    return Err(LoweringError::Unsupported("v2:become-chosen-creature-type"));
                 }
                 v2::CharacteristicKind::CardType => {
                     return Err(LoweringError::Unsupported("v2:become-chosen-card-type"));
@@ -499,9 +504,7 @@ pub(crate) fn lower_object_mutation(
         }
         v2::ObjectMutation::AttachTo(host_subject) => {
             require_instant_duration(duration, "v2:attach-to-unexpected-duration")?;
-            if !acc.target_set
-                && try_emit_two_target_pair(subject, host_subject, acc, ctx)?
-            {
+            if !acc.target_set && try_emit_two_target_pair(subject, host_subject, acc, ctx)? {
                 return emit_object_mutation(
                     ObjectQuery::LinkedTarget { index: 0 },
                     EngineObjectMutation::Attach(AttachOp::ToObject {
@@ -567,10 +570,11 @@ pub(crate) fn lower_object_mutation(
             }
             let dur = duration_default_eot(duration)?;
             let query = lower_mutation_subject_query(subject, acc, ctx)?;
-            let parts = vec![
-                ResolvedPartSpec::BlockingRestriction(BlockingRestriction::AdditionalBlock);
-                usize::from(*extra)
-            ];
+            let parts =
+                vec![
+                    ResolvedPartSpec::BlockingRestriction(BlockingRestriction::AdditionalBlock);
+                    usize::from(*extra)
+                ];
             acc.push(Instruction::ApplyContinuous(Box::new(
                 ApplyContinuousSpec::resolved_parts(query, ResolvedPartsSpec(parts), dur),
             )));
@@ -578,9 +582,7 @@ pub(crate) fn lower_object_mutation(
         }
         v2::ObjectMutation::Fight(other) => {
             require_instant_duration(duration, "v2:fight-unexpected-duration")?;
-            if !acc.target_set
-                && try_emit_two_target_pair(subject, other, acc, ctx)?
-            {
+            if !acc.target_set && try_emit_two_target_pair(subject, other, acc, ctx)? {
                 acc.push(Instruction::DealDamage(Box::new(DealDamageSpec::fight(
                     ObjectQuery::LinkedTarget { index: 0 },
                     ObjectQuery::LinkedTarget { index: 1 },
@@ -914,7 +916,9 @@ fn lower_become_types(
         } else if let Some(et) = LowerCtx::lookup_enchantment_subtype(raw) {
             enchantment_subs.insert(et);
         } else {
-            return Err(LoweringError::Unsupported("v2:become-types-unknown-subtype"));
+            return Err(LoweringError::Unsupported(
+                "v2:become-types-unknown-subtype",
+            ));
         }
     }
 
@@ -1072,9 +1076,7 @@ fn lower_chosen_color_protection_recipients(
         {
             Ok(ProtectionRecipients::TargetPermanent)
         }
-        v2::SubjectRef::Group(flt)
-        | v2::SubjectRef::Each(flt)
-        | v2::SubjectRef::All(flt) => {
+        v2::SubjectRef::Group(flt) | v2::SubjectRef::Each(flt) | v2::SubjectRef::All(flt) => {
             effect::register_filter_player_targets(flt, acc, ctx)?;
             let ef = filter::lower_object_filter(flt, ctx)?;
             Ok(ProtectionRecipients::Matching(Box::new(ef)))
@@ -1126,9 +1128,9 @@ fn lower_apply_rule_mutation(
             )]
         }
         v2::RuleRestrictionKind::CantBeBlockedExceptByCount(2) => {
-            vec![ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([
-                KeywordAbility::Menace,
-            ]))]
+            vec![ResolvedPartSpec::Abilities(AbilityChange::grant_keywords(
+                [KeywordAbility::Menace],
+            ))]
         }
         v2::RuleRestrictionKind::CantBeBlockedExceptByCount(3) => {
             vec![ResolvedPartSpec::BlockingRestriction(
@@ -1201,9 +1203,9 @@ fn lower_apply_rule_mutation(
             }
         },
         v2::RuleRestrictionKind::DamageCantBePrevented => {
-            vec![ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([
-                KeywordAbility::DamageCannotBePrevented,
-            ]))]
+            vec![ResolvedPartSpec::Abilities(AbilityChange::grant_keywords(
+                [KeywordAbility::DamageCannotBePrevented],
+            ))]
         }
         v2::RuleRestrictionKind::CantBeTargetedBy(obj_filter) => {
             if is_pure_color_filter(obj_filter) {
@@ -1510,9 +1512,9 @@ fn lower_object_keyword_action(
         v2::ObjectKeywordAction::Adapt => {
             Err(LoweringError::Unsupported("v2:object-keyword-action-adapt"))
         }
-        v2::ObjectKeywordAction::Endure => {
-            Err(LoweringError::Unsupported("v2:object-keyword-action-endure"))
-        }
+        v2::ObjectKeywordAction::Endure => Err(LoweringError::Unsupported(
+            "v2:object-keyword-action-endure",
+        )),
     }
 }
 
@@ -1694,9 +1696,9 @@ fn lower_player_action(
         v2::PlayerActionKind::ChooseSameModeMultiple => Err(LoweringError::Unsupported(
             "v2:player-action-choose-same-mode-multiple",
         )),
-        v2::PlayerActionKind::XCantBeZero => {
-            Err(LoweringError::Unsupported("v2:player-action-x-cant-be-zero"))
-        }
+        v2::PlayerActionKind::XCantBeZero => Err(LoweringError::Unsupported(
+            "v2:player-action-x-cant-be-zero",
+        )),
         v2::PlayerActionKind::LifeTotalCantChange => Err(LoweringError::Unsupported(
             "v2:player-action-life-total-cant-change",
         )),
@@ -1794,9 +1796,9 @@ fn lower_scaled_player_action(
         v2::ScaledPlayerAction::Blight => {
             let rp = atoms::lower_resolving_player(player, acc, ctx)?;
             let amt = value::lower_value_expr(amount, ctx)?;
-            acc.push(Instruction::MutatePlayer(Box::new(MutatePlayerSpec::blight(
-                rp, amt,
-            ))));
+            acc.push(Instruction::MutatePlayer(Box::new(
+                MutatePlayerSpec::blight(rp, amt),
+            )));
             Ok(())
         }
         v2::ScaledPlayerAction::Connive => {
@@ -1978,9 +1980,9 @@ fn lower_inline_pay_cost(
             effect::register_value_expr_player_targets(amount, acc, ctx)?;
             let rp = atoms::lower_resolving_player(player, acc, ctx)?;
             let amt = value::lower_value_expr(amount, ctx)?;
-            acc.push(Instruction::MutatePlayer(Box::new(MutatePlayerSpec::blight(
-                rp, amt,
-            ))));
+            acc.push(Instruction::MutatePlayer(Box::new(
+                MutatePlayerSpec::blight(rp, amt),
+            )));
             Ok(())
         }
         v2::Cost::Behold(obj_filter) => {
@@ -2012,10 +2014,7 @@ fn lower_inline_pay_cost(
                 Some(cp) if cp == player => ps.clone(),
                 Some(cp) => atoms::lower_player_ref(cp, acc, ctx)?,
             };
-            let source = ObjectQuery::zone(
-                QueryZone::BattlefieldControlledBy(Box::new(ps)),
-                ef,
-            );
+            let source = ObjectQuery::zone(QueryZone::BattlefieldControlledBy(Box::new(ps)), ef);
             let selection = if is_random {
                 ZoneSelection::Random {
                     count: Box::new(amt),
@@ -2165,10 +2164,8 @@ fn lower_inline_pay_cost(
             let ef = filter::lower_object_filter(&f, ctx)?;
             let amt = value::lower_value_expr(count, ctx)?;
             let ps = atoms::lower_player_ref(player, acc, ctx)?;
-            let source = ObjectQuery::zone(
-                QueryZone::BattlefieldControlledBy(Box::new(ps.clone())),
-                ef,
-            );
+            let source =
+                ObjectQuery::zone(QueryZone::BattlefieldControlledBy(Box::new(ps.clone())), ef);
             let selection = ZoneSelection::Prompt {
                 chooser: ps,
                 min: Box::new(amt.clone()),
@@ -2198,10 +2195,8 @@ fn lower_inline_pay_cost(
             let ef = filter::lower_object_filter(&f, ctx)?;
             let amt = value::lower_value_expr(count, ctx)?;
             let ps = atoms::lower_player_ref(player, acc, ctx)?;
-            let source = ObjectQuery::zone(
-                QueryZone::BattlefieldControlledBy(Box::new(ps.clone())),
-                ef,
-            );
+            let source =
+                ObjectQuery::zone(QueryZone::BattlefieldControlledBy(Box::new(ps.clone())), ef);
             let selection = ZoneSelection::Prompt {
                 chooser: ps,
                 min: Box::new(amt.clone()),
@@ -2227,7 +2222,13 @@ fn lower_inline_pay_cost(
                 filter: Box::new(EngineObjectFilter::any()),
                 slice: QuerySlice::Top(Box::new(amt)),
             };
-            emit_cost_zone_op(source, ZoneSelection::All, EngineZoneDest::exile(), acc, ctx)
+            emit_cost_zone_op(
+                source,
+                ZoneSelection::All,
+                EngineZoneDest::exile(),
+                acc,
+                ctx,
+            )
         }
         v2::Cost::RevealFromHand {
             count,
@@ -2250,7 +2251,8 @@ fn lower_inline_pay_cost(
             emit_cost_zone_op(source, selection, EngineZoneDest::RevealOnly, acc, ctx)
         }
         v2::Cost::PutZone { subject, dest } => {
-            let destination = atoms::lower_zone_dest(dest, &v2::EntryModifiers::default(), acc, ctx)?;
+            let destination =
+                atoms::lower_zone_dest(dest, &v2::EntryModifiers::default(), acc, ctx)?;
             let (source, selection) = lower_mutation_source_and_selection(subject, acc, ctx)?;
             emit_cost_zone_op(source, selection, destination, acc, ctx)
         }
@@ -2483,7 +2485,10 @@ fn lower_mutation_source_and_selection(
         )?;
         return Ok((source, selection));
     }
-    Ok((lower_mutation_subject_query(subject, acc, ctx)?, ZoneSelection::All))
+    Ok((
+        lower_mutation_subject_query(subject, acc, ctx)?,
+        ZoneSelection::All,
+    ))
 }
 
 fn lower_count_selection(
@@ -2579,9 +2584,7 @@ fn try_emit_two_target_pair(
     Ok(true)
 }
 
-fn strip_of_chosen_player_local(
-    f: &v2::ObjectFilter,
-) -> (v2::ObjectFilter, Option<v2::PlayerRef>) {
+fn strip_of_chosen_player_local(f: &v2::ObjectFilter) -> (v2::ObjectFilter, Option<v2::PlayerRef>) {
     let mut found: Option<v2::PlayerRef> = None;
     for pred in &f.predicates {
         if let v2::FilterPredicate::OfChosenPlayer(p) = pred {

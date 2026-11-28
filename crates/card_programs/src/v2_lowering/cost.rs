@@ -129,7 +129,11 @@ pub(crate) fn lower_v2_mana_bundle(
             v2::ManaSymbol::Green => (ManaType::Green, 1),
             v2::ManaSymbol::Colorless => (ManaType::Colourless, 1),
             v2::ManaSymbol::Generic(n) if *n > 0 => (ManaType::Colourless, i64::from(*n)),
-            _ => return Err(LoweringError::Unsupported("v2:mana:unsupported-output-symbol")),
+            _ => {
+                return Err(LoweringError::Unsupported(
+                    "v2:mana:unsupported-output-symbol",
+                ));
+            }
         };
         let entry = bundle.entry(mt).or_insert_with(|| 0.into());
         *entry = entry.plus(&qty.into());
@@ -164,7 +168,9 @@ pub(crate) fn lower_v2_counter_kind(kind: &v2::CounterKind) -> LowerResult<Engin
         | v2::CounterKind::Shield
         | v2::CounterKind::StunOrKeyword(_)
         | v2::CounterKind::Pt(_, _)
-        | v2::CounterKind::Any => Err(LoweringError::Unsupported("v2:cost:unsupported-counter-kind")),
+        | v2::CounterKind::Any => Err(LoweringError::Unsupported(
+            "v2:cost:unsupported-counter-kind",
+        )),
     }
 }
 
@@ -379,7 +385,9 @@ pub(crate) fn lower_activated_ability(
                     .iter()
                     .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
             {
-                return Err(LoweringError::Unsupported("v2:activated:modal-prefix-target"));
+                return Err(LoweringError::Unsupported(
+                    "v2:activated:modal-prefix-target",
+                ));
             }
             Some(Box::new(pb))
         };
@@ -393,7 +401,9 @@ pub(crate) fn lower_activated_ability(
                     .iter()
                     .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
             {
-                return Err(LoweringError::Unsupported("v2:activated:modal-suffix-target"));
+                return Err(LoweringError::Unsupported(
+                    "v2:activated:modal-suffix-target",
+                ));
             }
             Some(Box::new(sb))
         };
@@ -482,8 +492,13 @@ fn lower_inline_activation_cost_reduction(
         match sym {
             v2::ManaSymbol::Generic(n) => {
                 generic_total = generic_total
-                    .checked_add(u8::try_from(*n).map_err(|_| LoweringError::Unsupported("v2:cost-overflow"))?)
-                    .ok_or(LoweringError::Unsupported("v2:activated:cost-reduction-overflow"))?;
+                    .checked_add(
+                        u8::try_from(*n)
+                            .map_err(|_| LoweringError::Unsupported("v2:cost-overflow"))?,
+                    )
+                    .ok_or(LoweringError::Unsupported(
+                        "v2:activated:cost-reduction-overflow",
+                    ))?;
             }
             _ => {
                 return Err(LoweringError::Unsupported(
@@ -541,8 +556,8 @@ pub(crate) fn lower_extra_cost_atom(
                 return Err(LoweringError::Unsupported("v2:cost:extra-complex-mana"));
             }
             if snow > 0 && mana == ManaCost::free() {
-                let nz = NonZeroU8::new(snow)
-                    .ok_or(LoweringError::Unsupported("v2:cost:zero-snow"))?;
+                let nz =
+                    NonZeroU8::new(snow).ok_or(LoweringError::Unsupported("v2:cost:zero-snow"))?;
                 return Ok(ExtraActivationCost::PaySnowMana(nz));
             }
             if snow > 0 {
@@ -765,15 +780,18 @@ pub(crate) fn lower_extra_cost_atom(
             let opt_count = value_to_opt_nonzero_u8(count, "v2:cost:remove-counter-count")?;
             match subject {
                 None | Some(v2::SubjectRef::SelfObject) => {
-                    let ck = ck_opt
-                        .ok_or(LoweringError::Unsupported("v2:cost:remove-any-source-counter"))?;
+                    let ck = ck_opt.ok_or(LoweringError::Unsupported(
+                        "v2:cost:remove-any-source-counter",
+                    ))?;
                     let delta = match opt_count {
                         Some(nz) => CounterCostDelta::Remove(nz),
                         None => CounterCostDelta::RemoveX,
                     };
                     Ok(ExtraActivationCost::SourceCounter { kind: ck, delta })
                 }
-                Some(v2::SubjectRef::Group(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::All(f)) => {
+                Some(
+                    v2::SubjectRef::Group(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::All(f),
+                ) => {
                     let obj_filter = lower_object_filter(f, ctx)?;
                     Ok(ExtraActivationCost::RemovePermanentCounters {
                         kind: ck_opt,
@@ -819,7 +837,9 @@ pub(crate) fn lower_additional_cast_costs(
                     continue;
                 }
                 v2::ValueExpr::Var(v2::VarName::X) => {
-                    program.additional_life_cost = Some(EngineValueExpr::EventValue(spellwake_engine::program::EventValueKind::ChosenX));
+                    program.additional_life_cost = Some(EngineValueExpr::EventValue(
+                        spellwake_engine::program::EventValueKind::ChosenX,
+                    ));
                     continue;
                 }
                 _ => {}
@@ -874,7 +894,9 @@ pub(crate) fn lower_alternative_cast_costs(
         })
         .is_some()
     {
-        return Err(LoweringError::Unsupported("v2:cost:duplicate-conditional-cost"));
+        return Err(LoweringError::Unsupported(
+            "v2:cost:duplicate-conditional-cost",
+        ));
     }
     Ok(())
 }
@@ -1265,7 +1287,9 @@ fn try_lower_primary_source_cost(
             count,
             filter,
             from,
-        } if !sac_self && lower_cost_exile_zone(from, filter).ok() == Some(CostExileZone::Graveyard) => {
+        } if !sac_self
+            && lower_cost_exile_zone(from, filter).ok() == Some(CostExileZone::Graveyard) =>
+        {
             let obj_filter = lower_object_filter(filter, ctx)?;
             let gy_cost = match count {
                 v2::ValueExpr::Const(n) if *n > 0 && *n <= i32::from(u8::MAX) => {
@@ -1633,9 +1657,11 @@ fn try_lower_mana_spec_outputs(
                 op: v2::AggregateOp::Max,
                 stat: StatKind::Power,
                 filter,
-            } if is_plain_controlled_creature_filter(filter) => Ok(Some(vec![
-                ManaOutput::Dynamic(DynamicManaYield::GreatestCreaturePower),
-            ])),
+            } if is_plain_controlled_creature_filter(filter) => {
+                Ok(Some(vec![ManaOutput::Dynamic(
+                    DynamicManaYield::GreatestCreaturePower,
+                )]))
+            }
             _ => Ok(None),
         },
         v2::ManaSpec::DifferentColors(v2::ValueExpr::Const(2)) => {
@@ -1729,9 +1755,8 @@ fn extract_entry_chosen_color_pair(a: &v2::ManaSpec, b: &v2::ManaSpec) -> Option
             None
         }
     };
-    let is_one_chosen = |spec: &v2::ManaSpec| {
-        matches!(spec, v2::ManaSpec::ChosenColor(v2::ValueExpr::Const(1)))
-    };
+    let is_one_chosen =
+        |spec: &v2::ManaSpec| matches!(spec, v2::ManaSpec::ChosenColor(v2::ValueExpr::Const(1)));
     if let Some(mt) = single_colored(a)
         && is_one_chosen(b)
     {
@@ -1785,7 +1810,9 @@ fn try_lower_mana_spend_rule(
                     ..Default::default()
                 });
                 pred.canonicalize();
-                Some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(pred)))
+                Some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(
+                    pred,
+                )))
             }
             (None, Some(flt)) => lower_spell_mana_restriction(flt, ctx),
             (Some(zone), Some(flt)) => {
@@ -1798,8 +1825,9 @@ fn try_lower_mana_spend_rule(
                 let clauses = lower_spell_mana_clauses(flt, Some(cast_mode), ctx)?;
                 pred.spell_clauses.extend(clauses);
                 pred.canonicalize();
-                pred.is_non_empty()
-                    .then_some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(pred)))
+                pred.is_non_empty().then_some(ManaOutputRestriction::Fixed(
+                    ManaRestriction::Predicate(pred),
+                ))
             }
             (None, None) => None,
         },
@@ -1871,7 +1899,9 @@ fn lower_mana_spend_purpose(
                 ..Default::default()
             });
             pred.canonicalize();
-            Some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(pred)))
+            Some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(
+                pred,
+            )))
         }
         v2::ManaSpendPurpose::ActivateAbilities(None) => Some(ManaOutputRestriction::Fixed(
             ManaRestriction::ActivatedAbility,
@@ -1881,24 +1911,38 @@ fn lower_mana_spend_purpose(
                 return None;
             }
             let clauses = lower_ability_mana_clauses(flt, ctx)?;
-            if clauses.len() == 1 && clauses[0].source_creature_type.is_none() && !clauses[0].source_colorless && clauses[0].kind.is_none() {
+            if clauses.len() == 1
+                && clauses[0].source_creature_type.is_none()
+                && !clauses[0].source_colorless
+                && clauses[0].kind.is_none()
+            {
                 if clauses[0].source_card_type == Some(CardType::Artifact) {
-                    return Some(ManaOutputRestriction::Fixed(ManaRestriction::ArtifactAbility));
+                    return Some(ManaOutputRestriction::Fixed(
+                        ManaRestriction::ArtifactAbility,
+                    ));
                 }
                 if clauses[0].source_card_type == Some(CardType::Creature) {
-                    return Some(ManaOutputRestriction::Fixed(ManaRestriction::CreatureAbility));
+                    return Some(ManaOutputRestriction::Fixed(
+                        ManaRestriction::CreatureAbility,
+                    ));
                 }
             }
-            let mut pred = ManaSpendPredicate::default();
-            pred.ability_clauses = clauses;
+            let mut pred = ManaSpendPredicate {
+                ability_clauses: clauses,
+                ..Default::default()
+            };
             pred.canonicalize();
             pred.is_non_empty()
-                .then_some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(pred)))
+                .then_some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(
+                    pred,
+                )))
         }
         v2::ManaSpendPurpose::Foretell => {
             let mut pred = ManaSpendPredicate::default();
             pred.special_actions.insert(ManaSpecialAction::Foretell);
-            Some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(pred)))
+            Some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(
+                pred,
+            )))
         }
         v2::ManaSpendPurpose::AnyOf(purposes) => {
             if purposes.is_empty() {
@@ -1934,9 +1978,9 @@ fn lower_mana_spend_purpose(
                     ChosenTypeManaScope::CreatureSpell,
                 )),
                 (true, false, true) => Some(ManaOutputRestriction::ChosenCreatureTypeOr(pred)),
-                (false, false, true) => {
-                    Some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(pred)))
-                }
+                (false, false, true) => Some(ManaOutputRestriction::Fixed(
+                    ManaRestriction::Predicate(pred),
+                )),
                 _ => None,
             }
         }
@@ -2041,7 +2085,9 @@ fn lower_spell_mana_restriction(
         && flt.subtypes.is_empty()
         && flt.predicates.is_empty()
     {
-        return Some(ManaOutputRestriction::Fixed(ManaRestriction::CommanderSpell));
+        return Some(ManaOutputRestriction::Fixed(
+            ManaRestriction::CommanderSpell,
+        ));
     }
     if flt.flags == v2::FilterFlags::HAS_X_IN_MANA_COST
         && flt.all_types.is_empty()
@@ -2050,7 +2096,9 @@ fn lower_spell_mana_restriction(
         && flt.subtypes.is_empty()
         && flt.predicates.is_empty()
     {
-        return Some(ManaOutputRestriction::Fixed(ManaRestriction::CostContainingX));
+        return Some(ManaOutputRestriction::Fixed(
+            ManaRestriction::CostContainingX,
+        ));
     }
     if flt.any_permanent
         && flt.all_types.is_empty()
@@ -2063,7 +2111,9 @@ fn lower_spell_mana_restriction(
         && flt.flags.is_empty()
         && flt.predicates.is_empty()
     {
-        return Some(ManaOutputRestriction::Fixed(ManaRestriction::PermanentSpell));
+        return Some(ManaOutputRestriction::Fixed(
+            ManaRestriction::PermanentSpell,
+        ));
     }
 
     // Fast paths for common canonical single restrictions.
@@ -2138,14 +2188,18 @@ fn lower_spell_mana_restriction(
                 && flt.required_supertypes == SupertypeMask::LEGENDARY
                 && flt.color_arity.is_none()
             {
-                return Some(ManaOutputRestriction::Fixed(ManaRestriction::LegendarySpell));
+                return Some(ManaOutputRestriction::Fixed(
+                    ManaRestriction::LegendarySpell,
+                ));
             }
             if types.is_empty()
                 && flt.forbidden_types.is_empty()
                 && flt.required_supertypes.is_empty()
             {
                 if flt.color_arity == Some(ColorArity::Colorless) {
-                    return Some(ManaOutputRestriction::Fixed(ManaRestriction::ColorlessSpell));
+                    return Some(ManaOutputRestriction::Fixed(
+                        ManaRestriction::ColorlessSpell,
+                    ));
                 }
                 if flt.color_arity == Some(ColorArity::Multicolored) {
                     return Some(ManaOutputRestriction::Fixed(
@@ -2163,7 +2217,9 @@ fn lower_spell_mana_restriction(
     };
     pred.canonicalize();
     pred.is_non_empty()
-        .then_some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(pred)))
+        .then_some(ManaOutputRestriction::Fixed(ManaRestriction::Predicate(
+            pred,
+        )))
 }
 
 fn lower_spell_mana_clauses(
@@ -2345,10 +2401,9 @@ fn lower_spell_mana_clauses(
                     c.enchantment_subtype = Some(et);
                 } else if let Some(st) = LowerCtx::lookup_spell_subtype(raw) {
                     c.spell_subtype = Some(st);
-                } else if let Some(pt) = PlaneswalkerSubtype::from_label(raw) {
-                    c.planeswalker_subtype = Some(pt);
                 } else {
-                    return None;
+                    let pt = PlaneswalkerSubtype::from_label(raw)?;
+                    c.planeswalker_subtype = Some(pt);
                 }
                 clauses.push(c);
             }
@@ -2663,21 +2718,26 @@ fn is_plain_controlled_artifact_filter(f: &v2::ObjectFilter) -> bool {
         && f.predicates.is_empty()
 }
 
-pub(crate) fn extract_modal_choice<'a>(
-    effects: &'a [v2::Effect],
-) -> Option<(
+pub(crate) type ModalChoiceSlice<'a> = (
     &'a [v2::Effect],
     v2::ChoiceCount,
     &'a [v2::ModalMode],
     &'a [v2::Effect],
-)> {
+);
+
+pub(crate) fn extract_modal_choice(effects: &[v2::Effect]) -> Option<ModalChoiceSlice<'_>> {
     for (idx, eff) in effects.iter().enumerate() {
         match eff {
             v2::Effect::PromptChoice {
                 chooser: v2::PlayerRef::You,
                 kind: v2::ChoiceKind::Modal { count, modes },
             } => {
-                return Some((&effects[..idx], *count, modes.as_slice(), &effects[idx + 1..]));
+                return Some((
+                    &effects[..idx],
+                    *count,
+                    modes.as_slice(),
+                    &effects[idx + 1..],
+                ));
             }
             v2::Effect::Optional {
                 actor: v2::PlayerRef::You,
@@ -2719,9 +2779,9 @@ pub(crate) fn lower_choice_count(count: v2::ChoiceCount, mode_len: usize) -> Low
         v2::ChoiceCount::OneOrBoth => Ok((1, 2u8.min(cap))),
         v2::ChoiceCount::OneOrMore => Ok((1, cap)),
         v2::ChoiceCount::AnyNumber => Ok((0, cap)),
-        v2::ChoiceCount::VariableX | v2::ChoiceCount::Exact(_) | v2::ChoiceCount::UpTo(_) => {
-            Err(LoweringError::Unsupported("v2:modal:unsupported-choice-count"))
-        }
+        v2::ChoiceCount::VariableX | v2::ChoiceCount::Exact(_) | v2::ChoiceCount::UpTo(_) => Err(
+            LoweringError::Unsupported("v2:modal:unsupported-choice-count"),
+        ),
     }
 }
 

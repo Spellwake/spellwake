@@ -43,7 +43,7 @@ pub(super) fn compile(
                         chooser: ResolvingPlayer::Controller,
                         instructions: 1,
                     },
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
+                    crate::keyword_creatures::toolbox_emit::return_target_to_battlefield(false),
                 ],
             ),
         });
@@ -90,7 +90,7 @@ pub(super) fn compile(
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                    crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                         spellwake_engine::effects::CounterKind::Blessing,
                         spellwake_engine::program::ValueExpr::literal(1),
                     ),
@@ -143,18 +143,14 @@ pub(super) fn compile(
         });
     }
     if gain_life {
-        instructions.push(
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
-                spellwake_engine::program::ValueExpr::literal(1),
-            ),
-        );
+        instructions.push(crate::keyword_creatures::toolbox_emit::gain_life(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            spellwake_engine::program::ValueExpr::literal(1),
+        ));
     }
-    instructions.push(
-        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-            spellwake_engine::program::ValueExpr::Literal(1.into()),
-        ),
-    );
+    instructions.push(crate::keyword_creatures::toolbox_emit::draw_controller(
+        spellwake_engine::program::ValueExpr::Literal(1.into()),
+    ));
     program.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(0),
         condition: spellwake_engine::program::TriggerSpec::spell_cast(

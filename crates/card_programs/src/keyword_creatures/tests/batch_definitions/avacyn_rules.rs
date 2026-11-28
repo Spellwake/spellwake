@@ -202,7 +202,7 @@ fn avacyn_rules_demonic_rising_rechecks_the_creature_count_at_resolution() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -264,7 +264,9 @@ fn avacyn_rules_arcane_melee_reduces_spells_for_both_players() {
                         ManaCost::generic(2.into()),
                         ExecutableBody::new(
                             BodyTarget::None,
-                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::Literal(0.into()))],
+                            vec![crate::keyword_creatures::toolbox_emit::draw_controller(
+                                spellwake_engine::program::ValueExpr::Literal(0.into()),
+                            )],
                         ),
                     ),
                 ),
@@ -307,7 +309,7 @@ fn avacyn_rules_peel_from_reality_returns_the_remaining_legal_target() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    crate::keyword_creatures::toolbox_emit::exile_target(),
                 ),
             ),
         ],
@@ -701,7 +703,7 @@ fn avacyn_rules_subtype_protection_prevents_targeting_and_damage_from_kindred_sp
                 ObjectDestination::Hand,
                 vampire_spell(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(2),
                         false,
@@ -714,7 +716,7 @@ fn avacyn_rules_subtype_protection_prevents_targeting_and_damage_from_kindred_sp
                 ObjectDestination::Hand,
                 vampire_spell(
                     BodyTarget::None,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
                             spellwake_engine::program::DamageRecipientsRef::Group(
                                 spellwake_engine::program::DamageGroup::Creatures,

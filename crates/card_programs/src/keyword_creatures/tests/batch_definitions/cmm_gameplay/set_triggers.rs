@@ -16,7 +16,7 @@ fn cmm_myr_sire_dies_into_the_printed_phyrexian_myr_artifact_creature() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    crate::keyword_creatures::toolbox_emit::exile_target(),
                 ),
             ),
         ],
@@ -310,7 +310,7 @@ fn cmm_nadiers_nightblade_drains_for_a_controlled_token_even_when_it_is_exiled()
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    crate::keyword_creatures::toolbox_emit::exile_target(),
                 ),
             ),
             creature(4, A, 1, 1, &[]),
@@ -401,7 +401,7 @@ fn cmm_guttersnipe_observes_only_its_controllers_instant_or_sorcery_casts() {
     let draw = || {
         free_instant(
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+            crate::keyword_creatures::toolbox_emit::draw_controller(
                 spellwake_engine::program::ValueExpr::Literal(1.into()),
             ),
         )

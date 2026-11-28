@@ -207,7 +207,13 @@ mod tests {
         assert!(p.printed_keywords.contains(&KeywordAbility::Lifelink));
 
         // Mana rock
-        let rock = test_card("Emerald Relic", "Artifact", Some("{2}"), None, "{T}: Add {G}.");
+        let rock = test_card(
+            "Emerald Relic",
+            "Artifact",
+            Some("{2}"),
+            None,
+            "{T}: Add {G}.",
+        );
         let p = compile_v2_with_reason(&rock, &vocab).expect("mana rock");
         assert_eq!(p.mana.len(), 1);
 
@@ -329,7 +335,13 @@ mod tests {
                                 .join(" // ");
                             let ir = format!("{:?}", compiled.faces);
                             let ir_short: String = ir.chars().take(420).collect();
-                            entry.push(format!("{} [{}]: {} || IR={}", card.name, card.layout, oracle.replace('\n', " | "), ir_short));
+                            entry.push(format!(
+                                "{} [{}]: {} || IR={}",
+                                card.name,
+                                card.layout,
+                                oracle.replace('\n', " | "),
+                                ir_short
+                            ));
                         }
                     }
                 }
@@ -367,7 +379,11 @@ mod tests {
         }
         if dump_samples {
             eprintln!("--- Blocker IR Samples (Top 30 non-parse) ---");
-            for (code, count) in ranked.into_iter().filter(|(c, _)| *c != "v2:ast-parse-incomplete").take(30) {
+            for (code, count) in ranked
+                .into_iter()
+                .filter(|(c, _)| *c != "v2:ast-parse-incomplete")
+                .take(30)
+            {
                 eprintln!("=== {code} ({count}) ===");
                 if let Some(samples) = blocker_samples.get(code) {
                     for s in samples {

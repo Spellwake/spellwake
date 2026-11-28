@@ -635,7 +635,9 @@ fn lower_counter_subject_ref(
             | v2::AnaphoraRef::EnchantedCreature
             | v2::AnaphoraRef::EnchantedPermanent,
         ) => Ok(CounterSubjectRef::AttachedHost),
-        v2::SubjectRef::Anaphora(v2::AnaphoraRef::SameTarget) => Ok(CounterSubjectRef::TargetObject),
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::SameTarget) => {
+            Ok(CounterSubjectRef::TargetObject)
+        }
         v2::SubjectRef::Anaphora(
             v2::AnaphoraRef::It
             | v2::AnaphoraRef::ThatCreature
@@ -769,10 +771,11 @@ pub(crate) fn lower_resolution_condition(
             other,
             stat,
         } => {
-            let stat_kind = stat
-                .map(lower_stat_kind)
-                .ok_or(LoweringError::Unsupported("v2:cond:greater-stat-unspecified"))?;
-            let lhs = EngineValueExpr::object_stat(lower_value_object_ref(subject, ctx)?, stat_kind);
+            let stat_kind = stat.map(lower_stat_kind).ok_or(LoweringError::Unsupported(
+                "v2:cond:greater-stat-unspecified",
+            ))?;
+            let lhs =
+                EngineValueExpr::object_stat(lower_value_object_ref(subject, ctx)?, stat_kind);
             let rhs = EngineValueExpr::object_stat(lower_value_object_ref(other, ctx)?, stat_kind);
             Ok(ResolutionCondition {
                 left: lhs,
@@ -1019,9 +1022,7 @@ pub(crate) fn lower_resolution_condition(
         v2::ConditionExpr::ColoredManaSpent { color, min_count } => {
             let set = lower_color_set(*color);
             if set.len() != 1 {
-                return Err(LoweringError::Unsupported(
-                    "v2:cond:multi-color-mana-spent",
-                ));
+                return Err(LoweringError::Unsupported("v2:cond:multi-color-mana-spent"));
             }
             let Some(c) = set.into_iter().next() else {
                 return Err(LoweringError::Unsupported("v2:cond:empty-mana-spent"));
@@ -1128,7 +1129,11 @@ fn lower_controls_subject_condition(
         v2::PlayerRef::DefendingPlayer => ControllerFilter::DefendingPlayer,
         v2::PlayerRef::ActivePlayer => ControllerFilter::ActivePlayer,
         v2::PlayerRef::ThatPlayer => ControllerFilter::RelatedPlayer,
-        _ => return Err(LoweringError::Unsupported("v2:cond:controls-subject-player")),
+        _ => {
+            return Err(LoweringError::Unsupported(
+                "v2:cond:controls-subject-player",
+            ));
+        }
     };
     let mut clause = ObjectClause::any();
     clause.controller = ctrl;
@@ -1144,9 +1149,8 @@ fn lower_controls_more_than_condition(
     filter: &v2::ObjectFilter,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<ResolutionCondition> {
-    let is_opp_quant = |p: v2::PlayerRef| {
-        matches!(p, v2::PlayerRef::AnyOpponent | v2::PlayerRef::EachOpponent)
-    };
+    let is_opp_quant =
+        |p: v2::PlayerRef| matches!(p, v2::PlayerRef::AnyOpponent | v2::PlayerRef::EachOpponent);
     if is_opp_quant(player) && is_opp_quant(other) {
         return Err(LoweringError::Unsupported("v2:player:any-opponent"));
     }
@@ -1494,9 +1498,7 @@ fn lower_player_turn_event_condition(
                         Some(lower_source_zone_filter(z)?)
                     }
                     _ => {
-                        return Err(LoweringError::Unsupported(
-                            "v2:cond:spell-cast-multi-zone",
-                        ));
+                        return Err(LoweringError::Unsupported("v2:cond:spell-cast-multi-zone"));
                     }
                 };
                 let players = lower_world_affected_players(player, ctx)?;
@@ -1515,11 +1517,11 @@ fn lower_player_turn_event_condition(
                     EngineValueExpr::PlayerStat(PlayerStatExpr::ControllerSpellsCastThisTurn),
                     min_count,
                 )),
-                v2::PlayerRef::AnyOpponent if min_count == 1 => Ok(rc_ge_one(
-                    EngineValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
-                        OpponentTurnStat::CastSpells,
-                    )),
-                )),
+                v2::PlayerRef::AnyOpponent if min_count == 1 => {
+                    Ok(rc_ge_one(EngineValueExpr::PlayerStat(
+                        PlayerStatExpr::OpponentStatThisTurn(OpponentTurnStat::CastSpells),
+                    )))
+                }
                 other => {
                     let players = lower_world_affected_players(other, ctx)?;
                     Ok(rc_ge_u16(
@@ -1542,11 +1544,11 @@ fn lower_player_turn_event_condition(
                     EngineValueExpr::PlayerStat(PlayerStatExpr::CardsDrawnThisTurn),
                     min_count,
                 )),
-                v2::PlayerRef::AnyOpponent if min_count == 1 => Ok(rc_ge_one(
-                    EngineValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
-                        OpponentTurnStat::DrewCards,
-                    )),
-                )),
+                v2::PlayerRef::AnyOpponent if min_count == 1 => {
+                    Ok(rc_ge_one(EngineValueExpr::PlayerStat(
+                        PlayerStatExpr::OpponentStatThisTurn(OpponentTurnStat::DrewCards),
+                    )))
+                }
                 _ => Err(LoweringError::Unsupported("v2:cond:card-drawn-player")),
             }
         }
@@ -1559,11 +1561,11 @@ fn lower_player_turn_event_condition(
                     EngineValueExpr::PlayerStat(PlayerStatExpr::ControllerDiscardedThisTurn),
                     min_count,
                 )),
-                v2::PlayerRef::AnyOpponent if min_count == 1 => Ok(rc_ge_one(
-                    EngineValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
-                        OpponentTurnStat::Discarded,
-                    )),
-                )),
+                v2::PlayerRef::AnyOpponent if min_count == 1 => {
+                    Ok(rc_ge_one(EngineValueExpr::PlayerStat(
+                        PlayerStatExpr::OpponentStatThisTurn(OpponentTurnStat::Discarded),
+                    )))
+                }
                 _ => Err(LoweringError::Unsupported("v2:cond:card-discarded-player")),
             }
         }
@@ -1576,11 +1578,11 @@ fn lower_player_turn_event_condition(
                     EngineValueExpr::PlayerStat(PlayerStatExpr::ControllerLifeGainedThisTurn),
                     min_count,
                 )),
-                v2::PlayerRef::AnyOpponent if min_count == 1 => Ok(rc_ge_one(
-                    EngineValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
-                        OpponentTurnStat::GainedLife,
-                    )),
-                )),
+                v2::PlayerRef::AnyOpponent if min_count == 1 => {
+                    Ok(rc_ge_one(EngineValueExpr::PlayerStat(
+                        PlayerStatExpr::OpponentStatThisTurn(OpponentTurnStat::GainedLife),
+                    )))
+                }
                 _ => Err(LoweringError::Unsupported("v2:cond:life-gained-player")),
             }
         }
@@ -1616,11 +1618,13 @@ fn lower_player_turn_event_condition(
                 };
                 let obj_filter = lower_object_filter(f, ctx)?;
                 return Ok(rc_ge_u16(
-                    EngineValueExpr::PlayerStat(PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
-                        filter: Box::new(obj_filter),
-                        from_battlefield_only: true,
-                        controller,
-                    }),
+                    EngineValueExpr::PlayerStat(
+                        PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
+                            filter: Box::new(obj_filter),
+                            from_battlefield_only: true,
+                            controller,
+                        },
+                    ),
                     min_count,
                 ));
             }
@@ -1986,11 +1990,11 @@ fn lower_player_check_condition(
             v2::PlayerRef::You => Ok(rc_ge_one(EngineValueExpr::PlayerStat(
                 PlayerStatExpr::ControllerLifeLostThisTurn,
             ))),
-            v2::PlayerRef::AnyOpponent | v2::PlayerRef::EachOpponent => Ok(rc_ge_one(
-                EngineValueExpr::PlayerStat(PlayerStatExpr::OpponentStatThisTurn(
-                    OpponentTurnStat::LostLife,
-                )),
-            )),
+            v2::PlayerRef::AnyOpponent | v2::PlayerRef::EachOpponent => {
+                Ok(rc_ge_one(EngineValueExpr::PlayerStat(
+                    PlayerStatExpr::OpponentStatThisTurn(OpponentTurnStat::LostLife),
+                )))
+            }
             _ => Err(LoweringError::Unsupported(
                 "v2:cond:player:lost-life-this-turn-other",
             )),
@@ -2349,9 +2353,9 @@ fn lower_event_check_condition(kind: &v2::EventCheckKind) -> LowerResult<Resolut
                     v2::ManaSymbol::Green => Some(ManaType::Green),
                     v2::ManaSymbol::Colorless => Some(ManaType::Colourless),
                     v2::ManaSymbol::Snow => {
-                        snow_count = snow_count.checked_add(1).ok_or(
-                            LoweringError::Unsupported("v2:cond:event:mana-cost-spent"),
-                        )?;
+                        snow_count = snow_count
+                            .checked_add(1)
+                            .ok_or(LoweringError::Unsupported("v2:cond:event:mana-cost-spent"))?;
                         None
                     }
                     _ => {
@@ -2360,9 +2364,9 @@ fn lower_event_check_condition(kind: &v2::EventCheckKind) -> LowerResult<Resolut
                 };
                 if let Some(mana_type) = mt {
                     let entry = by_type.entry(mana_type).or_insert(0);
-                    *entry = entry.checked_add(1).ok_or(LoweringError::Unsupported(
-                        "v2:cond:event:mana-cost-spent",
-                    ))?;
+                    *entry = entry
+                        .checked_add(1)
+                        .ok_or(LoweringError::Unsupported("v2:cond:event:mana-cost-spent"))?;
                 }
             }
             let mut checks = Vec::with_capacity(by_type.len() + usize::from(snow_count > 0));
@@ -2438,9 +2442,9 @@ fn lower_event_check_condition(kind: &v2::EventCheckKind) -> LowerResult<Resolut
                 "v2:cond:event:keyword-cost-paid",
             )),
         },
-        v2::EventCheckKind::DidntPutInZone(_) => {
-            Err(LoweringError::Unsupported("v2:cond:event:didnt-put-in-zone"))
-        }
+        v2::EventCheckKind::DidntPutInZone(_) => Err(LoweringError::Unsupported(
+            "v2:cond:event:didnt-put-in-zone",
+        )),
         v2::EventCheckKind::MostCommonColor(_) => Err(LoweringError::Unsupported(
             "v2:cond:event:most-common-color",
         )),

@@ -752,14 +752,12 @@ fn cmm_chosen_type_mana_sources_limit_their_colors_to_matching_creature_spells_a
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                        spellwake_engine::toolbox::PlayerSelector::Resolving(
-                            spellwake_engine::program::ResolvingPlayer::Controller,
-                        ),
-                        spellwake_engine::program::ValueExpr::literal(1),
+                vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
-                ],
+                    spellwake_engine::program::ValueExpr::literal(1),
+                )],
             ),
         });
         let start = game(
@@ -871,7 +869,7 @@ fn cmm_chromatic_lantern_grants_each_controlled_land_all_colors_and_removes_the_
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PERMANENT,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -971,14 +969,12 @@ fn cmm_eldrazi_temple_and_shrine_of_the_forsaken_gods_enforce_their_land_and_spe
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                            spellwake_engine::toolbox::PlayerSelector::Resolving(
-                                spellwake_engine::program::ResolvingPlayer::Controller,
-                            ),
-                            spellwake_engine::program::ValueExpr::literal(1),
+                    vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
                         ),
-                    ],
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    )],
                 ),
             });
             let mut colored = ordinary.clone();
@@ -1399,7 +1395,7 @@ fn cmm_arcane_lighthouse_suppresses_opposing_hexproof_and_shroud_through_cleanup
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                    crate::keyword_creatures::toolbox_emit::modify_group_eot(
                         EffectSubject::Matching(ObjectFilter::creature()),
                         spellwake_engine::program::ValueExpr::literal(0),
                         spellwake_engine::program::ValueExpr::literal(0),
@@ -1932,7 +1928,7 @@ fn cmm_crash_of_rhino_beetles_and_molimo_recalculate_their_size_from_only_their_
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PERMANENT,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -1996,7 +1992,7 @@ fn cmm_filigree_attendant_counts_itself_and_other_controlled_artifacts_and_recal
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PERMANENT,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -2054,7 +2050,7 @@ fn cmm_rampaging_brontodon_counts_its_controllers_lands_on_attack_resolution_and
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PERMANENT,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -2204,7 +2200,7 @@ fn cmm_wayward_swordtooth_allows_a_second_land_play_and_can_attack_or_block_only
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PERMANENT,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -2358,14 +2354,12 @@ fn cmm_renowned_weaponsmith_mana_only_pays_for_artifact_spells_or_abilities_and_
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(1),
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::literal(1),
+            )],
         ),
     };
     let mut ordinary = Program::creature(fixed_cost("{2}"), 2.into(), 2.into(), Default::default());
@@ -2544,7 +2538,7 @@ fn cmm_neheb_adds_red_for_all_opponents_life_lost_including_afflict_when_blocked
     let ping = |n| {
         free_instant(
             BodyTarget::SINGLE_PLAYER,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            crate::keyword_creatures::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::Literal(n),
                 false,

@@ -41,7 +41,7 @@ fn cmm_gideon_jura_requires_attacks_on_him_destroys_only_tapped_creatures_and_pr
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_ANY_TARGET,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(8),
                         false,
@@ -157,7 +157,7 @@ fn cmm_vronos_phases_only_other_own_walkers_bounces_one_per_opponent_and_permane
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PERMANENT,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -685,7 +685,7 @@ fn cmm_chandra_awakened_inferno_resists_countering_grants_separate_emblems_and_e
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PERMANENT,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {

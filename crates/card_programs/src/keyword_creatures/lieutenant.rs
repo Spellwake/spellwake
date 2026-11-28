@@ -67,7 +67,7 @@ pub(super) fn compile(
                                 chooser: ResolvingPlayer::Controller,
                                 instructions: 1,
                             },
-                            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            crate::keyword_creatures::toolbox_emit::draw_controller(
                                 spellwake_engine::program::ValueExpr::Literal(2.into()),
                             ),
                         ],
@@ -87,19 +87,17 @@ pub(super) fn compile(
             ),
         ))];
         match effect {
-            "draw a card." => body.push(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                    spellwake_engine::program::ValueExpr::Literal(1.into()),
-                ),
-            ),
-            "each opponent loses 3 life." => body.push(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+            "draw a card." => body.push(crate::keyword_creatures::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            )),
+            "each opponent loses 3 life." => {
+                body.push(crate::keyword_creatures::toolbox_emit::lose_life(
                     spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent),
                     spellwake_engine::program::ValueExpr::literal(3),
-                ),
-            ),
+                ))
+            }
             "put a +1/+1 counter on each creature you control." => body.push(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_query(
                     spellwake_engine::toolbox::ObjectQuery::zone(
                         spellwake_engine::toolbox::QueryZone::Battlefield,
                         ObjectFilter::creature().controlled(),
@@ -110,45 +108,39 @@ pub(super) fn compile(
             ),
             "prevent all combat damage that would be dealt to creatures you control this turn. Other creatures you control gain vigilance until end of turn." =>
             {
-                body.push(
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
-                        spellwake_engine::damage::TurnPreventionSpec {
-                            combat_only: true,
-                            source: spellwake_engine::damage::PreventionSourceSpec::Any,
-                            recipient:
-                                spellwake_engine::damage::PreventionRecipientSpec::ControlledCreatures,
-                            both_directions: false,
-                        },
+                body.push(crate::keyword_creatures::toolbox_emit::prevent_damage_spec(
+                    spellwake_engine::damage::TurnPreventionSpec {
+                        combat_only: true,
+                        source: spellwake_engine::damage::PreventionSourceSpec::Any,
+                        recipient:
+                            spellwake_engine::damage::PreventionRecipientSpec::ControlledCreatures,
+                        both_directions: false,
+                    },
+                ));
+                body.push(crate::keyword_creatures::toolbox_emit::modify_group_eot(
+                    EffectSubject::Matching(
+                        ObjectFilter::creature()
+                            .controlled()
+                            .other_than_ability_source(),
                     ),
-                );
-                body.push(
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                        EffectSubject::Matching(
-                            ObjectFilter::creature()
-                                .controlled()
-                                .other_than_ability_source(),
-                        ),
-                        spellwake_engine::program::ValueExpr::literal(0),
-                        spellwake_engine::program::ValueExpr::literal(0),
-                        [KeywordAbility::Vigilance].into(),
-                        std::collections::BTreeSet::new(),
-                    ),
-                );
+                    spellwake_engine::program::ValueExpr::literal(0),
+                    spellwake_engine::program::ValueExpr::literal(0),
+                    [KeywordAbility::Vigilance].into(),
+                    std::collections::BTreeSet::new(),
+                ));
             }
             _ => {
                 let token = effect
                     .strip_prefix("create ")?
                     .strip_suffix(". That token gains haste until end of turn.")?;
                 body.push(ordinary_text::create_tokens(token, vocabulary)?);
-                body.push(
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                        EffectSubject::CreatedTokens,
-                        spellwake_engine::program::ValueExpr::literal(0),
-                        spellwake_engine::program::ValueExpr::literal(0),
-                        [KeywordAbility::Haste].into(),
-                        std::collections::BTreeSet::new(),
-                    ),
-                );
+                body.push(crate::keyword_creatures::toolbox_emit::modify_group_eot(
+                    EffectSubject::CreatedTokens,
+                    spellwake_engine::program::ValueExpr::literal(0),
+                    spellwake_engine::program::ValueExpr::literal(0),
+                    [KeywordAbility::Haste].into(),
+                    std::collections::BTreeSet::new(),
+                ));
             }
         }
         program.triggered.push(TriggeredAbility {

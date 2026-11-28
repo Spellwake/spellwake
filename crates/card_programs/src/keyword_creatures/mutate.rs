@@ -23,19 +23,17 @@ pub(super) fn compile(
             }
         } else if let Some(effect) = line.strip_prefix("Whenever this creature mutates, ") {
             let instruction = match effect {
-                "draw a card." => {
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                        spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    )
-                }
+                "draw a card." => crate::keyword_creatures::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
                 "put a +1/+1 counter on it." => {
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                    crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                         spellwake_engine::effects::CounterKind::PlusOne,
                         spellwake_engine::program::ValueExpr::literal(1),
                     )
                 }
                 "put two +1/+1 counters on it." => {
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                    crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                         spellwake_engine::effects::CounterKind::PlusOne,
                         spellwake_engine::program::ValueExpr::literal(2),
                     )
@@ -46,7 +44,7 @@ pub(super) fn compile(
                         .strip_suffix(" life.")?
                         .parse::<u16>()
                         .ok()?;
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    crate::keyword_creatures::toolbox_emit::gain_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,
                         ),

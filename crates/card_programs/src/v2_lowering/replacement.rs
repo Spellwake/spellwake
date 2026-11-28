@@ -178,7 +178,9 @@ pub(crate) fn lower_temporary_replacement(
                 )));
                 return Ok(());
             }
-            if let Some(static_ability) = try_lower_event_replacement_static(event, instead, None, ctx)? {
+            if let Some(static_ability) =
+                try_lower_event_replacement_static(event, instead, None, ctx)?
+            {
                 acc.push(Instruction::ApplyContinuous(Box::new(
                     ApplyContinuousSpec::temporary_rule(
                         TemporaryRuleKind::temporary_static(static_ability),
@@ -187,7 +189,9 @@ pub(crate) fn lower_temporary_replacement(
                 )));
                 return Ok(());
             }
-            Err(LoweringError::Unsupported("v2:temp-replacement-event-instead"))
+            Err(LoweringError::Unsupported(
+                "v2:temp-replacement-event-instead",
+            ))
         }
         v2::Replacement::ConditionalEnters { condition, inner } => {
             let static_cond = lower_static_source_condition(condition, ctx)?;
@@ -465,10 +469,18 @@ pub(super) fn build_self_entry_counter_ability(
             EngineCounterKind::MinusOne => EntryCounterAbility::FixedMinusOne(ri),
             EngineCounterKind::Charge => EntryCounterAbility::FixedCharge(ri),
             EngineCounterKind::Loyalty => EntryCounterAbility::FixedLoyalty(ri),
-            other if other.is_permanent() && !matches!(other, EngineCounterKind::PlusOne | EngineCounterKind::MinusOne) => EntryCounterAbility::FixedNamed {
-                kind: other,
-                amount: ri,
-            },
+            other
+                if other.is_permanent()
+                    && !matches!(
+                        other,
+                        EngineCounterKind::PlusOne | EngineCounterKind::MinusOne
+                    ) =>
+            {
+                EntryCounterAbility::FixedNamed {
+                    kind: other,
+                    amount: ri,
+                }
+            }
             other => EntryCounterAbility::DynamicCounter {
                 kind: other,
                 amount: EngineValueExpr::Literal(ri),
@@ -592,7 +604,9 @@ fn lower_as_enters(
                         }
                     },
                     _ => {
-                        return Err(LoweringError::Unsupported("v2:replacement-as-enters-choice"));
+                        return Err(LoweringError::Unsupported(
+                            "v2:replacement-as-enters-choice",
+                        ));
                     }
                 };
                 set_entry_tap(program, tap)?;
@@ -653,8 +667,9 @@ fn lower_as_enters(
                     }),
                 condition: None,
             } if is_self_enters_tapped_body(body) => {
-                let tap = extract_reveal_filter_entry_tap(filter, true, ctx)
-                    .ok_or(LoweringError::Unsupported("v2:replacement-as-enters-effect"))?;
+                let tap = extract_reveal_filter_entry_tap(filter, true, ctx).ok_or(
+                    LoweringError::Unsupported("v2:replacement-as-enters-effect"),
+                )?;
                 set_entry_tap(program, tap)?;
             }
             v2::Effect::Unless {
@@ -673,7 +688,9 @@ fn lower_as_enters(
                 } else if let Some(tap) = extract_optional_behold_entry_tap(unless, ctx) {
                     set_entry_tap(program, tap)?;
                 } else {
-                    return Err(LoweringError::Unsupported("v2:replacement-as-enters-effect"));
+                    return Err(LoweringError::Unsupported(
+                        "v2:replacement-as-enters-effect",
+                    ));
                 }
             }
             v2::Effect::BranchCondition {
@@ -691,7 +708,9 @@ fn lower_as_enters(
                 lower_enters_tapped(Some(condition), None, program, ctx)?;
             }
             _ => {
-                return Err(LoweringError::Unsupported("v2:replacement-as-enters-effect"));
+                return Err(LoweringError::Unsupported(
+                    "v2:replacement-as-enters-effect",
+                ));
             }
         }
         i += 1;
@@ -826,7 +845,13 @@ fn extract_optional_hand_reveal_entry_tap(
     else {
         return None;
     };
-    if modifiers.tapped || modifiers.attacking || modifiers.face_down || modifiers.transformed || modifiers.with_counter.is_some() || modifiers.attached_to.is_some() {
+    if modifiers.tapped
+        || modifiers.attacking
+        || modifiers.face_down
+        || modifiers.transformed
+        || modifiers.with_counter.is_some()
+        || modifiers.attached_to.is_some()
+    {
         return None;
     }
     if let Some(c) = count
@@ -1009,9 +1034,7 @@ fn lower_enter_as_copy(
             },
         ] => EntryCopyZone::AnyGraveyard,
         _ => {
-            return Err(LoweringError::Unsupported(
-                "v2:replacement-enter-copy-zone",
-            ));
+            return Err(LoweringError::Unsupported("v2:replacement-enter-copy-zone"));
         }
     };
 
@@ -1792,7 +1815,8 @@ fn lower_event_instead_into_program(
 ) -> LowerResult<()> {
     let is_permanent = matches!(program.kind, ProgramKind::Permanent(_));
     if condition.is_none()
-        && let Some((ability, extra)) = try_lower_zone_replacement(event, instead, is_permanent, ctx)?
+        && let Some((ability, extra)) =
+            try_lower_zone_replacement(event, instead, is_permanent, ctx)?
     {
         let id = ability.id;
         program.zone_replacements.push(ability);
@@ -1932,9 +1956,10 @@ fn try_lower_zone_replacement(
 
     // Extract destination replacement from first effect in `instead` (possibly wrapped in Optional).
     let (choice, inner_effects): (ZoneReplacementChoice, &[v2::Effect]) = match instead {
-        [v2::Effect::Optional { body, .. }] if !body.is_empty() => {
-            (ZoneReplacementChoice::OptionalAffectedPlayer, body.as_slice())
-        }
+        [v2::Effect::Optional { body, .. }] if !body.is_empty() => (
+            ZoneReplacementChoice::OptionalAffectedPlayer,
+            body.as_slice(),
+        ),
         slice => (ZoneReplacementChoice::Mandatory, slice),
     };
 
@@ -2019,7 +2044,8 @@ fn try_lower_zone_replacement(
     if !is_permanent
         && !(matches!(
             z_subject,
-            ZoneReplacementSubject::SourceSelf | ZoneReplacementSubject::SourceSelfDiscardByOpponent
+            ZoneReplacementSubject::SourceSelf
+                | ZoneReplacementSubject::SourceSelfDiscardByOpponent
         ) && orig_dest == PublicZoneDestination::Graveyard
             && matches!(
                 replace_with,
@@ -2048,9 +2074,11 @@ fn try_lower_zone_replacement(
     if replace_with == PublicZoneDestination::Battlefield
         && !(matches!(
             z_subject,
-            ZoneReplacementSubject::SourceSelf | ZoneReplacementSubject::SourceSelfDiscardByOpponent
+            ZoneReplacementSubject::SourceSelf
+                | ZoneReplacementSubject::SourceSelfDiscardByOpponent
         ) && orig_dest == PublicZoneDestination::Graveyard
-            && actions == ZoneActionPredicate::OneOf(BTreeSet::from([ZoneActionKind::EffectDiscard])))
+            && actions
+                == ZoneActionPredicate::OneOf(BTreeSet::from([ZoneActionKind::EffectDiscard])))
     {
         return Err(LoweringError::Unsupported(
             "v2:zone-replacement-battlefield-scope",
@@ -2175,7 +2203,9 @@ fn lower_modify_damage_op(add: i16, factor: u8) -> LowerResult<StaticDamageOp> {
             .map_err(|_| LoweringError::Unsupported("v2:replacement-damage-sub-overflow"))?;
         return Ok(StaticDamageOp::Subtract(sub_u8));
     }
-    Err(LoweringError::Unsupported("v2:replacement-modify-damage-op"))
+    Err(LoweringError::Unsupported(
+        "v2:replacement-modify-damage-op",
+    ))
 }
 
 pub(super) fn lower_damage_source_filter(
@@ -2244,7 +2274,9 @@ pub(super) fn lower_damage_recipient(
         v2::SubjectRef::Compound(parts) if parts.len() == 2 => {
             lower_compound_damage_recipient(&parts[0], &parts[1], ctx)
         }
-        _ => Err(LoweringError::Unsupported("v2:replacement-damage-recipient")),
+        _ => Err(LoweringError::Unsupported(
+            "v2:replacement-damage-recipient",
+        )),
     }
 }
 
@@ -2378,9 +2410,9 @@ fn lower_damage_redirect_target(to: &v2::SubjectRef) -> LowerResult<DamageRedire
         v2::SubjectRef::Player(v2::PlayerRef::You) => Ok(DamageRedirectTarget::Controller),
         v2::SubjectRef::TargetObject { .. } => Ok(DamageRedirectTarget::TargetObject),
         v2::SubjectRef::AnyTarget => Ok(DamageRedirectTarget::TargetAny),
-        v2::SubjectRef::Player(v2::PlayerRef::ItsController | v2::PlayerRef::ThatObjectController) => {
-            Ok(DamageRedirectTarget::DamageSourceController)
-        }
+        v2::SubjectRef::Player(
+            v2::PlayerRef::ItsController | v2::PlayerRef::ThatObjectController,
+        ) => Ok(DamageRedirectTarget::DamageSourceController),
         _ => Err(LoweringError::Unsupported(
             "v2:replacement-damage-redirect-target",
         )),

@@ -295,11 +295,9 @@ fn cmm_warping_wail_exiles_either_low_stat_counters_only_a_sorcery_or_makes_a_sc
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                            spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        ),
-                    ],
+                    vec![crate::keyword_creatures::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    )],
                 ),
             ),
         ),
@@ -309,7 +307,7 @@ fn cmm_warping_wail_exiles_either_low_stat_counters_only_a_sorcery_or_makes_a_sc
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                crate::keyword_creatures::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
             ),
@@ -515,7 +513,7 @@ fn cmm_grasp_of_fate_exiles_up_to_one_nonland_per_opponent_and_returns_the_exact
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PERMANENT,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {

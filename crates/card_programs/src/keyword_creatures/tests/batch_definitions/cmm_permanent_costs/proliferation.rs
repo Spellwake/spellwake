@@ -27,7 +27,7 @@ fn board(name: &str, price: &[(ManaType, i64)], mut extra: Vec<SeedCard>) -> Gam
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::Indestructible,
                     spellwake_engine::program::ValueExpr::literal(1),
                 ),
@@ -39,7 +39,7 @@ fn board(name: &str, price: &[(ManaType, i64)], mut extra: Vec<SeedCard>) -> Gam
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::add_player_counter(
+                crate::keyword_creatures::toolbox_emit::add_player_counter(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         spellwake_engine::program::ResolvingPlayer::Controller,
                     ),

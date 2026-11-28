@@ -39,9 +39,7 @@ use spellwake_engine::{
         TriggerFromZone, TriggerGrouping, TriggerKeywordEvent, TriggerSpec, TriggerZone,
         TriggeredAbility, UpkeepKeyword, ValueExpr as EngineValueExpr, ValueObjectRef,
     },
-    token::{
-        AttackingDefenderScope, TokenDefinition, TokenName, TokenRecipients, TokenSubtype,
-    },
+    token::{AttackingDefenderScope, TokenDefinition, TokenName, TokenRecipients, TokenSubtype},
     toolbox::{
         ApplyContinuousSpec, ConditionExpr as EngineConditionExpr, CounterOp, DrawCardsSpec,
         MutateObjectSpec, MutatePlayerSpec, ObjectMutation, ObjectQuery, PlayerSelector,
@@ -102,10 +100,7 @@ fn build_ward_triggered_ability(
     }
 }
 
-fn lower_ward_trigger(
-    costs: &[v2::Cost],
-    ctx: &mut LowerCtx<'_>,
-) -> LowerResult<TriggeredAbility> {
+fn lower_ward_trigger(costs: &[v2::Cost], ctx: &mut LowerCtx<'_>) -> LowerResult<TriggeredAbility> {
     if costs.is_empty() {
         return Err(LoweringError::Unsupported("v2:kw:ward-non-mana"));
     }
@@ -619,9 +614,7 @@ pub(crate) fn simple_keyword_ability(kind: v2::KeywordKind) -> Option<KeywordAbi
         v2::KeywordKind::Delve => Some(KeywordAbility::Delve),
         v2::KeywordKind::Improvise => Some(KeywordAbility::Improvise),
         v2::KeywordKind::Bargain => Some(KeywordAbility::Bargain),
-        v2::KeywordKind::Partner | v2::KeywordKind::FriendsForever => {
-            Some(KeywordAbility::Partner)
-        }
+        v2::KeywordKind::Partner | v2::KeywordKind::FriendsForever => Some(KeywordAbility::Partner),
         v2::KeywordKind::ChooseABackground => Some(KeywordAbility::ChooseABackground),
         v2::KeywordKind::DoctorsCompanion => Some(KeywordAbility::DoctorsCompanion),
         v2::KeywordKind::Plainswalk => Some(KeywordAbility::Plainswalk),
@@ -890,7 +883,8 @@ pub(crate) fn apply_face_keyword(
 
         // Cycling <cost>
         v2::KeywordKind::Cycling => {
-            let (mana, hybrids, snow) = extract_mana_with_hybrids_snow(&spec.param, "v2:kw:cycling-cost")?;
+            let (mana, hybrids, snow) =
+                extract_mana_with_hybrids_snow(&spec.param, "v2:kw:cycling-cost")?;
             let id = ctx.alloc_activated_id();
             if !hybrids.is_empty() {
                 program.activation_hybrid_symbols.insert(id, hybrids);
@@ -926,9 +920,9 @@ pub(crate) fn apply_face_keyword(
         }
 
         // Typecycling loses the land/creature prefix in v2::KeywordKind::Typecycling.
-        v2::KeywordKind::Typecycling => {
-            Err(LoweringError::Unsupported("v2:kw:typecycling-untyped-prefix"))
-        }
+        v2::KeywordKind::Typecycling => Err(LoweringError::Unsupported(
+            "v2:kw:typecycling-untyped-prefix",
+        )),
 
         // Suspend N - <cost>
         v2::KeywordKind::Suspend => {
@@ -978,7 +972,9 @@ pub(crate) fn apply_face_keyword(
         v2::KeywordKind::Dash | v2::KeywordKind::Blitz | v2::KeywordKind::Warp => {
             let mana = extract_single_fixed_mana(&spec.param, "v2:kw:endstep-cast-cost")?;
             if program.conditional_cost.is_some() {
-                return Err(LoweringError::Unsupported("v2:kw:duplicate-conditional-cost"));
+                return Err(LoweringError::Unsupported(
+                    "v2:kw:duplicate-conditional-cost",
+                ));
             }
             let kind = match spec.kind {
                 v2::KeywordKind::Dash => EndStepCast::Dash,
@@ -995,7 +991,9 @@ pub(crate) fn apply_face_keyword(
         v2::KeywordKind::Evoke => {
             let mana = extract_single_fixed_mana(&spec.param, "v2:kw:evoke-cost")?;
             if program.conditional_cost.is_some() {
-                return Err(LoweringError::Unsupported("v2:kw:duplicate-conditional-cost"));
+                return Err(LoweringError::Unsupported(
+                    "v2:kw:duplicate-conditional-cost",
+                ));
             }
             let tid = ctx.alloc_triggered_id();
             let owned = std::mem::replace(program, Program::enchantment(None));
@@ -1018,7 +1016,9 @@ pub(crate) fn apply_face_keyword(
                 })
                 .is_some()
             {
-                return Err(LoweringError::Unsupported("v2:kw:duplicate-conditional-cost"));
+                return Err(LoweringError::Unsupported(
+                    "v2:kw:duplicate-conditional-cost",
+                ));
             }
             Ok(())
         }
@@ -1365,7 +1365,11 @@ pub(crate) fn apply_face_keyword(
         }
         v2::KeywordKind::Afflict => {
             let n = extract_number(&spec.param, "v2:kw:afflict-param")?;
-            push_combat_kw(program, ctx, CombatTriggerKeyword::Afflict(i64::from(n).into()));
+            push_combat_kw(
+                program,
+                ctx,
+                CombatTriggerKeyword::Afflict(i64::from(n).into()),
+            );
             Ok(())
         }
         v2::KeywordKind::Annihilator => {
@@ -1378,12 +1382,20 @@ pub(crate) fn apply_face_keyword(
         }
         v2::KeywordKind::Bushido => {
             let n = extract_number(&spec.param, "v2:kw:bushido-param")?;
-            push_combat_kw(program, ctx, CombatTriggerKeyword::Bushido(i64::from(n).into()));
+            push_combat_kw(
+                program,
+                ctx,
+                CombatTriggerKeyword::Bushido(i64::from(n).into()),
+            );
             Ok(())
         }
         v2::KeywordKind::Frenzy => {
             let n = extract_number(&spec.param, "v2:kw:frenzy-param")?;
-            push_combat_kw(program, ctx, CombatTriggerKeyword::Frenzy(i64::from(n).into()));
+            push_combat_kw(
+                program,
+                ctx,
+                CombatTriggerKeyword::Frenzy(i64::from(n).into()),
+            );
             Ok(())
         }
         v2::KeywordKind::Mobilize => {
@@ -1406,12 +1418,20 @@ pub(crate) fn apply_face_keyword(
         }
         v2::KeywordKind::Rampage => {
             let n = extract_number(&spec.param, "v2:kw:rampage-param")?;
-            push_combat_kw(program, ctx, CombatTriggerKeyword::Rampage(i64::from(n).into()));
+            push_combat_kw(
+                program,
+                ctx,
+                CombatTriggerKeyword::Rampage(i64::from(n).into()),
+            );
             Ok(())
         }
         v2::KeywordKind::Renown => {
             let n = extract_number(&spec.param, "v2:kw:renown-param")?;
-            push_combat_kw(program, ctx, CombatTriggerKeyword::Renown(i64::from(n).into()));
+            push_combat_kw(
+                program,
+                ctx,
+                CombatTriggerKeyword::Renown(i64::from(n).into()),
+            );
             Ok(())
         }
 
@@ -1980,7 +2000,11 @@ pub(crate) fn apply_face_keyword(
                 .map(|pt| &pt.power)
             {
                 Some(PrintedStat::Number(n)) => n.clone(),
-                _ => return Err(LoweringError::Unsupported("v2:kw:scavenge-non-numeric-power")),
+                _ => {
+                    return Err(LoweringError::Unsupported(
+                        "v2:kw:scavenge-non-numeric-power",
+                    ));
+                }
             };
             let id = ctx.alloc_activated_id();
             if !hybrids.is_empty() {
@@ -2459,17 +2483,16 @@ pub(crate) fn apply_face_keyword(
             let Some(v2::KeywordParam::FilterAndCost(flt, costs)) = &spec.param else {
                 return Err(LoweringError::Unsupported("v2:kw:splice-param"));
             };
-            let quality = if flt.subtypes.len() == 1
-                && flt.subtypes[0].eq_ignore_ascii_case("arcane")
-            {
-                SpliceQuality::Arcane
-            } else if flt.any_types == AstCardTypeMask::INSTANT.union(AstCardTypeMask::SORCERY)
-                && flt.subtypes.is_empty()
-            {
-                SpliceQuality::InstantOrSorcery
-            } else {
-                return Err(LoweringError::Unsupported("v2:kw:splice-quality"));
-            };
+            let quality =
+                if flt.subtypes.len() == 1 && flt.subtypes[0].eq_ignore_ascii_case("arcane") {
+                    SpliceQuality::Arcane
+                } else if flt.any_types == AstCardTypeMask::INSTANT.union(AstCardTypeMask::SORCERY)
+                    && flt.subtypes.is_empty()
+                {
+                    SpliceQuality::InstantOrSorcery
+                } else {
+                    return Err(LoweringError::Unsupported("v2:kw:splice-quality"));
+                };
             let cost = extract_fixed_mana_from_costs(costs, "v2:kw:splice-cost")?;
             if !program.supports_splice_text() {
                 return Err(LoweringError::Unsupported("v2:kw:splice-unsupported-text"));
@@ -2553,13 +2576,9 @@ pub(crate) fn apply_face_keyword(
         v2::KeywordKind::Prototype => {
             Err(LoweringError::Unsupported("v2:kw:prototype-needs-face-ctx"))
         }
-        v2::KeywordKind::Aftermath => {
-            Err(LoweringError::Unsupported("v2:kw:aftermath-non-split"))
-        }
+        v2::KeywordKind::Aftermath => Err(LoweringError::Unsupported("v2:kw:aftermath-non-split")),
         v2::KeywordKind::Fuse => Err(LoweringError::Unsupported("v2:kw:fuse-non-split")),
-        v2::KeywordKind::Disturb => {
-            Err(LoweringError::Unsupported("v2:kw:disturb-non-transform"))
-        }
+        v2::KeywordKind::Disturb => Err(LoweringError::Unsupported("v2:kw:disturb-non-transform")),
         v2::KeywordKind::Overload => Err(LoweringError::Unsupported("v2:kw:overload")),
         v2::KeywordKind::Cleave => Err(LoweringError::Unsupported("v2:kw:cleave")),
         v2::KeywordKind::Companion => Err(LoweringError::Unsupported("v2:kw:companion")),
@@ -2583,9 +2602,10 @@ pub(crate) fn apply_face_keyword(
 }
 
 fn push_combat_kw(program: &mut Program, ctx: &mut LowerCtx<'_>, kw: CombatTriggerKeyword) {
-    program
-        .triggered
-        .push(TriggeredAbility::combat_keyword(ctx.alloc_triggered_id(), kw));
+    program.triggered.push(TriggeredAbility::combat_keyword(
+        ctx.alloc_triggered_id(),
+        kw,
+    ));
 }
 
 fn push_static(program: &mut Program, ab: StaticContinuousAbility) {
@@ -2598,7 +2618,9 @@ fn push_static(program: &mut Program, ab: StaticContinuousAbility) {
 
 fn set_conditional_cost(program: &mut Program, cc: ConditionalCastCost) -> LowerResult<()> {
     if program.conditional_cost.replace(cc).is_some() {
-        return Err(LoweringError::Unsupported("v2:kw:duplicate-conditional-cost"));
+        return Err(LoweringError::Unsupported(
+            "v2:kw:duplicate-conditional-cost",
+        ));
     }
     Ok(())
 }
@@ -2942,7 +2964,9 @@ fn lower_protection_filter(
         || !flt.flags.is_empty()
         || !flt.predicates.is_empty()
     {
-        return Err(LoweringError::Unsupported("v2:kw:complex-protection-filter"));
+        return Err(LoweringError::Unsupported(
+            "v2:kw:complex-protection-filter",
+        ));
     }
 
     if !flt.any_colors.is_empty()
@@ -3010,7 +3034,9 @@ fn lower_protection_filter(
         for raw_sub in &flt.subtypes {
             let subtype = ctx
                 .lookup_creature_type(raw_sub)
-                .ok_or(LoweringError::Unsupported("v2:kw:protection-unknown-subtype"))?;
+                .ok_or(LoweringError::Unsupported(
+                    "v2:kw:protection-unknown-subtype",
+                ))?;
             out.push(KeywordAbility::ProtectionFromSubtype(SubtypeProtection {
                 subtype,
                 creatures_only,

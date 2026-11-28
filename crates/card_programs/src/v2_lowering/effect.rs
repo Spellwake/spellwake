@@ -11,8 +11,7 @@ use std::mem;
 
 use spellwake_engine::{
     characteristics::{
-        AbilityChange, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
-        StaticDamageRecipient,
+        AbilityChange, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec, StaticDamageRecipient,
     },
     program::{
         AffectedPlayers, BodyTarget, DamageAmountSpec, ExecutableBody, Instruction,
@@ -171,9 +170,7 @@ pub(crate) fn register_value_expr_player_targets(
         | v2::ValueExpr::AggregateStat { filter: f, .. }
         | v2::ValueExpr::ManaSpentFromFilter(f)
         | v2::ValueExpr::DistinctCounterKinds(f)
-        | v2::ValueExpr::DistinctCardTypesAmong(f) => {
-            register_filter_player_targets(f, acc, ctx)
-        }
+        | v2::ValueExpr::DistinctCardTypesAmong(f) => register_filter_player_targets(f, acc, ctx),
         v2::ValueExpr::PlayerCounterCount { player, .. }
         | v2::ValueExpr::DomainCount(player)
         | v2::ValueExpr::PartySize(player)
@@ -195,9 +192,7 @@ pub(crate) fn register_value_expr_player_targets(
         | v2::ValueExpr::StatDifference(subject) => {
             register_subject_filter_player_targets(subject, acc, ctx)
         }
-        v2::ValueExpr::Add(a, b)
-        | v2::ValueExpr::Sub(a, b)
-        | v2::ValueExpr::Mul(a, b) => {
+        v2::ValueExpr::Add(a, b) | v2::ValueExpr::Sub(a, b) | v2::ValueExpr::Mul(a, b) => {
             register_value_expr_player_targets(a, acc, ctx)?;
             register_value_expr_player_targets(b, acc, ctx)
         }
@@ -252,9 +247,7 @@ pub(crate) fn register_subject_filter_player_targets(
         v2::SubjectRef::Each(f)
         | v2::SubjectRef::All(f)
         | v2::SubjectRef::Group(f)
-        | v2::SubjectRef::Counted { filter: f, .. } => {
-            register_filter_player_targets(f, acc, ctx)
-        }
+        | v2::SubjectRef::Counted { filter: f, .. } => register_filter_player_targets(f, acc, ctx),
         v2::SubjectRef::Player(p) | v2::SubjectRef::HandOf(p) => {
             register_player_ref_target(*p, acc, ctx)
         }
@@ -356,7 +349,10 @@ fn lower_step_with_target_dispatch(
                 if sub_acc.target_set {
                     let sub_body = sub_acc.into_body()?;
                     if sub_body.permanent_target_bounds().is_some()
-                        || !sub_body.instructions.iter().any(Instruction::uses_mode_target)
+                        || !sub_body
+                            .instructions
+                            .iter()
+                            .any(Instruction::uses_mode_target)
                     {
                         return Err(LoweringError::Unsupported("v2:multiple-distinct-targets"));
                     }
@@ -366,14 +362,16 @@ fn lower_step_with_target_dispatch(
                 }
                 return Ok(());
             }
-            Err(err @ LoweringError::Unsupported(
-                "v2:subject:unbound-anaphora"
-                | "v2:subject:unbound-same-target"
-                | "v2:player:unbound-that-player"
-                | "v2:player:unbound-its-controller"
-                | "v2:player:unbound-its-owner"
-                | "v2:player:unbound-spell-controller",
-            )) => {
+            Err(
+                err @ LoweringError::Unsupported(
+                    "v2:subject:unbound-anaphora"
+                    | "v2:subject:unbound-same-target"
+                    | "v2:player:unbound-that-player"
+                    | "v2:player:unbound-its-controller"
+                    | "v2:player:unbound-its-owner"
+                    | "v2:player:unbound-spell-controller",
+                ),
+            ) => {
                 saved_ctx.restore(ctx);
                 if let Some(Instruction::FixedTargetClause(last_body)) = acc.instructions.last_mut()
                 {
@@ -385,7 +383,10 @@ fn lower_step_with_target_dispatch(
                     if lower_one_effect(eff, &mut clause_acc, ctx).is_ok()
                         && let Ok(updated) = clause_acc.into_body()
                         && updated.permanent_target_bounds().is_none()
-                        && updated.instructions.iter().any(Instruction::uses_mode_target)
+                        && updated
+                            .instructions
+                            .iter()
+                            .any(Instruction::uses_mode_target)
                     {
                         **last_body = updated;
                         return Ok(());
@@ -424,8 +425,14 @@ fn lower_step_with_target_dispatch(
             let next_body = sub_acc.into_body()?;
             if prior_body.permanent_target_bounds().is_some()
                 || next_body.permanent_target_bounds().is_some()
-                || !prior_body.instructions.iter().any(Instruction::uses_mode_target)
-                || !next_body.instructions.iter().any(Instruction::uses_mode_target)
+                || !prior_body
+                    .instructions
+                    .iter()
+                    .any(Instruction::uses_mode_target)
+                || !next_body
+                    .instructions
+                    .iter()
+                    .any(Instruction::uses_mode_target)
             {
                 return Err(LoweringError::Unsupported("v2:multiple-distinct-targets"));
             }
@@ -620,7 +627,10 @@ fn try_fuse_destroy_no_regen(effects: &[v2::Effect], i: usize) -> Option<(v2::Ef
     else {
         return None;
     };
-    if !matches!(duration, v2::Duration::Instant | v2::Duration::UntilEndOfTurn) {
+    if !matches!(
+        duration,
+        v2::Duration::Instant | v2::Duration::UntilEndOfTurn
+    ) {
         return None;
     }
     let matches_anaphora = matches!(
@@ -667,7 +677,10 @@ fn is_flashback_grant_plus_cost_clause(effects: &[v2::Effect], i: usize) -> bool
     if kws.len() != 1
         || kws[0].kind != v2::KeywordKind::Flashback
         || kws[0].param.is_some()
-        || !matches!(duration, v2::Duration::Instant | v2::Duration::UntilEndOfTurn)
+        || !matches!(
+            duration,
+            v2::Duration::Instant | v2::Duration::UntilEndOfTurn
+        )
     {
         return false;
     }
@@ -839,9 +852,7 @@ impl SearchFusionState {
                 && self.merged_to.is_none()
                 && is_search_anaphora(e_subj)
                 && from_is_empty_or_library(e_from)
-                && e_to
-                    .as_ref()
-                    .is_none_or(|d| d.zone == v2::ZoneKind::Exile) =>
+                && e_to.as_ref().is_none_or(|d| d.zone == v2::ZoneKind::Exile) =>
             {
                 self.merged_to = Some(v2::ZoneDest {
                     zone: v2::ZoneKind::Exile,
@@ -1070,7 +1081,8 @@ fn try_lower_optional_sequence(
     // Sub-case 1: `Optional` starts with `MutatePlayer(PayCost(Mana | ScaledMana))`.
     if let Some(v2::Effect::MutatePlayer {
         player,
-        mutation: v2::PlayerMutation::PayCost(cost @ (v2::Cost::Mana(_) | v2::Cost::ScaledMana { .. })),
+        mutation:
+            v2::PlayerMutation::PayCost(cost @ (v2::Cost::Mana(_) | v2::Cost::ScaledMana { .. })),
         duration,
     }) = body.first()
         && matches!(duration, v2::Duration::Instant | v2::Duration::Permanent)
@@ -1082,15 +1094,7 @@ fn try_lower_optional_sequence(
             *player
         };
         if body.len() > 1 {
-            lower_optional_mana_payment(
-                payer_ref,
-                cost,
-                Some(&body[1..]),
-                None,
-                false,
-                acc,
-                ctx,
-            )?;
+            lower_optional_mana_payment(payer_ref, cost, Some(&body[1..]), None, false, acc, ctx)?;
             return Ok(Some(i + 1));
         }
         match effects.get(i + 1) {
@@ -1566,14 +1570,18 @@ fn validate_optional_slice(slice: &[Instruction]) -> LowerResult<()> {
                 | Instruction::Jump { .. }
                 | Instruction::OptionalSequence { .. }
         ) {
-            return Err(LoweringError::Unsupported("v2:optional-nested-control-flow"));
+            return Err(LoweringError::Unsupported(
+                "v2:optional-nested-control-flow",
+            ));
         }
     }
     if let Some(Instruction::PromptChoice(spec)) = slice.first()
         && spec.as_mana_payment().is_some()
         && slice.len() < 2
     {
-        return Err(LoweringError::Unsupported("v2:optional-nested-control-flow"));
+        return Err(LoweringError::Unsupported(
+            "v2:optional-nested-control-flow",
+        ));
     }
     Ok(())
 }
@@ -1733,9 +1741,7 @@ fn lower_one_effect(
             let dur = atoms::lower_duration(duration)?;
             replacement::lower_temporary_replacement(repl, dur, acc, ctx)
         }
-        v2::Effect::PromptChoice { chooser, kind } => {
-            lower_prompt_choice(*chooser, kind, acc, ctx)
-        }
+        v2::Effect::PromptChoice { chooser, kind } => lower_prompt_choice(*chooser, kind, acc, ctx),
         v2::Effect::Optional { actor, body } => lower_optional(*actor, body, acc, ctx),
         v2::Effect::BranchCondition {
             condition: cond,
@@ -1976,9 +1982,9 @@ fn lower_damage_recipients(
         }
         other => {
             register_subject_filter_player_targets(other, acc, ctx)?;
-            Ok(DamageTargetQuery::Objects(
-                atoms::lower_subject_to_query(other, acc, ctx)?,
-            ))
+            Ok(DamageTargetQuery::Objects(atoms::lower_subject_to_query(
+                other, acc, ctx,
+            )?))
         }
     }
 }
@@ -2301,9 +2307,9 @@ fn lower_prompt_choice(
                     register_filter_player_targets(&f_clean, acc, ctx)?;
                     let ef = filter::lower_object_filter(&f_clean, ctx)?;
                     let q = if has_among_prior {
-                        let src_slot = ctx.last_moved_binding.ok_or(
-                            LoweringError::Unsupported("v2:filter:pred:among-prior-cards"),
-                        )?;
+                        let src_slot = ctx.last_moved_binding.ok_or(LoweringError::Unsupported(
+                            "v2:filter:pred:among-prior-cards",
+                        ))?;
                         ObjectQuery::BoundFiltered {
                             binding: src_slot,
                             filter: Box::new(ef),
@@ -2501,7 +2507,8 @@ fn lower_optional(
         return Err(LoweringError::Unsupported("v2:optional-empty-body"));
     }
     validate_optional_slice(&acc.instructions[(opt_idx + 1)..])?;
-    if let Some(Instruction::OptionalSequence { instructions, .. }) = acc.instructions.get_mut(opt_idx)
+    if let Some(Instruction::OptionalSequence { instructions, .. }) =
+        acc.instructions.get_mut(opt_idx)
     {
         *instructions = count;
     }
@@ -2829,15 +2836,15 @@ fn lower_for_each(
             });
             Ok(())
         }
-        v2::ForEachDomain::PlayersMatching(_) => Err(LoweringError::Unsupported(
-            "v2:for-each-players-matching",
-        )),
-        v2::ForEachDomain::EachPlayerWhoCant(_) => Err(LoweringError::Unsupported(
-            "v2:for-each-player-who-cant",
-        )),
-        v2::ForEachDomain::EachPlayerWhoDoes(_) => Err(LoweringError::Unsupported(
-            "v2:for-each-player-who-does",
-        )),
+        v2::ForEachDomain::PlayersMatching(_) => {
+            Err(LoweringError::Unsupported("v2:for-each-players-matching"))
+        }
+        v2::ForEachDomain::EachPlayerWhoCant(_) => {
+            Err(LoweringError::Unsupported("v2:for-each-player-who-cant"))
+        }
+        v2::ForEachDomain::EachPlayerWhoDoes(_) => {
+            Err(LoweringError::Unsupported("v2:for-each-player-who-does"))
+        }
         v2::ForEachDomain::GraveyardWith(_) => {
             Err(LoweringError::Unsupported("v2:for-each-graveyard-with"))
         }
@@ -2893,9 +2900,7 @@ fn lower_delayed_trigger(
                 | v2::StepOwner::The
                 | v2::StepOwner::NextTurn => false,
                 _ => {
-                    return Err(LoweringError::Unsupported(
-                        "v2:delayed-trigger-step-owner",
-                    ));
+                    return Err(LoweringError::Unsupported("v2:delayed-trigger-step-owner"));
                 }
             };
             let sub_body = lower_effect_body(body, ctx)?;
@@ -2971,23 +2976,24 @@ fn lower_scoped_duration(
                 mutation: player_mut,
                 duration: inner_dur,
             } => {
-                let effective = if matches!(player_mut, v2::PlayerMutation::GrantPlayPermission { .. })
-                    && *inner_dur == v2::Duration::UntilEndOfTurn
-                    && matches!(
-                        outer_duration,
-                        v2::Duration::UntilEndOfNextTurn
-                            | v2::Duration::UntilYourNextEndStep
-                            | v2::Duration::UntilYourNextTurn
-                            | v2::Duration::UntilYourNextUpkeep
-                            | v2::Duration::ForAsLongAsExiled
-                            | v2::Duration::ForTheRestOfTheGame
-                            | v2::Duration::Permanent
-                    )
-                {
-                    outer_duration
-                } else {
-                    merge_scoped_duration(outer_duration, inner_dur)?
-                };
+                let effective =
+                    if matches!(player_mut, v2::PlayerMutation::GrantPlayPermission { .. })
+                        && *inner_dur == v2::Duration::UntilEndOfTurn
+                        && matches!(
+                            outer_duration,
+                            v2::Duration::UntilEndOfNextTurn
+                                | v2::Duration::UntilYourNextEndStep
+                                | v2::Duration::UntilYourNextTurn
+                                | v2::Duration::UntilYourNextUpkeep
+                                | v2::Duration::ForAsLongAsExiled
+                                | v2::Duration::ForTheRestOfTheGame
+                                | v2::Duration::Permanent
+                        )
+                    {
+                        outer_duration
+                    } else {
+                        merge_scoped_duration(outer_duration, inner_dur)?
+                    };
                 mutation::lower_player_mutation(*player, player_mut, effective, acc, ctx)?;
             }
             v2::Effect::ApplyContinuous {
@@ -3218,10 +3224,14 @@ fn lower_delayed_end_of_combat_zone_op(
             if let Some(dest) = to
                 && dest.zone != v2::ZoneKind::Graveyard
             {
-                return Err(LoweringError::Unsupported("v2:sacrifice-non-graveyard-dest"));
+                return Err(LoweringError::Unsupported(
+                    "v2:sacrifice-non-graveyard-dest",
+                ));
             }
             if !from.is_empty() && from.iter().any(|z| z.zone != v2::ZoneKind::Battlefield) {
-                return Err(LoweringError::Unsupported("v2:sacrifice-non-battlefield-zone"));
+                return Err(LoweringError::Unsupported(
+                    "v2:sacrifice-non-battlefield-zone",
+                ));
             }
             EngineZoneDest::Graveyard {
                 semantics: GraveyardSemantics::Sacrifice,

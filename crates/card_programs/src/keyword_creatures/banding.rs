@@ -124,7 +124,7 @@ pub(super) fn compile(
             body: ExecutableBody::new(
                 BodyTarget::SINGLE_CREATURE,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         parts,
                         ResolvedDuration::UntilEndOfTurn,

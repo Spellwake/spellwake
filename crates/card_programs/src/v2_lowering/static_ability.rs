@@ -13,9 +13,9 @@ use spellwake_contracts::RulesInteger;
 use spellwake_engine::{
     activated::ActivatedAbilityId,
     characteristics::{
-        AbilityChange, AbilityRemoval, ActivatedCostScope, BlockingRestriction,
-        CastPermissionRule, Color, ColorOperation, ControllerSelector, DefiningPart,
-        DefiningParts, InstructionSubtypeOperand, KeywordAbility, NumericExpression, NumericPair,
+        AbilityChange, AbilityRemoval, ActivatedCostScope, BlockingRestriction, CastPermissionRule,
+        Color, ColorOperation, ControllerSelector, DefiningPart, DefiningParts,
+        InstructionSubtypeOperand, KeywordAbility, NumericExpression, NumericPair,
         PermanentSelector, PowerToughness, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
         SpellCostModifier, SpellDiscount, StaticColorOperand, StaticContinuousAbility,
         StaticDamageKind, StaticDamageOp, StaticDamageRecipient, StaticDamageRule, StaticDrawRule,
@@ -261,13 +261,13 @@ pub(crate) fn lower_static_into_program(
                 if let Some(cond) = condition {
                     let rc = lower_resolution_condition(cond, ctx)?;
                     let amt = lower_value_expr(count, ctx)?;
-                    program
-                        .entry_counter_abilities
-                        .push(spellwake_engine::program::EntryCounterAbility::ConditionalCounter {
+                    program.entry_counter_abilities.push(
+                        spellwake_engine::program::EntryCounterAbility::ConditionalCounter {
                             condition: Box::new(rc),
                             kind: ek,
                             amount: amt,
-                        });
+                        },
+                    );
                 } else {
                     let ab = build_self_entry_counter_ability(ek, count, ctx)?;
                     program.entry_counter_abilities.push(ab);
@@ -357,12 +357,13 @@ pub(crate) fn lower_static_into_program(
         } => {
             let (src_flt, src_ctrl) = match source {
                 None => (None, PlayerRelation::AnyParticipant),
-                Some(v2::SubjectRef::All(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::Group(f)) => {
-                    lower_damage_source_filter(Some(f), ctx)?
-                }
-                Some(v2::SubjectRef::SelfObject) => {
-                    (Some(ObjectFilter::self_object()), PlayerRelation::AnyParticipant)
-                }
+                Some(
+                    v2::SubjectRef::All(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::Group(f),
+                ) => lower_damage_source_filter(Some(f), ctx)?,
+                Some(v2::SubjectRef::SelfObject) => (
+                    Some(ObjectFilter::self_object()),
+                    PlayerRelation::AnyParticipant,
+                ),
                 Some(_) => {
                     return Err(LoweringError::Unsupported(
                         "v2:static-prevent-damage-source",
@@ -710,14 +711,12 @@ pub(crate) fn lower_temporary_static(
         } => {
             let src_flt = match source {
                 None => None,
-                Some(v2::SubjectRef::All(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::Group(f)) => {
-                    Some(lower_object_filter(f, ctx)?)
-                }
+                Some(
+                    v2::SubjectRef::All(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::Group(f),
+                ) => Some(lower_object_filter(f, ctx)?),
                 Some(v2::SubjectRef::SelfObject) => Some(ObjectFilter::self_object()),
                 Some(_) => {
-                    return Err(LoweringError::Unsupported(
-                        "v2:temp-prevent-damage-source",
-                    ));
+                    return Err(LoweringError::Unsupported("v2:temp-prevent-damage-source"));
                 }
             };
             let recipient = match target {
@@ -800,7 +799,9 @@ pub(crate) fn lower_temporary_static(
                     TemporaryRuleKind::SpellCostModifier {
                         players,
                         filter: ef,
-                        amount: Box::new(EngineValueExpr::Literal(RulesInteger::from(i64::from(n)))),
+                        amount: Box::new(EngineValueExpr::Literal(RulesInteger::from(i64::from(
+                            n,
+                        )))),
                         increase: !*less,
                         next_only: false,
                     },
@@ -834,7 +835,15 @@ pub(crate) fn lower_temporary_static(
             zone,
             mode,
             condition: None,
-        } => lower_temp_zone_cast_permission(*player, filter.as_ref(), zone.as_ref(), mode, duration, acc, ctx),
+        } => lower_temp_zone_cast_permission(
+            *player,
+            filter.as_ref(),
+            zone.as_ref(),
+            mode,
+            duration,
+            acc,
+            ctx,
+        ),
         v2::StaticAbility::RemoveAllAbilities { subject } => {
             let query = lower_subject_to_query(subject, acc, ctx)?;
             acc.push(Instruction::ApplyContinuous(Box::new(
@@ -881,9 +890,9 @@ pub(crate) fn lower_temporary_static(
                 .ok_or(LoweringError::Unsupported("v2:temp-static-unsupported"))?;
             lower_temporary_static(&rewritten, duration, acc, ctx)
         }
-        v2::StaticAbility::GlobalFlag(v2::StaticFlagKind::CostReductionRule) => Err(
-            LoweringError::Unsupported("v2:static-cost-reduction-rule"),
-        ),
+        v2::StaticAbility::GlobalFlag(v2::StaticFlagKind::CostReductionRule) => {
+            Err(LoweringError::Unsupported("v2:static-cost-reduction-rule"))
+        }
         _ => Err(LoweringError::Unsupported("v2:temp-static-unsupported")),
     }
 }
@@ -1126,14 +1135,14 @@ fn lower_grant_keywords_into_program(
             let permission = if kw.kind == v2::KeywordKind::Cascade && kw.param.is_none() {
                 CastPermissionRule::GrantSpellCascade {
                     any_player,
-                    matching: matching.clone(),
+                    matching,
                     count: NonZeroU8::MIN,
                 }
             } else {
                 let engine_kw = lower_keyword_ability(kw, ctx)?;
                 CastPermissionRule::GrantSpellKeyword {
                     any_player,
-                    matching: matching.clone(),
+                    matching,
                     keyword: engine_kw,
                 }
             };
@@ -1409,7 +1418,9 @@ fn lower_temp_subject_rule(
             }
             let query = lower_subject_to_query(subject, acc, ctx)?;
             let parts = (0..*n)
-                .map(|_| ResolvedPartSpec::BlockingRestriction(BlockingRestriction::AdditionalBlock))
+                .map(|_| {
+                    ResolvedPartSpec::BlockingRestriction(BlockingRestriction::AdditionalBlock)
+                })
                 .collect();
             acc.push(Instruction::ApplyContinuous(Box::new(
                 ApplyContinuousSpec::resolved_parts(query, ResolvedPartsSpec(parts), duration),
@@ -1547,7 +1558,9 @@ fn lower_temp_subject_rule(
                 .filter_map(|m| ctx.vocab.resolve_label(m))
                 .collect();
             if all_types.is_empty() {
-                return Err(LoweringError::Unsupported("v2:temp-all-creature-types-empty"));
+                return Err(LoweringError::Unsupported(
+                    "v2:temp-all-creature-types-empty",
+                ));
             }
             acc.push(Instruction::ApplyContinuous(Box::new(
                 ApplyContinuousSpec::resolved_parts(
@@ -1802,9 +1815,7 @@ fn lower_cost_modifier_into_program(
         }
     } else {
         if scale.is_some() {
-            return Err(LoweringError::Unsupported(
-                "v2:static-cost-increase-scaled",
-            ));
+            return Err(LoweringError::Unsupported("v2:static-cost-increase-scaled"));
         }
         let nz = NonZeroU8::new(generic_u8)
             .ok_or(LoweringError::Unsupported("v2:static-cost-increase-zero"))?;
@@ -1867,7 +1878,9 @@ fn lower_rule_restriction_into_program(
                     cond,
                 )
             }
-            Some(_) => Err(LoweringError::Unsupported("v2:static-uncounterable-subject")),
+            Some(_) => Err(LoweringError::Unsupported(
+                "v2:static-uncounterable-subject",
+            )),
         },
         v2::RuleRestrictionKind::DamageCantBePrevented => {
             if matches!(subject, Some(v2::SubjectRef::SelfObject)) && condition.is_none() {
@@ -1945,9 +1958,7 @@ fn lower_rule_restriction_into_program(
         v2::RuleRestrictionKind::AreGoaded => {
             if matches!(
                 subject,
-                Some(v2::SubjectRef::Anaphora(
-                    v2::AnaphoraRef::EnchantedCreature
-                ))
+                Some(v2::SubjectRef::Anaphora(v2::AnaphoraRef::EnchantedCreature))
             ) && condition.is_none()
             {
                 push_attack_requirement(program, AttackRequirement::EnchantedCreatureIsGoaded);
@@ -1997,12 +2008,12 @@ fn lower_combat_rule_to_static_parts(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<Vec<StaticPart>> {
     match rule {
-        v2::RuleRestrictionKind::CantAttack => {
-            Ok(vec![StaticPart::BlockingRestriction(BlockingRestriction::CannotAttack)])
-        }
-        v2::RuleRestrictionKind::CantBlock => {
-            Ok(vec![StaticPart::BlockingRestriction(BlockingRestriction::CannotBlock)])
-        }
+        v2::RuleRestrictionKind::CantAttack => Ok(vec![StaticPart::BlockingRestriction(
+            BlockingRestriction::CannotAttack,
+        )]),
+        v2::RuleRestrictionKind::CantBlock => Ok(vec![StaticPart::BlockingRestriction(
+            BlockingRestriction::CannotBlock,
+        )]),
         v2::RuleRestrictionKind::CantAttackOrBlock => Ok(vec![StaticPart::BlockingRestriction(
             BlockingRestriction::CannotAttackOrBlock,
         )]),
@@ -2145,7 +2156,9 @@ fn lower_player_restriction_into_program(
                     StaticRestriction::PlayersCannotGainLife
                 }
                 _ => {
-                    return Err(LoweringError::Unsupported("v2:static-cant-gain-life-player"));
+                    return Err(LoweringError::Unsupported(
+                        "v2:static-cant-gain-life-player",
+                    ));
                 }
             };
             StaticContinuousAbility::Restriction {
@@ -2192,9 +2205,7 @@ fn lower_player_restriction_into_program(
             }
         }
         v2::PlayerRestrictionKind::CantUntapMoreThan(_) => {
-            return Err(LoweringError::Unsupported(
-                "v2:static-cant-untap-more-than",
-            ));
+            return Err(LoweringError::Unsupported("v2:static-cant-untap-more-than"));
         }
         v2::PlayerRestrictionKind::NoMaxHandSize => {
             let rule = match player {
@@ -2260,9 +2271,7 @@ fn lower_set_subtypes_into_program(
         } else if let Some(et) = LowerCtx::lookup_enchantment_subtype(raw) {
             enchantment_subs.insert(et);
         } else {
-            return Err(LoweringError::Unsupported(
-                "v2:static-set-subtypes-unknown",
-            ));
+            return Err(LoweringError::Unsupported("v2:static-set-subtypes-unknown"));
         }
     }
 
@@ -2738,32 +2747,11 @@ fn lower_zone_cast_permission_into_program(
             lands,
             spells,
         } => lower_play_from_zone_permission(
-            player,
-            filter,
-            subject,
-            zone,
-            *top_only,
-            *lands,
-            *spells,
-            false,
-            condition,
-            cond,
-            program,
-            ctx,
+            player, filter, subject, zone, *top_only, *lands, *spells, false, condition, cond,
+            program, ctx,
         ),
         v2::CastPermissionMode::CastFromZone => lower_play_from_zone_permission(
-            player,
-            filter,
-            subject,
-            zone,
-            false,
-            false,
-            true,
-            false,
-            condition,
-            cond,
-            program,
-            ctx,
+            player, filter, subject, zone, false, false, true, false, condition, cond, program, ctx,
         ),
         v2::CastPermissionMode::OncePerTurn { free, alt_cost } => {
             if alt_cost.is_some() {
@@ -2773,18 +2761,8 @@ fn lower_zone_cast_permission_into_program(
             }
             if !*free && zone.is_some() {
                 return lower_play_from_zone_permission(
-                    player,
-                    filter,
-                    subject,
-                    zone,
-                    false,
-                    false,
-                    true,
-                    true,
-                    condition,
-                    cond,
-                    program,
-                    ctx,
+                    player, filter, subject, zone, false, false, true, true, condition, cond,
+                    program, ctx,
                 );
             }
             if *free && zone.is_none() {
@@ -2792,9 +2770,7 @@ fn lower_zone_cast_permission_into_program(
                     v2::PlayerRef::You => false,
                     v2::PlayerRef::EachPlayer | v2::PlayerRef::AnyPlayer => true,
                     _ => {
-                        return Err(LoweringError::Unsupported(
-                            "v2:static-once-per-turn-player",
-                        ));
+                        return Err(LoweringError::Unsupported("v2:static-once-per-turn-player"));
                     }
                 };
                 let sf = match filter {
@@ -2945,10 +2921,14 @@ fn lower_play_from_zone_permission(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
     if player != v2::PlayerRef::You {
-        return Err(LoweringError::Unsupported("v2:static-play-from-zone-player"));
+        return Err(LoweringError::Unsupported(
+            "v2:static-play-from-zone-player",
+        ));
     }
     let Some(zr) = zone else {
-        return Err(LoweringError::Unsupported("v2:static-play-from-zone-missing"));
+        return Err(LoweringError::Unsupported(
+            "v2:static-play-from-zone-missing",
+        ));
     };
 
     if matches!(subject, Some(v2::SubjectRef::SelfObject)) {
@@ -3154,7 +3134,9 @@ fn lower_hand_size_into_program(
             }
             let n = lower_value_const(val)
                 .and_then(|v| u8::try_from(v).ok())
-                .ok_or(LoweringError::Unsupported("v2:static-hand-size-set-dynamic"))?;
+                .ok_or(LoweringError::Unsupported(
+                    "v2:static-hand-size-set-dynamic",
+                ))?;
             push_static_ability(
                 program,
                 StaticContinuousAbility::DrawRule {
@@ -3300,7 +3282,9 @@ fn lower_subject_rule_into_program(
         }
         v2::SubjectStaticRule::MayNotUntap => {
             if !matches!(subject, v2::SubjectRef::SelfObject) {
-                return Err(LoweringError::Unsupported("v2:static-may-not-untap-non-self"));
+                return Err(LoweringError::Unsupported(
+                    "v2:static-may-not-untap-non-self",
+                ));
             }
             push_static_ability(
                 program,
@@ -3496,9 +3480,9 @@ fn lower_global_flag_into_program(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
     match flag {
-        v2::StaticFlagKind::CostReductionRule => Err(LoweringError::Unsupported(
-            "v2:static-cost-reduction-rule",
-        )),
+        v2::StaticFlagKind::CostReductionRule => {
+            Err(LoweringError::Unsupported("v2:static-cost-reduction-rule"))
+        }
         v2::StaticFlagKind::DontLoseForZeroLife => push_static_ability(
             program,
             StaticContinuousAbility::Restriction {
@@ -3557,9 +3541,9 @@ fn lower_global_flag_into_program(
                 None,
             )
         }
-        v2::StaticFlagKind::CanBeCommander => {
-            Err(LoweringError::Unsupported("v2:static-flag-can-be-commander"))
-        }
+        v2::StaticFlagKind::CanBeCommander => Err(LoweringError::Unsupported(
+            "v2:static-flag-can-be-commander",
+        )),
         v2::StaticFlagKind::MayExertOnAttack => Err(LoweringError::Unsupported(
             "v2:static-flag-may-exert-on-attack",
         )),
@@ -3609,7 +3593,8 @@ fn lower_filter_rule_into_program(
             )
         }
         v2::FilterStaticKind::AlsoAttacksIfAble => {
-            let sel = lower_permanent_selector(&v2::SubjectRef::All(Box::new(filter.clone())), ctx)?;
+            let sel =
+                lower_permanent_selector(&v2::SubjectRef::All(Box::new(filter.clone())), ctx)?;
             push_static_ability(
                 program,
                 StaticContinuousAbility::Battlefield {
@@ -3623,7 +3608,8 @@ fn lower_filter_rule_into_program(
             )
         }
         v2::FilterStaticKind::ActivateAbilitiesAsHaste => {
-            let sel = lower_permanent_selector(&v2::SubjectRef::All(Box::new(filter.clone())), ctx)?;
+            let sel =
+                lower_permanent_selector(&v2::SubjectRef::All(Box::new(filter.clone())), ctx)?;
             push_static_ability(
                 program,
                 StaticContinuousAbility::Restriction {
@@ -3796,7 +3782,9 @@ fn lower_temp_next_spell_modifier(
                     TemporaryRuleKind::SpellCostModifier {
                         players: AffectedPlayers::One(caster_rp),
                         filter: ef,
-                        amount: Box::new(EngineValueExpr::Literal(RulesInteger::from(i64::from(n)))),
+                        amount: Box::new(EngineValueExpr::Literal(RulesInteger::from(i64::from(
+                            n,
+                        )))),
                         increase: !*less,
                         next_only: true,
                     },
@@ -3879,7 +3867,9 @@ fn lower_temp_rule_restriction(
         v2::RuleRestrictionKind::CantBeCountered => {
             let (filter, controller_only) = match subject {
                 None => (None, true),
-                Some(v2::SubjectRef::All(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::Group(f)) => {
+                Some(
+                    v2::SubjectRef::All(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::Group(f),
+                ) => {
                     let ctrl_only = match f.controller {
                         Some(ControllerRelation::You) => true,
                         None => false,
@@ -3968,7 +3958,9 @@ fn lower_temp_player_restriction(
                 nonmana_only: false,
             }
         }
-        v2::PlayerRestrictionKind::CantGainLife => TemporaryRuleKind::PlayerCantGainLife { players },
+        v2::PlayerRestrictionKind::CantGainLife => {
+            TemporaryRuleKind::PlayerCantGainLife { players }
+        }
         v2::PlayerRestrictionKind::NoMaxHandSize if player == v2::PlayerRef::You => {
             TemporaryRuleKind::temporary_static(StaticContinuousAbility::DrawRule {
                 id: ctx.alloc_static_id(),
@@ -4036,10 +4028,11 @@ fn lower_temp_zone_cast_permission(
                 Some(f) => Some(lower_object_filter(f, ctx)?),
                 None => None,
             };
-            let cast_only = matches!(mode, v2::CastPermissionMode::CastFromZone) || !matches!(
-                mode,
-                v2::CastPermissionMode::PlayFromZone { lands: true, .. }
-            );
+            let cast_only = matches!(mode, v2::CastPermissionMode::CastFromZone)
+                || !matches!(
+                    mode,
+                    v2::CastPermissionMode::PlayFromZone { lands: true, .. }
+                );
             acc.push(Instruction::ApplyContinuous(Box::new(
                 ApplyContinuousSpec::temporary_rule(
                     TemporaryRuleKind::ZoneCastPermission {
