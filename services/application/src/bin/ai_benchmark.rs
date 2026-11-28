@@ -49,8 +49,6 @@ use uuid::Uuid;
 const MAX_RETRIES_PER_BOUNDARY: usize = 3;
 const MAX_OWN_RECENT: usize = 6;
 
-const DEFAULT_CODEX_CLI: &str = "/Users/quzzar/Projects/ai-harness-test/work/native-cli-update-recovery-001/CodexCLI.app/Contents/MacOS/codex";
-
 // Verified Oracle IDs from work/catalogue/oracle-cards-20261029210158.jsonl.gz
 const FOREST: &str = "b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6";
 const MOUNTAIN: &str = "a3fb7228-e76b-4e96-a40e-20b5fed75685";
@@ -1211,7 +1209,9 @@ fn main() -> Result<(), String> {
     } else {
         let cli = std::env::var("SPELLWAKE_AI_CODEX_CLI")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_CODEX_CLI));
+            .map_err(|_| {
+                "SPELLWAKE_AI_CODEX_CLI must be set to the codex CLI binary path".to_owned()
+            })?;
         let app_srv = CodexAppServerProvider::new(CodexAppServerConfig {
             cli_path: cli,
             codex_home: None,

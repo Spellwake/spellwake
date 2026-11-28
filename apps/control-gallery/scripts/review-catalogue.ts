@@ -25,7 +25,7 @@ type Catalogue = {
   concepts: SourceView[];
 };
 const root = fileURLToPath(
-  new URL("../../../.impeccable/review/open-play", import.meta.url),
+  new URL("../../../assets/ui-review/open-play", import.meta.url),
 );
 const directory = resolve(root, "approved-screens");
 const read = (file: string) => JSON.parse(readFileSync(file, "utf8"));

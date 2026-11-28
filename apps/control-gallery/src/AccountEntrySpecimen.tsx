@@ -8,9 +8,9 @@ import {
 import { EmailCodeEntry, ProviderActions } from "@spellwake/ui";
 import type { ControlUse } from "./UsageMap";
 import { references, type View } from "./references";
-import google from "../../../.impeccable/review/open-play/account-entry/google-symbol.svg?inline";
-import appleSvg from "../../../.impeccable/review/open-play/account-entry/apple-symbol.svg?raw";
-import discord from "../../../.impeccable/review/open-play/account-entry/discord-symbol.svg?inline";
+import google from "../../../assets/ui-review/open-play/account-entry/google-symbol.svg?inline";
+import appleSvg from "../../../assets/ui-review/open-play/account-entry/apple-symbol.svg?raw";
+import discord from "../../../assets/ui-review/open-play/account-entry/discord-symbol.svg?inline";
 
 const apple =
   "data:image/svg+xml," +

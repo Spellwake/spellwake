@@ -1,4 +1,4 @@
-import revisedDamage from "../../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/walkthrough.jpg?inline";
+import revisedDamage from "../../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/walkthrough.jpg?inline";
 
 export default function RevisedDamage() {
   return (

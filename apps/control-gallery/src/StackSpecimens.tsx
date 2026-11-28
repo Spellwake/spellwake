@@ -1,9 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { CompactSpellStack, type StackEntry } from "@spellwake/ui";
-import boltSrc from "../../../.impeccable/review/open-play/in-game/arena-reference/lightning-bolt-existing-card.jpg?inline";
-import wardenArt from "../../../.impeccable/review/open-play/in-game/arena-reference/soul-warden-art.jpg?inline";
-import primordialArt from "../../../.impeccable/review/open-play/in-game/arena-reference/diluvian-primordial-art.jpg?inline";
-import counterSrc from "../../../.impeccable/review/open-play/approved-screens/implementation/full-match-assets/counter.webp?inline";
+import boltSrc from "../../../assets/ui-review/open-play/in-game/arena-reference/lightning-bolt-existing-card.jpg?inline";
+import wardenArt from "../../../assets/ui-review/open-play/in-game/arena-reference/soul-warden-art.jpg?inline";
+import primordialArt from "../../../assets/ui-review/open-play/in-game/arena-reference/diluvian-primordial-art.jpg?inline";
+import counterSrc from "../../../assets/ui-review/open-play/approved-screens/implementation/full-match-assets/counter.webp?inline";
 import { originalUrl, references, type View } from "./references";
 
 const empty = "AS06:stack",

@@ -19,7 +19,12 @@ import {
   type CosmeticKind,
   type CosmeticsSource,
 } from "../../cosmetics/cosmetic-sources";
-import { CategoryList, ItemPreview, TileGrid } from "./CosmeticPicker";
+import {
+  CategoryList,
+  ItemPreview,
+  TileGrid,
+  WearSeedControls,
+} from "./CosmeticPicker";
 import * as s from "./cosmetics.css";
 
 export const COSMETIC_VIEWS = ["owned", "shop"] as const;
@@ -170,6 +175,7 @@ export function CosmeticsDialog({
               <div className={s.details}>
                 <h3 className={s.itemName}>{selected.name}</h3>
                 <p className={s.itemKind}>{KIND_NOUN[selected.kind]}</p>
+                <WearSeedControls item={selected} />
                 {view === "shop" && selected.price && !selected.isOwned && (
                   <p className={s.itemPrice}>{selected.price} USD</p>
                 )}

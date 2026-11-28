@@ -53,7 +53,7 @@ const PURCHASES: readonly PurchaseRow[] = [
   ["Ember sleeve", "2026-11-05", "$2.99 USD", "Paid"],
   ["Twilight sleeve", "2026-11-08", "$4.99 USD", "Canceled"],
   ["Ivory dice", "2026-11-11", "$3.00 USD", "Paid"],
-  ["Moonlit playmat", "2026-11-14", "$4.99 USD", "Paid"],
+  ["Windswept Castle playmat", "2026-11-14", "$3.99 USD", "Paid"],
   ["Storm sleeve", "2026-11-17", "$2.99 USD", "Paid"],
 ].map(([item, date, amount, status], index) => ({
   id: `preview-purchase-${index + 1}`,

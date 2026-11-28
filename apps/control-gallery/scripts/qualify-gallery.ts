@@ -5,7 +5,7 @@
  * Verifies that representative @spellwake/ui specimens, lazy-loaded match
  * specimens, and the Combat Damage Walkthrough all mount and render with
  * zero uncaught page errors, even in a public checkout without private
- * `spellwake-assets` or `.impeccable/review` artwork files.
+ * `spellwake-assets` or `assets/ui-review` artwork files.
  *
  * Usage: node apps/control-gallery/scripts/qualify-gallery.ts
  */

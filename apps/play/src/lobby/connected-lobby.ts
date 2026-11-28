@@ -91,7 +91,7 @@ const profileName = (key: string): string =>
 /** Why a refused action was refused, said briefly. */
 function refusal(errors: Errors): string {
   if ("aiQuota" in errors)
-    return "You’ve used all your Advanced AI games for today.";
+    return "You’ve used all your Advanced Bot games for today.";
   if ("revision" in errors) return "The lobby changed. Try again.";
   if ("deck" in errors || "decks" in errors)
     return "Choose a deck for this format.";
@@ -590,7 +590,7 @@ export function useConnectedLobby(
       return {
         id: slot.id,
         kind: "ai",
-        name: "AI player",
+        name: "AI Bot",
         portrait: null,
         isHost: false,
         isReady: slot.ready,

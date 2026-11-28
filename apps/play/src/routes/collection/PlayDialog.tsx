@@ -178,7 +178,7 @@ export function PlayDialog({
           <span className={s.choiceText}>
             <span className={s.choiceTitle}>Play with friends</span>
             <span className={s.choiceHint}>
-              Open a table. Invite friends or add AI.
+              Open a table. Invite friends or add bots.
             </span>
           </span>
         </button>

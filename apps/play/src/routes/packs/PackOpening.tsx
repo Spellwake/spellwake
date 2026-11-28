@@ -11,10 +11,11 @@ import { motion, useReducedMotion } from "motion/react";
 import { X } from "lucide-react";
 import { ActionButton } from "@spellwake/ui";
 import type { Opening } from "../../collection/pack-sources";
+import { SPELLWAKE_CARD_BACK_URL } from "../../cosmetics/card-backs";
+import { useCardBackUrl } from "../../cosmetics/use-card-back-url";
 import { motionLanguage as m } from "../../lib/motion";
 import { CardFace } from "../cards/CardFace";
 import { OpeningStage } from "./OpeningStage";
-import { CARD_BACK } from "./pack-assets";
 import * as s from "./packs.css";
 
 const STATUS: Record<
@@ -68,6 +69,7 @@ export function PackOpening({
   const dialog = useRef<HTMLDialogElement>(null);
   const done = useRef<HTMLButtonElement>(null);
   const reduce = useReducedMotion() ?? false;
+  const cardBack = useCardBackUrl();
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(new Set());
   const [isRevealingAll, setIsRevealingAll] = useState(false);
   const cards = opening.cards;
@@ -174,6 +176,7 @@ export function PackOpening({
           setName={wrapperSet.current}
           setCode={wrapperCode.current}
           product={opening.product}
+          cardBackUrl={cardBack}
           from={round === 0 ? from : undefined}
           areaRef={packArea}
           slots={slots}
@@ -283,7 +286,19 @@ export function PackOpening({
                         }}
                       >
                         <span className={s.side}>
-                          <img className={s.backImage} src={CARD_BACK} alt="" />
+                          <img
+                            className={s.backImage}
+                            src={cardBack}
+                            alt=""
+                            onError={(event) => {
+                              const image = event.currentTarget;
+                              if (
+                                image.getAttribute("src") !==
+                                SPELLWAKE_CARD_BACK_URL
+                              )
+                                image.src = SPELLWAKE_CARD_BACK_URL;
+                            }}
+                          />
                         </span>
                         <span className={s.front}>
                           <CardFace

@@ -100,7 +100,7 @@ components:
 
 # Design System: Spellwake
 
-The component specifications below document the archived implementation. The [approved images](.impeccable/review/open-play/approved-screens/index.html) are the starting point for the next library review.
+The component specifications below document the archived implementation and serve as the starting point for library reviews.
 
 ## Overview
 

@@ -25,10 +25,15 @@ import {
   type Placement,
   type TableView,
 } from "../../match/table-model";
+import { SPELLWAKE_CARD_BACK_URL } from "../../cosmetics/card-backs";
+import {
+  useActivePlaymat,
+  useActivePlaymatEffect,
+} from "../../cosmetics/use-active-playmat";
+import { useCardBackUrl } from "../../cosmetics/use-card-back-url";
+import { useActiveWearEffects } from "../../cosmetics/use-wear-effects";
 import type { CardMark } from "./combat";
 import * as s from "./match-table.css";
-
-const SLEEVE = `${import.meta.env.BASE_URL}cards/spellwake-sleeve-midnight.svg`;
 
 export const cardName = (object: PlayerObject | null): string =>
   object?.identity.kind === "known"
@@ -138,6 +143,10 @@ export function MatchTable({
   const [stage, setStage] = useState({ width: 0, height: 0 });
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
   const reduced = Boolean(useReducedMotion());
+  const sleeveUrl = useCardBackUrl();
+  const playmatId = useActivePlaymat();
+  const playmatEffect = useActivePlaymatEffect();
+  const { cardEffect, sleeveEffect } = useActiveWearEffects();
 
   const handleProject = useCallback(
     (next: ReadonlyMap<string, ProjectedCardRect>) => {
@@ -164,7 +173,13 @@ export function MatchTable({
     if (!canvas) return;
     const controller = new AbortController();
     const handle = mountLiveMatchScene(canvas, {
-      sleeveUrl: SLEEVE,
+      sleeveUrl,
+      sleeveFallbackUrl: SPELLWAKE_CARD_BACK_URL,
+      cardEffect,
+      sleeveEffect,
+      playmatId,
+      playmatEffect,
+      playmatAssetBaseUrl: import.meta.env.BASE_URL,
       onProject: handleProject,
       signal: controller.signal,
     });
@@ -174,7 +189,17 @@ export function MatchTable({
       handle.dispose();
       if (sceneRef.current === handle) sceneRef.current = null;
     };
-  }, [handleProject]);
+  }, [
+    handleProject,
+    sleeveUrl,
+    playmatId,
+    playmatEffect.id,
+    playmatEffect.seed,
+    cardEffect.tier,
+    cardEffect.seed,
+    sleeveEffect.tier,
+    sleeveEffect.seed,
+  ]);
 
   const layout = useMemo(
     () =>
@@ -189,7 +214,9 @@ export function MatchTable({
       const { object, kind, zone } = placement;
       const y =
         placement.y +
-        (handTucked && zone === "hand" ? placement.width * CARD_RATIO * 0.3 : 0);
+        (handTucked && zone === "hand"
+          ? placement.width * CARD_RATIO * 0.3
+          : 0);
       const printed =
         object?.identity.kind === "known"
           ? object.identity.characteristics
@@ -234,7 +261,21 @@ export function MatchTable({
       hoveredKey,
       reducedMotion: reduced,
     });
-  }, [stage, layout.tilted, sceneCards, hoveredKey, reduced]);
+  }, [
+    stage,
+    layout.tilted,
+    sceneCards,
+    hoveredKey,
+    reduced,
+    sleeveUrl,
+    playmatId,
+    playmatEffect.id,
+    playmatEffect.seed,
+    cardEffect.tier,
+    cardEffect.seed,
+    sleeveEffect.tier,
+    sleeveEffect.seed,
+  ]);
 
   const viewerSeat = snapshot.viewerSeatId;
 
@@ -243,8 +284,7 @@ export function MatchTable({
     const rect = projected.get(placement.key);
     const fallbackH = placement.width * CARD_RATIO;
     const y =
-      placement.y +
-      (handTucked && zone === "hand" ? fallbackH * 0.3 : 0);
+      placement.y + (handTucked && zone === "hand" ? fallbackH * 0.3 : 0);
     const left = rect ? rect.left : placement.x - placement.width / 2;
     const top = rect ? rect.top : y - fallbackH / 2;
     const width = rect ? rect.width : placement.width;
@@ -375,11 +415,7 @@ export function MatchTable({
             : `${seatNames.get(view.seatId) ?? "Player"}’s board`
       }
     >
-      <canvas
-        ref={canvasRef}
-        className={s.canvas}
-        aria-hidden="true"
-      />
+      <canvas ref={canvasRef} className={s.canvas} aria-hidden="true" />
       <div className={s.hitLayer}>
         {layout.placements.map(hitItem)}
         {layout.labels.map((label) => (

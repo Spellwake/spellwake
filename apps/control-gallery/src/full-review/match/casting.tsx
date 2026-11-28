@@ -22,8 +22,8 @@ import {
   type Card,
 } from "./assets";
 import type { Piece } from "./battlefield";
-import warden from "../../../../../.impeccable/review/open-play/in-game/arena-reference/soul-warden-art.jpg?inline";
-import redPayment from "../../../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-15/red-payment.png?inline";
+import warden from "../../../../../assets/ui-review/open-play/in-game/arena-reference/soul-warden-art.jpg?inline";
+import redPayment from "../../../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-15/red-payment.png?inline";
 import red from "../../../../../output/imagegen/guildhall-screen-set/components/assets/mana/R.svg?inline";
 import one from "../../../../../output/imagegen/guildhall-screen-set/components/assets/mana/1.svg?inline";
 import two from "../../../../../output/imagegen/guildhall-screen-set/components/assets/mana/2.svg?inline";

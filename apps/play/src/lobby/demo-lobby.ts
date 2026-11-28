@@ -70,7 +70,7 @@ const openSeat = (index: number): DemoSeat => ({
 const aiSeat = (id: string): DemoSeat => ({
   id,
   kind: "ai",
-  name: "AI player",
+  name: "AI Bot",
   art: null,
   isHost: false,
   isReady: true,

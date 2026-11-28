@@ -198,7 +198,7 @@ export async function qualifyDeletionBrowser(args: {
   const { page, second, fixture, api, auth, users, signIn, checks } = args;
   const original = users[0]!;
   const replacement = users[1]!;
-  const review = resolve(".impeccable/review/account-deletion");
+  const review = resolve("work/review/account-deletion");
   await mkdir(review, { recursive: true });
   const key = (user: DeletionUser) =>
     `spellwake.deletion.v1:${api}:${user.account}`;

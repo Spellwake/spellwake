@@ -873,7 +873,9 @@ export class ApplicationApi {
           roomConfigurationAckSchema,
           parsed.data,
         )
-      : Promise.resolve<ApiResponse<z.infer<typeof roomConfigurationAckSchema>>>({
+      : Promise.resolve<
+          ApiResponse<z.infer<typeof roomConfigurationAckSchema>>
+        >({
           status: "fail",
           data: { request: "invalid" },
         });
@@ -891,17 +893,15 @@ export class ApplicationApi {
           setAiTierDispositionSchema,
           parsed.data,
         )
-      : Promise.resolve<ApiResponse<z.infer<typeof setAiTierDispositionSchema>>>({
+      : Promise.resolve<
+          ApiResponse<z.infer<typeof setAiTierDispositionSchema>>
+        >({
           status: "fail",
           data: { request: "invalid" },
         });
   }
   /** Assigns a specific deck (or null for Random Deck) to an AI seat. */
-  setAiSlotDeck(
-    bearer: string,
-    slotId: string,
-    input: SetAiDeckRequest,
-  ) {
+  setAiSlotDeck(bearer: string, slotId: string, input: SetAiDeckRequest) {
     const parsed = setAiDeckRequestSchema.safeParse(input);
     return parsed.success && identifierSchema.safeParse(slotId).success
       ? this.request(
@@ -910,7 +910,9 @@ export class ApplicationApi {
           roomConfigurationAckSchema,
           parsed.data,
         )
-      : Promise.resolve<ApiResponse<z.infer<typeof roomConfigurationAckSchema>>>({
+      : Promise.resolve<
+          ApiResponse<z.infer<typeof roomConfigurationAckSchema>>
+        >({
           status: "fail",
           data: { request: "invalid" },
         });
@@ -928,7 +930,9 @@ export class ApplicationApi {
           setAiDeckDispositionSchema,
           parsed.data,
         )
-      : Promise.resolve<ApiResponse<z.infer<typeof setAiDeckDispositionSchema>>>({
+      : Promise.resolve<
+          ApiResponse<z.infer<typeof setAiDeckDispositionSchema>>
+        >({
           status: "fail",
           data: { request: "invalid" },
         });
@@ -958,7 +962,7 @@ export class ApplicationApi {
     ) {
       return {
         status: "error",
-        message: "Server returned inconsistent AI status.",
+        message: "Server returned inconsistent bot status.",
       } as ApiResponse<z.infer<typeof aiStatusPageSchema>>;
     }
     return result;
@@ -2094,7 +2098,11 @@ export class ApplicationApi {
   }
 
   /** The table as it stood after one event of a game, from a seat or with every hand. */
-  gameReplay(bearer: string, request: PlayerReplayRequest, signal?: AbortSignal) {
+  gameReplay(
+    bearer: string,
+    request: PlayerReplayRequest,
+    signal?: AbortSignal,
+  ) {
     const parsed = playerReplayRequestSchema.safeParse(request);
     return parsed.success
       ? this.request(
@@ -2173,7 +2181,12 @@ export class ApplicationApi {
     );
   }
 
-  matches(bearer: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  matches(
+    bearer: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2195,7 +2208,13 @@ export class ApplicationApi {
     );
   }
 
-  matchGames(bearer: string, matchId: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  matchGames(
+    bearer: string,
+    matchId: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2207,7 +2226,13 @@ export class ApplicationApi {
     );
   }
 
-  matchSeats(bearer: string, matchId: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  matchSeats(
+    bearer: string,
+    matchId: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2219,7 +2244,13 @@ export class ApplicationApi {
     );
   }
 
-  matchDecisions(bearer: string, matchId: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  matchDecisions(
+    bearer: string,
+    matchId: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2231,7 +2262,12 @@ export class ApplicationApi {
     );
   }
 
-  matchChat(bearer: string, matchId: string, before?: MessageCursor | null, signal?: AbortSignal) {
+  matchChat(
+    bearer: string,
+    matchId: string,
+    before?: MessageCursor | null,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: "50" });
     if (before) {
       q.set("beforeAt", before.sentAt);
@@ -2266,7 +2302,12 @@ export class ApplicationApi {
   // -------------------------------------------------------------------------
   ranks(
     bearer: string,
-    opts?: { formatId?: string; seasonId?: string; after?: string; limit?: number },
+    opts?: {
+      formatId?: string;
+      seasonId?: string;
+      after?: string;
+      limit?: number;
+    },
     signal?: AbortSignal,
   ) {
     const q = new URLSearchParams();
@@ -2284,7 +2325,12 @@ export class ApplicationApi {
     );
   }
 
-  seasons(bearer: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  seasons(
+    bearer: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2296,7 +2342,12 @@ export class ApplicationApi {
     );
   }
 
-  quests(bearer: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  quests(
+    bearer: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2322,7 +2373,12 @@ export class ApplicationApi {
     );
   }
 
-  dailyWins(bearer: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  dailyWins(
+    bearer: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2336,7 +2392,12 @@ export class ApplicationApi {
 
   competitiveResults(
     bearer: string,
-    opts?: { formatId?: string; seasonId?: string; after?: string; limit?: number },
+    opts?: {
+      formatId?: string;
+      seasonId?: string;
+      after?: string;
+      limit?: number;
+    },
     signal?: AbortSignal,
   ) {
     const q = new URLSearchParams();
@@ -2354,7 +2415,12 @@ export class ApplicationApi {
     );
   }
 
-  queueState(bearer: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  queueState(
+    bearer: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2422,7 +2488,12 @@ export class ApplicationApi {
 
   leagueLeaderboard(
     bearer: string,
-    opts?: { formatId?: string; seasonId?: string; offset?: number; limit?: number },
+    opts?: {
+      formatId?: string;
+      seasonId?: string;
+      offset?: number;
+      limit?: number;
+    },
     signal?: AbortSignal,
   ) {
     const q = new URLSearchParams();
@@ -2586,7 +2657,15 @@ export class ApplicationApi {
   cosmeticsRich(
     bearer: string,
     opts?: {
-      kind?: "back" | "sleeve" | "dice" | "playmat" | "pet";
+      kind?:
+        | "back"
+        | "sleeve"
+        | "dice"
+        | "playmat"
+        | "pet"
+        | "card_effect"
+        | "sleeve_effect"
+        | "playmat_effect";
       after?: string;
       limit?: number;
     },
@@ -2798,7 +2877,12 @@ export class ApplicationApi {
   // -------------------------------------------------------------------------
   // Lobby, invitations, live limited draft, notifications & DM attachments
   // -------------------------------------------------------------------------
-  rooms(bearer: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  rooms(
+    bearer: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2916,7 +3000,12 @@ export class ApplicationApi {
         });
   }
 
-  invitations(bearer: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  invitations(
+    bearer: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -2994,7 +3083,12 @@ export class ApplicationApi {
     );
   }
 
-  notifications(bearer: string, after?: string | null, limit = 50, signal?: AbortSignal) {
+  notifications(
+    bearer: string,
+    after?: string | null,
+    limit = 50,
+    signal?: AbortSignal,
+  ) {
     const q = new URLSearchParams({ limit: String(limit) });
     if (after) q.set("after", after);
     return this.request(
@@ -3026,7 +3120,10 @@ export class ApplicationApi {
     input: {
       requestId: string;
       body?: string;
-      attachment: { kind: "trade_invite" | "game_invite"; [key: string]: unknown };
+      attachment: {
+        kind: "trade_invite" | "game_invite";
+        [key: string]: unknown;
+      };
     },
     signal?: AbortSignal,
   ) {
@@ -3068,7 +3165,11 @@ export class ApplicationApi {
     faces: CustomCardFaceRules[],
     signal?: AbortSignal,
   ) {
-    const parsed = z.array(customCardFaceRulesSchema).min(1).max(2).safeParse(faces);
+    const parsed = z
+      .array(customCardFaceRulesSchema)
+      .min(1)
+      .max(2)
+      .safeParse(faces);
     return parsed.success
       ? this.request(
           "/v1/custom-cards/standardize",
@@ -3083,7 +3184,7 @@ export class ApplicationApi {
         });
   }
 
-  /** Codex Vision OCR fallback for external PNG/WebP/JPEG card images without Spellwake iTXt metadata. */
+  /** Vision OCR fallback for external PNG/WebP/JPEG card images without Spellwake iTXt metadata. */
   importCustomCardVision(
     bearer: string,
     input: VisionImportRequest,
@@ -3214,7 +3315,8 @@ export class ApplicationApi {
   ) {
     if (
       !identifierSchema.safeParse(cardId).success ||
-      (requestId !== undefined && !identifierSchema.safeParse(requestId).success)
+      (requestId !== undefined &&
+        !identifierSchema.safeParse(requestId).success)
     ) {
       return Promise.resolve<
         ApiResponse<z.infer<typeof customCardMutationAckSchema>>

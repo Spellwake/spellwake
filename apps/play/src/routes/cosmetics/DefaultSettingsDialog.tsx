@@ -26,6 +26,7 @@ import {
   CategoryList,
   ItemPreview,
   TileGrid,
+  WearSeedControls,
   type Tile,
 } from "./CosmeticPicker";
 import * as s from "./cosmetics.css";
@@ -79,6 +80,7 @@ function Picker({
       <span className={s.divider} />
       <div className={s.preview}>
         <ItemPreview item={selected} kind={kind} />
+        <WearSeedControls item={selected} />
       </div>
     </div>
   );
@@ -119,14 +121,11 @@ export function AppearanceDialog({
   onClose: () => void;
   returnFocusRef?: RefObject<HTMLElement | null>;
 }): ReactElement {
-  const [draft, setDraft] = useState<DefaultSelection | null>(null);
+  const [edited, setDraft] = useState<DefaultSelection | null>(null);
+  const draft = edited ?? initial;
   const command = useCommand();
   const notice = useNotice();
   const { say } = notice;
-  // The first time the starting choices are known, the dialog starts from them.
-  useEffect(() => {
-    if (initial) setDraft((current) => current ?? initial);
-  }, [initial]);
   useEffect(() => {
     if (failure) say(failure);
   }, [failure, say]);
