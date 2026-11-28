@@ -114,6 +114,9 @@ export async function mountBoxMotion(
     if (flap) flap.position.x = separated ? 1.1 : 0;
     if (leather) {
       const frames = leather.pose(rearDegrees, frontDegrees);
+      textures?.setOpenProgress(
+        Math.min(1, Math.max(rearDegrees / 60, frontDegrees / 45)),
+      );
       rear.position.set(0, frames.rear.y, frames.rear.z);
       front.position.set(0, frames.front.y, frames.front.z);
       if (inspection) {
