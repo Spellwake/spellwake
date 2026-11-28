@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "slug": "league-progression",
+  "label": "League & Progression",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Competitive seasons, per-format ratings and leaderboards, daily quests and rerolls, win rewards, and finished match history and replays.",
+  "localOnly": true,
+  "unqualifiedReason": null,
+  "hostedCredentials": [],
+  "notes": "Fully testable locally against isolated Postgres 17, Rust member replay tests, Bun league/quest/history unit tests, and the standalone Playwright league E2E suite.",
+  "subdomains": [
+    {
+      "slug": "standings-and-ranks",
+      "label": "Standings & Ranks",
+      "description": "Season leaderboard pagination, shared competition places, per-format ratings, and rank source integrity.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "apps/play/src/league/connected-league.ts",
+        "apps/play/src/data/league-rules.test.ts",
+        "apps/play/scripts/qualify-league.ts"
+      ]
+    },
+    {
+      "slug": "season-and-quests",
+      "label": "Seasons, Quests & Rewards",
+      "description": "Season calendar boundaries, quest assignment and reroll limits, monthly activity, and win reward progression.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "apps/play/src/play/quests.test.ts",
+        "services/application/tests/database/season_calendar.rs",
+        "services/application/tests/database/quest_assignment_integrity.rs"
+      ]
+    },
+    {
+      "slug": "match-history-and-replays",
+      "label": "Match History & Replays",
+      "description": "Finished match listing, per-match detail/seats/games resolution, and replay publication integrity.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/match_history.rs",
+        "services/application/src/competitive_history.rs",
+        "services/application/tests/member_history_replay.rs",
+        "apps/play/src/league/history-read.test.ts",
+        "apps/play/src/match/replay.test.ts"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application match_history and competitive_history lib tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "services/application/Cargo.toml",
+          "--lib",
+          "history"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "monthly_activity_integrity",
+      "participation_integrity",
+      "progression_integrity",
+      "progression_reads",
+      "quest_assignment_integrity",
+      "quest_consumer_integrity",
+      "quest_reroll_boundaries",
+      "rank_source_integrity",
+      "reference_history_integrity",
+      "replay_publication_integrity",
+      "result_integrity",
+      "season_calendar",
+      "tier_integrity",
+      "win_reward_integrity"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "play league, quests, match history, and replay unit tests",
+        "args": [
+          "bun",
+          "test",
+          "apps/play/src/data/league-rules.test.ts",
+          "apps/play/src/league/history-read.test.ts",
+          "apps/play/src/play/quests.test.ts",
+          "apps/play/src/match/replay.test.ts",
+          "apps/play/src/match/match-series.test.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright league season, standings, and match history E2E suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-league.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/match_history.rs",
+    "services/application/src/competitive_history.rs",
+    "services/application/tests/member_history_replay.rs",
+    "apps/play/src/league",
+    "apps/play/scripts/qualify-league.ts"
+  ]
+}
