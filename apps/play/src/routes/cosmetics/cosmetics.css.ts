@@ -311,11 +311,50 @@ export const blank = style({
 });
 globalStyle(`${blank} svg`, { width: "34%", height: "34%", strokeWidth: 1.1 });
 
-// A gallery tile is a little squarer than a card, as in the approved walkthrough.
-globalStyle(`${tileArt} > ${card}, ${tileArt} > ${blank}`, {
-  aspectRatio: "8 / 9",
-  borderRadius: "9px",
+/** Live procedural wear preview frame for card & sleeve condition effects. */
+export const wearFrame = style({
+  display: "grid",
+  placeItems: "center",
+  width: "100%",
+  aspectRatio: "5 / 7",
+  borderRadius: "7% / 5%",
+  border: "1px solid #ffffff2e",
+  background: "radial-gradient(circle at 50% 45%, #1c2430, #0d1219 78%)",
+  boxShadow: "0 6px 18px #00000080",
+  overflow: "hidden",
 });
+export const wearCanvas = style({
+  display: "block",
+  width: "100%",
+  height: "100%",
+  objectFit: "contain",
+});
+
+/** Crisp 16:10 playmat frame with custom merrowed or saddle-stitched edges (no surface sheen). */
+export const playmatFrame = style({
+  display: "block",
+  width: "100%",
+  aspectRatio: "16 / 10",
+  margin: "20% 0",
+  borderRadius: "5%",
+  overflow: "hidden",
+  background: "#10141a",
+  boxShadow: "0 6px 18px #00000080, inset 0 0 0 1px #ffffff1a",
+});
+export const playmatCanvas = style({
+  display: "block",
+  width: "100%",
+  height: "100%",
+});
+
+// A gallery tile is a little squarer than a card, as in the approved walkthrough.
+globalStyle(
+  `${tileArt} > ${card}, ${tileArt} > ${blank}, ${tileArt} > ${wearFrame}`,
+  {
+    aspectRatio: "8 / 9",
+    borderRadius: "9px",
+  },
+);
 
 /* Preview */
 export const preview = style({
@@ -488,3 +527,45 @@ export const notice = style({
   "@container": { [STACKED]: { position: "static", minHeight: "56px" } },
 });
 export const skeleton = style({ display: "contents" });
+
+/** Pattern seed indicator and reroll controls under a wear effect preview. */
+export const seedControls = style({
+  marginTop: "8px",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "inherit",
+  gap: "6px",
+});
+export const seedTag = style({
+  fontSize: "13px",
+  letterSpacing: "0.03em",
+  color: "#c8bfa8",
+});
+export const seedActions = style({
+  display: "flex",
+  flexWrap: "wrap",
+  justifyContent: "center",
+  gap: "8px",
+});
+export const seedButton = style({
+  appearance: "none",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "6px",
+  minHeight: "34px",
+  padding: "0 14px",
+  borderRadius: "999px",
+  border: "1px solid #8d8168",
+  background: "linear-gradient(180deg,#25221d,#171614)",
+  color: shellTokens.ink,
+  fontSize: "14px",
+  cursor: "pointer",
+  selectors: {
+    "&:hover": {
+      borderColor: selectedEdge,
+      color: shellTokens.active,
+    },
+    "&:focus-visible": focus,
+  },
+});
+globalStyle(`${seedButton} svg`, { width: "14px", height: "14px" });

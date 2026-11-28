@@ -16,7 +16,7 @@ from qualification_http import make_opener, request_json, object_json
 
 TEST = 'native_game::artifacts::tests::owned_native_input_retention_and_reconstruction'
 REPO = ROOT.parent.parent
-RESULT = REPO / '.quzzar-system-design/application-architecture/reviews/api-native-artifacts-connected-v1.json'
+RESULT = REPO / 'work/reviews/application-architecture/api-native-artifacts-connected-v1.json'
 
 
 def main() -> None:

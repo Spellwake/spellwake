@@ -1,10 +1,7 @@
 import { appearanceSchema } from "./appearance.ts";
 export * from "./qualified-intents.ts";
 export * from "./custom-cards.ts";
-import {
-  customDeckEntriesSchema,
-  deckFaceCardSchema,
-} from "./custom-cards.ts";
+import { customDeckEntriesSchema, deckFaceCardSchema } from "./custom-cards.ts";
 export { appearanceSchema, type AppearanceSelection } from "./appearance.ts";
 import { makeCommandDispositionSchema } from "./command-protocol.ts";
 /** Validated public application protocol, paired with native Rust DTOs. */
@@ -223,7 +220,16 @@ export const cosmeticSummarySchema = z
           !value.startsWith(" ") &&
           !value.endsWith(" "),
       ),
-    kind: z.enum(["back", "sleeve", "dice", "playmat"]),
+    kind: z.enum([
+      "back",
+      "sleeve",
+      "dice",
+      "playmat",
+      "pet",
+      "card_effect",
+      "sleeve_effect",
+      "playmat_effect",
+    ]),
     isFree: z.boolean(),
     isOwned: z.boolean(),
     includedWithPatreon: z.boolean(),

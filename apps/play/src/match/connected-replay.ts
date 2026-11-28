@@ -193,7 +193,7 @@ export function useConnectedReplay(
           seat.id,
           seat.id === ownSeat
             ? "You"
-            : (seat.person?.username ?? "Spellwake AI"),
+            : (seat.person?.username ?? "Spellwake Bot"),
         ]),
       ),
     [match.data, ownSeat],
@@ -210,7 +210,7 @@ export function useConnectedReplay(
     null;
   const others = match.data.seats
     .filter((seat) => seat.id !== ownSeat)
-    .map((seat) => seat.person?.username ?? "Spellwake AI");
+    .map((seat) => seat.person?.username ?? "Spellwake Bot");
   const last = Math.max(0, line.steps.length - 1);
   return {
     status: "ready",

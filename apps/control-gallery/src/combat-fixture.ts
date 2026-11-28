@@ -1,7 +1,7 @@
-import drake from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/wind-drake.jpg?inline";
-import phantom from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/phantom-monster.jpg?inline";
-import elves from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/llanowar-elves.jpg?inline";
-import visionary from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/elvish-visionary.jpg?inline";
+import drake from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/wind-drake.jpg?inline";
+import phantom from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/phantom-monster.jpg?inline";
+import elves from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/llanowar-elves.jpg?inline";
+import visionary from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-13/two-attackers/elvish-visionary.jpg?inline";
 
 function blocker(id: string, name: string, src: string, suggested: number) {
   return { id, image: { name, src, width: 488, height: 680 }, suggested };

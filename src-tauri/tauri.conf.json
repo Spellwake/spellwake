@@ -21,8 +21,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cards.scryfall.io https://svgs.scryfall.io; font-src 'self'; connect-src 'self' blob: ipc: http://ipc.localhost",
-      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cards.scryfall.io https://svgs.scryfall.io; font-src 'self'; connect-src 'self' blob: ipc: http://ipc.localhost http://127.0.0.1:6204 ws://127.0.0.1:6204"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cards.scryfall.io https://backs.scryfall.io https://svgs.scryfall.io; font-src 'self'; connect-src 'self' blob: ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cards.scryfall.io https://backs.scryfall.io https://svgs.scryfall.io; font-src 'self'; connect-src 'self' blob: ipc: http://ipc.localhost http://127.0.0.1:6204 ws://127.0.0.1:6204"
     }
   },
   "plugins": {

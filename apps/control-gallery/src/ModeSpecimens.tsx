@@ -5,8 +5,8 @@ import {
   type CardImage,
   type PrintedMode,
 } from "@spellwake/ui";
-import abradeSrc from "../../../.impeccable/review/open-play/in-game/arena-reference/abrade-existing-card.jpg?inline";
-import crypticSrc from "../../../.impeccable/review/open-play/in-game/arena-reference/cryptic-command-existing-card.jpg?inline";
+import abradeSrc from "../../../assets/ui-review/open-play/in-game/arena-reference/abrade-existing-card.jpg?inline";
+import crypticSrc from "../../../assets/ui-review/open-play/in-game/arena-reference/cryptic-command-existing-card.jpg?inline";
 import { references, type View } from "./references";
 
 const abrade: CardImage = {

@@ -354,10 +354,19 @@ pub(super) async fn cosmetics_rich(State(state): State<ApiState>, request: Reque
     let limit = query.limit.unwrap_or(50);
     if !(1..=100).contains(&limit)
         || query.after.is_some_and(|id| id.is_nil())
-        || query
-            .kind
-            .as_deref()
-            .is_some_and(|k| !matches!(k, "back" | "sleeve" | "dice" | "playmat" | "pet"))
+        || query.kind.as_deref().is_some_and(|k| {
+            !matches!(
+                k,
+                "back"
+                    | "sleeve"
+                    | "dice"
+                    | "playmat"
+                    | "pet"
+                    | "card_effect"
+                    | "sleeve_effect"
+                    | "playmat_effect"
+            )
+        })
     {
         return fail(StatusCode::BAD_REQUEST, "query", "invalid");
     }

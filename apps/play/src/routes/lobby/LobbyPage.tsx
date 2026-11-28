@@ -192,9 +192,9 @@ export function LobbyPage({
                 q.requiredAdvanced > q.remainingToday;
               const label = q.displayUnlimited
                 ? q.remainingToday === 0
-                  ? "Advanced AI limit reached · Resets 00:00 UTC"
-                  : "Advanced AI: Unlimited"
-                : `Advanced AI: ${q.remainingToday ?? 0}/${q.dailyLimit ?? 0} remaining today · Resets 00:00 UTC`;
+                  ? "Advanced Bot limit reached · Resets 00:00 UTC"
+                  : "Advanced Bot: Unlimited"
+                : `Advanced Bot: ${q.remainingToday ?? 0}/${q.dailyLimit ?? 0} remaining today · Resets 00:00 UTC`;
               return (
                 <p
                   className={`${overLimit ? s.warning : s.passive} ${s.quotaLine}`}

@@ -71,7 +71,7 @@ export function historyMatch(
   return {
     matchId: match.id,
     outcome,
-    opponents: others.map((seat) => seat.person?.username ?? "Spellwake AI"),
+    opponents: others.map((seat) => seat.person?.username ?? "Spellwake Bot"),
     formatName,
     ranked: match.competitive,
     games: match.structure === "bo3" && others.length === 1 ? tally : null,

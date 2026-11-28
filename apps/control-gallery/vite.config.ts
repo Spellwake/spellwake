@@ -16,7 +16,7 @@ export default defineConfig({
   build: {
     outDir: fileURLToPath(
       new URL(
-        "../../.impeccable/review/open-play/approved-screens/controls/",
+        "../../assets/ui-review/open-play/approved-screens/controls/",
         import.meta.url,
       ),
     ),

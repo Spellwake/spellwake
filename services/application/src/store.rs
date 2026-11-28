@@ -11,6 +11,10 @@ pub enum CosmeticKind {
     Sleeve,
     Dice,
     Playmat,
+    Pet,
+    CardEffect,
+    SleeveEffect,
+    PlaymatEffect,
 }
 impl TryFrom<String> for CosmeticKind {
     type Error = &'static str;
@@ -20,6 +24,10 @@ impl TryFrom<String> for CosmeticKind {
             "sleeve" => Ok(Self::Sleeve),
             "dice" => Ok(Self::Dice),
             "playmat" => Ok(Self::Playmat),
+            "pet" => Ok(Self::Pet),
+            "card_effect" => Ok(Self::CardEffect),
+            "sleeve_effect" => Ok(Self::SleeveEffect),
+            "playmat_effect" => Ok(Self::PlaymatEffect),
             _ => Err("invalid string enum value"),
         }
     }
@@ -119,7 +127,14 @@ mod string_enum_contract_tests {
     #[test]
     fn canonical_string_protocol() {
         crate::test_http::string_enum_roundtrip::<CosmeticKind>(&[
-            "back", "sleeve", "dice", "playmat",
+            "back",
+            "sleeve",
+            "dice",
+            "playmat",
+            "pet",
+            "card_effect",
+            "sleeve_effect",
+            "playmat_effect",
         ]);
     }
 }

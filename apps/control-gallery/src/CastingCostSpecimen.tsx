@@ -7,7 +7,7 @@ import {
 } from "@spellwake/ui";
 import { references, type View } from "./references";
 import type { ControlUse } from "./UsageMap";
-import paymentRed from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-15/red-payment.png?inline";
+import paymentRed from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-15/red-payment.png?inline";
 import red from "../../../output/imagegen/guildhall-screen-set/components/assets/mana/R.svg?inline";
 import one from "../../../output/imagegen/guildhall-screen-set/components/assets/mana/1.svg?inline";
 import two from "../../../output/imagegen/guildhall-screen-set/components/assets/mana/2.svg?inline";

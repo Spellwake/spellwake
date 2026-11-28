@@ -50,13 +50,34 @@ export const demoDeckInputSchema = z
     mode: z.enum(["open", "collection"]).default("open"),
     entries: z.array(demoDeckEntrySchema).max(1000).default([]),
     appearance: demoAppearanceSchema.default({ colors: [], faceCard: null }),
-    /** Sleeves, card back, dice, playmat and pet, by preview cosmetic ID. Older decks have none. */
+    /** Sleeves, card back, dice, playmat, effects and pet, by preview cosmetic ID. Older decks have none. */
     cosmetics: z
       .object({
         sleeve: z.string().min(1).max(120).nullable(),
         back: z.string().min(1).max(120).nullable(),
         dice: z.string().min(1).max(120).nullable(),
         playmat: z.string().min(1).max(120).nullable(),
+        card_effect: z
+          .string()
+          .min(1)
+          .max(120)
+          .nullable()
+          .optional()
+          .default(null),
+        sleeve_effect: z
+          .string()
+          .min(1)
+          .max(120)
+          .nullable()
+          .optional()
+          .default(null),
+        playmat_effect: z
+          .string()
+          .min(1)
+          .max(120)
+          .nullable()
+          .optional()
+          .default(null),
         pet: z.string().min(1).max(120).nullable(),
       })
       .strict()

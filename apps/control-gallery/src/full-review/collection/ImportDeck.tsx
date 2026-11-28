@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { TextField } from "@spellwake/ui";
 import { Board, Btn, Example, Modal, Tabs, type Jump } from "./common";
 import { DeckLibrary } from "./Library";
-import sample from "../../../../../.impeccable/review/open-play/import-deck/accepted-paste-example.txt?raw";
+import sample from "../../../../../assets/ui-review/open-play/import-deck/accepted-paste-example.txt?raw";
 import { createDeck, type ShelfContext } from "./deck-library";
 import { supportedLink, resolveImport, FileFormatError } from "./import-source";
 const modes = ["Paste list", "Link", "File"];

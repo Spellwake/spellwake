@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "slug": "ai",
-  "label": "AI",
+  "label": "AI Bots",
   "category": "service-domain",
   "readinessStage": "hold-for-rules-engine",
-  "description": "Offline AI runtime behavior, prompt/schema contracts, Postgres quota/budget/slot integrity, and frontend AI tier-quota checks. Full gameplay AI testing waits on the rules engine.",
+  "description": "Offline AI bot runtime behavior, prompt/schema contracts, Postgres quota/budget/slot integrity, and frontend bot tier-quota checks. Full gameplay bot testing waits on the rules engine.",
   "localOnly": false,
   "unqualifiedReason": null,
   "hostedCredentials": [

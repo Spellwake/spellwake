@@ -1,7 +1,7 @@
 import type { CardImage, PrintedMode } from "@spellwake/ui";
 
 const images = import.meta.glob<string>(
-  "../../../../../.impeccable/review/open-play/approved-screens/implementation/full-match-assets/*.webp",
+  "../../../../../assets/ui-review/open-play/approved-screens/implementation/full-match-assets/*.webp",
   { eager: true, query: "?inline", import: "default" },
 );
 const byName = Object.fromEntries(

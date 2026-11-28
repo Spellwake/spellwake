@@ -4,11 +4,6 @@ node_modules/
 .env.*
 !.env.example
 work/
-.impeccable/config.local.json
-.impeccable/hook.cache.json
-.impeccable/hook.log*
-.agents/skills/impeccable/scripts/bin/
-/.quzzar-system-design/
 
 /target/
 /src-tauri/target/

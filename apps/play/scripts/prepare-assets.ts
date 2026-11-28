@@ -64,8 +64,8 @@ const applicationAssets = [
 ];
 // Account entry: the approved provider marks and the two open-licensed typefaces its card is set in.
 const entryReview = resolve(
-  workspace,
-  ".impeccable/review/open-play/account-entry",
+  assetRoot,
+  "ui-review/open-play/account-entry",
 );
 const fonts = resolve(import.meta.dir, "../../control-gallery/fixtures/fonts");
 applicationAssets.push(
@@ -83,8 +83,8 @@ applicationAssets.push(
 applicationAssets.push(
   {
     from: resolve(
-      workspace,
-      ".impeccable/review/open-play/account-settings/patreon-user-icon.svg",
+      assetRoot,
+      "ui-review/open-play/account-settings/patreon-user-icon.svg",
     ),
     to: "account/patreon.svg",
   },
@@ -160,8 +160,8 @@ await cp(resolve(fixtureRoot, "assets/mana"), resolve(builderOutput, "mana"), {
 // package, for the preview's two-mode, two-target and divided spells. Like the
 // deck builder's fixtures they are never part of a release build.
 const matchFaces = resolve(
-  workspace,
-  ".impeccable/review/open-play/in-game/arena-reference",
+  assetRoot,
+  "ui-review/open-play/in-game/arena-reference",
 );
 await mkdir(resolve(output, "match-preview"), { recursive: true });
 await Promise.all(

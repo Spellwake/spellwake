@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAtom } from "jotai";
 import { useQuery } from "@tanstack/react-query";
 import { isTauri } from "@tauri-apps/api/core";
 import type {
   AppearanceSelection,
   CosmeticSummary,
 } from "@spellwake/application-contracts";
+import { resolvePlaymat } from "spellwake-renderer-benchmark/playmats";
 import { useAccount } from "../auth/AccountProvider";
 import { ownerBearer, useAccountSummary } from "../data/account";
 import { useCheckout } from "../data/checkout";
@@ -17,9 +19,27 @@ import {
   type SourceGap,
 } from "../decks/deck-sources";
 import { openNativeCheckout } from "../lib/checkout";
+import {
+  MAGIC_CARD_BACK_ID,
+  MAGIC_CARD_BACK_URL,
+  SPELLWAKE_CARD_BACK_URL,
+} from "./card-backs";
+import {
+  PLAYMAT_EFFECT_CANONICAL_IDS,
+  connectedPlaymatEffectDefaultAtom,
+  resolvePlaymatEffect,
+} from "./playmat-effects";
+import {
+  CARD_EFFECT_CANONICAL_IDS,
+  SLEEVE_EFFECT_CANONICAL_IDS,
+  connectedWearDefaultsAtom,
+  resolveWearEffect,
+  type ConnectedWearDefaults,
+} from "./wear-effects";
 import type {
   AppearanceOptions,
   CheckoutNotice,
+  CosmeticItem,
   CosmeticKind,
   CosmeticsSource,
   DefaultSelection,
@@ -32,10 +52,11 @@ import type {
  * only compose the existing reads and journaled commands. What the account's
  * catalogue does not carry is left out, never invented:
  *
- * - Artwork: the catalogue names each item and its kind, with no picture.
- * - Prices: the catalogue lists none. The price is shown by hosted checkout,
- *   before anything is paid.
- * - Pets: the account has four appearance slots and none for a pet.
+ * - Artwork: built-in backs and wear effects have known visuals. Other picker
+ *   choices use the catalogue name and kind.
+ * - Prices: read from the rich catalogue when available; hosted checkout shows
+ *   the authoritative price before payment.
+ * - Pets: shown when present in the catalogue.
  */
 const CATEGORIES: readonly CosmeticKind[] = [
   "sleeve",
@@ -43,12 +64,89 @@ const CATEGORIES: readonly CosmeticKind[] = [
   "dice",
   "playmat",
 ];
+const CATEGORIES_WITH_EFFECTS: readonly CosmeticKind[] = [
+  "sleeve",
+  "back",
+  "dice",
+  "playmat",
+  "card_effect",
+  "sleeve_effect",
+  "playmat_effect",
+];
 const SAVE_FAILED = "Couldn’t save defaults.";
 const SAVE_UNCONFIRMED = "Couldn’t confirm defaults.";
 /** Total tries at settling one save, the first included. */
 const SAVE_ATTEMPTS = 3;
 const pause = (ms: number): Promise<void> =>
   new Promise((resolve) => window.setTimeout(resolve, ms));
+
+/** Attach art to the two built-in backs in the existing catalogue. */
+function builtInBacks(
+  items: readonly CosmeticSummary[],
+): ReadonlyMap<string, CosmeticItem> {
+  const backs = new Map<string, CosmeticItem>();
+  const starter = items.find(
+    (item) =>
+      item.kind === "back" && item.isFree && item.id !== MAGIC_CARD_BACK_ID,
+  );
+  if (starter)
+    backs.set(starter.id, {
+      id: starter.id,
+      kind: "back",
+      name: "Spellwake",
+      look: { imageUrl: SPELLWAKE_CARD_BACK_URL },
+    });
+  backs.set(MAGIC_CARD_BACK_ID, {
+    id: MAGIC_CARD_BACK_ID,
+    kind: "back",
+    name: "Magic",
+    look: { imageUrl: MAGIC_CARD_BACK_URL },
+  });
+  return backs;
+}
+
+/** Build the appearance picker from owned catalogue entries. */
+function ownedAppearances(items: readonly CosmeticSummary[]): CosmeticItem[] {
+  const backs = builtInBacks(items);
+  return items
+    .filter((item) => item.isOwned)
+    .map(({ id, name, kind }) => {
+      const back = backs.get(id);
+      if (back) return back;
+      const wear = resolveWearEffect(id);
+      if (wear) {
+        return {
+          id,
+          name,
+          kind,
+          look: { wear: { target: wear.target, tier: wear.tier } },
+        };
+      }
+      if (kind === "playmat") {
+        const mat = resolvePlaymat(id);
+        if (mat) {
+          return {
+            id,
+            name: mat.name,
+            kind,
+            look: { playmat: { id: mat.slug } },
+          };
+        }
+      }
+      if (kind === "playmat_effect") {
+        const fx = resolvePlaymatEffect(id);
+        if (fx) {
+          return {
+            id,
+            name: fx.name,
+            kind,
+            look: { playmatEffect: { id: fx.id } },
+          };
+        }
+      }
+      return { id, name, kind, look: null };
+    });
+}
 
 function useAccountGap(): SourceGap | null {
   const { state } = useAccount();
@@ -83,14 +181,19 @@ function useCatalogue(): {
   };
 }
 
-/** An account appearance as the picker holds it. The account has no pet slot. */
+/** An account appearance as the picker holds it. */
 export const selectionOf = (
   appearance: AppearanceSelection,
+  wearDefaults?: ConnectedWearDefaults,
+  playmatEffectId?: string,
 ): DefaultSelection => ({
   sleeve: appearance.sleeveId,
   back: appearance.backId,
   dice: appearance.diceId,
   playmat: appearance.playmatId,
+  card_effect: wearDefaults?.cardEffectId ?? CARD_EFFECT_CANONICAL_IDS.nm,
+  sleeve_effect: wearDefaults?.sleeveEffectId ?? SLEEVE_EFFECT_CANONICAL_IDS.nm,
+  playmat_effect: playmatEffectId ?? PLAYMAT_EFFECT_CANONICAL_IDS.clean,
   pet: null,
 });
 /** The picker's choices as the account stores them, or null when a required one is missing. */
@@ -121,9 +224,7 @@ export function useConnectedAppearanceOptions(): AppearanceOptions {
       optional: ["playmat"],
       items: {
         state: catalogue.state,
-        items: catalogue.items
-          .filter((item) => item.isOwned)
-          .map(({ id, name, kind }) => ({ id, name, kind, look: null })),
+        items: ownedAppearances(catalogue.items),
       },
     }),
     [catalogue.state, catalogue.items],
@@ -135,25 +236,58 @@ export function useConnectedDefaultSettings(): DefaultSettingsSource {
   const summary = useAccountSummary();
   const catalogue = useCatalogue();
   const command = useProfileDefaultsCommand();
+  const [wearDefaults, setWearDefaults] = useAtom(connectedWearDefaultsAtom);
+  const [playmatEffectDefault, setPlaymatEffectDefault] = useAtom(
+    connectedPlaymatEffectDefaultAtom,
+  );
   if (gap) return { status: gap };
   if (!summary.data)
     return { status: summary.isError ? "unavailable" : "loading" };
   const current = summary.data.defaults;
+  const owned = ownedAppearances(catalogue.items);
+  const hasEffects = owned.some(
+    (item) =>
+      item.kind === "card_effect" ||
+      item.kind === "sleeve_effect" ||
+      item.kind === "playmat_effect",
+  );
+  const ownedIds = new Set(owned.map((item) => item.id));
+  const resolvedWear: ConnectedWearDefaults = {
+    cardEffectId: ownedIds.has(wearDefaults.cardEffectId)
+      ? wearDefaults.cardEffectId
+      : CARD_EFFECT_CANONICAL_IDS.nm,
+    sleeveEffectId: ownedIds.has(wearDefaults.sleeveEffectId)
+      ? wearDefaults.sleeveEffectId
+      : SLEEVE_EFFECT_CANONICAL_IDS.nm,
+  };
+  const resolvedPlaymatEffect = ownedIds.has(playmatEffectDefault)
+    ? playmatEffectDefault
+    : PLAYMAT_EFFECT_CANONICAL_IDS.clean;
   return {
     status: "ready",
-    categories: CATEGORIES,
+    categories: hasEffects ? CATEGORIES_WITH_EFFECTS : CATEGORIES,
     optional: ["playmat"],
     options: {
       state: catalogue.state,
-      items: catalogue.items
-        .filter((item) => item.isOwned)
-        .map(({ id, name, kind }) => ({ id, name, kind, look: null })),
+      items: owned,
     },
-    saved: selectionOf(current),
+    saved: selectionOf(current, resolvedWear, resolvedPlaymatEffect),
     save: async (selection: DefaultSelection): Promise<Outcome> => {
       // The server requires sleeve, back and dice. The screen never offers None for them.
       const appearance = appearanceOf(selection);
       if (!appearance) return failed(SAVE_FAILED);
+      const nextWear: ConnectedWearDefaults = {
+        cardEffectId: selection.card_effect ?? CARD_EFFECT_CANONICAL_IDS.nm,
+        sleeveEffectId:
+          selection.sleeve_effect ?? SLEEVE_EFFECT_CANONICAL_IDS.nm,
+      };
+      const nextPlaymatEffect =
+        selection.playmat_effect ?? PLAYMAT_EFFECT_CANONICAL_IDS.clean;
+      if (sameAppearance(current, appearance)) {
+        setWearDefaults(nextWear);
+        setPlaymatEffectDefault(nextPlaymatEffect);
+        return succeeded(undefined);
+      }
       // Without its record, a retry could write the defaults twice.
       if (command.journal.status === "unavailable") return failed(SAVE_FAILED);
       const last =
@@ -181,7 +315,11 @@ export function useConnectedDefaultSettings(): DefaultSettingsSource {
             expected: journal,
           });
         }
-        if (journal.state === "accepted") return succeeded(undefined);
+        if (journal.state === "accepted") {
+          setWearDefaults(nextWear);
+          setPlaymatEffectDefault(nextPlaymatEffect);
+          return succeeded(undefined);
+        }
         return failed(
           journal.state === "rejected" ? SAVE_FAILED : SAVE_UNCONFIRMED,
         );
@@ -395,12 +533,23 @@ export function useConnectedCosmetics(): CosmeticsSource {
     enabled: !!owner && !!services,
     queryFn: async ({ signal }) => {
       if (!owner || !services) return null;
-      const res = await services.api.cosmeticsRich(
-        await ownerBearer(services, owner),
-        { limit: 100 },
-        signal,
-      );
-      return res.status === "success" ? res.data.items : null;
+      const bearer = await ownerBearer(services, owner);
+      const collected = [];
+      let after: string | undefined;
+      for (let page = 0; page < 10; page += 1) {
+        const res = await services.api.cosmeticsRich(
+          bearer,
+          { limit: 100, ...(after ? { after } : {}) },
+          signal,
+        );
+        if (res.status !== "success") {
+          return collected.length > 0 ? collected : null;
+        }
+        collected.push(...res.data.items);
+        if (!res.data.nextCursor || res.data.items.length === 0) break;
+        after = res.data.nextCursor;
+      }
+      return collected;
     },
   });
   const [chosenId, setChosenId] = useState<string | null>(null);
@@ -410,14 +559,39 @@ export function useConnectedCosmetics(): CosmeticsSource {
     [richQuery.data],
   );
   const items = useMemo((): ShopItem[] => {
+    const backs = builtInBacks(catalogue.items);
     const base: ShopItem[] = catalogue.items.map(
       ({ id, name, kind, isOwned, isFree }): ShopItem => {
         const rich = richById.get(id);
+        const back = backs.get(id);
+        const wear = resolveWearEffect(id) ?? resolveWearEffect(rich?.assetRef);
+        const playmat =
+          kind === "playmat"
+            ? (resolvePlaymat(id) ?? resolvePlaymat(rich?.assetRef))
+            : null;
+        const playmatEffect =
+          kind === "playmat_effect"
+            ? (resolvePlaymatEffect(id) ?? resolvePlaymatEffect(rich?.assetRef))
+            : null;
         return {
           id,
-          name: rich?.name || name,
+          name:
+            back?.name ??
+            playmat?.name ??
+            playmatEffect?.name ??
+            (rich?.name || name),
           kind,
-          look: rich?.previewUrl ? { imageUrl: rich.previewUrl } : null,
+          look:
+            back?.look ??
+            (wear
+              ? { wear: { target: wear.target, tier: wear.tier } }
+              : playmat
+                ? { playmat: { id: playmat.slug } }
+                : playmatEffect
+                  ? { playmatEffect: { id: playmatEffect.id } }
+                  : rich?.previewUrl
+                    ? { imageUrl: rich.previewUrl }
+                    : null),
           isOwned: rich ? rich.owned : isOwned,
           isSold: rich
             ? rich.priceCents !== null && rich.priceCents > 0
@@ -429,11 +603,30 @@ export function useConnectedCosmetics(): CosmeticsSource {
     const seen = new Set(base.map((i) => i.id));
     for (const rich of richQuery.data ?? []) {
       if (seen.has(rich.id)) continue;
+      const wear =
+        resolveWearEffect(rich.id) ?? resolveWearEffect(rich.assetRef);
+      const playmat =
+        rich.kind === "playmat"
+          ? (resolvePlaymat(rich.id) ?? resolvePlaymat(rich.assetRef))
+          : null;
+      const playmatEffect =
+        rich.kind === "playmat_effect"
+          ? (resolvePlaymatEffect(rich.id) ??
+            resolvePlaymatEffect(rich.assetRef))
+          : null;
       base.push({
         id: rich.id,
-        name: rich.name,
+        name: playmat?.name ?? playmatEffect?.name ?? rich.name,
         kind: rich.kind,
-        look: rich.previewUrl ? { imageUrl: rich.previewUrl } : null,
+        look: wear
+          ? { wear: { target: wear.target, tier: wear.tier } }
+          : playmat
+            ? { playmat: { id: playmat.slug } }
+            : playmatEffect
+              ? { playmatEffect: { id: playmatEffect.id } }
+              : rich.previewUrl
+                ? { imageUrl: rich.previewUrl }
+                : null,
         isOwned: rich.owned,
         isSold: rich.priceCents !== null && rich.priceCents > 0,
         price: formatUsdCents(rich.priceCents),
@@ -441,8 +634,17 @@ export function useConnectedCosmetics(): CosmeticsSource {
     }
     return base;
   }, [catalogue.items, richById, richQuery.data]);
+  const hasEffects = items.some(
+    (item) =>
+      item.kind === "card_effect" ||
+      item.kind === "sleeve_effect" ||
+      item.kind === "playmat_effect",
+  );
   const hasPets = items.some((item) => item.kind === "pet");
-  const categories = hasPets ? ([...CATEGORIES, "pet"] as const) : CATEGORIES;
+  const baseCategories = hasEffects ? CATEGORIES_WITH_EFFECTS : CATEGORIES;
+  const categories = hasPets
+    ? ([...baseCategories, "pet"] as const)
+    : baseCategories;
   const chosen = items.find((item) => item.id === chosenId) ?? null;
   const { checkout, isPaid } = useHostedCheckout(chosen, setChosenId);
   if (gap) return { status: gap };

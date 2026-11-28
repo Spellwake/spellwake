@@ -53,7 +53,7 @@ export function SeatRow({
         value={seat.kind === "ai" ? "ai" : "human"}
         options={[
           { value: "human", label: "Human" },
-          { value: "ai", label: "AI" },
+          { value: "ai", label: "Bot" },
         ]}
         onValueChange={(value) =>
           setController(value === "ai" ? "ai" : "human")
@@ -105,11 +105,11 @@ export function SeatRow({
           </button>
         ) : seat.kind === "ai" ? (
           <>
-            {controller ?? <span className={s.passive}>AI</span>}
+            {controller ?? <span className={s.passive}>Bot</span>}
             {setDifficulty && seat.difficulty ? (
               <span className={s.compact}>
                 <SelectMenu
-                  label="AI tier"
+                  label="Bot tier"
                   value={seat.difficulty}
                   options={[
                     { value: "normal", label: "Normal" },
@@ -132,7 +132,7 @@ export function SeatRow({
                 className={s.deckButton}
                 disabled={isLocked}
                 data-needs={seat.needsNewDeck}
-                aria-label={`AI deck: ${deckLabel ?? "none"}. Choose deck`}
+                aria-label={`Bot deck: ${deckLabel ?? "none"}. Choose deck`}
                 onClick={onChooseAiDeck}
               >
                 <span className={s.deckLabel}>

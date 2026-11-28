@@ -507,7 +507,7 @@ export function useConnectedMatch(
       ) {
         map.set(seatId, raw["username"]);
       } else if (raw["controllerKind"] === "ai" || raw["isAi"] === true) {
-        map.set(seatId, "Spellwake AI");
+        map.set(seatId, "Spellwake Bot");
       }
     }
     return map;

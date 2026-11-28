@@ -2,10 +2,10 @@ import { useState } from "react";
 import { TargetConnection, TargetOption, TargetPrompt } from "@spellwake/ui";
 import { references, type View } from "./references";
 import type { ControlUse } from "./UsageMap";
-import elves from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-14/elves.webp?inline";
-import bears from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-14/bears.webp?inline";
-import angel from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-14/angel.webp?inline";
-import felt from "../../../.impeccable/review/open-play/approved-screens/implementation/shared-controls-batch-14/felt.webp?inline";
+import elves from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-14/elves.webp?inline";
+import bears from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-14/bears.webp?inline";
+import angel from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-14/angel.webp?inline";
+import felt from "../../../assets/ui-review/open-play/approved-screens/implementation/shared-controls-batch-14/felt.webp?inline";
 
 const screens = ["BC02:targeting", "MT01:targeting", "MT04:targeting"] as const;
 export const targetingUses: ControlUse[] = [

@@ -71,13 +71,13 @@ export function PatreonSupportModal({
             Play Custom Cards in Open Play
           </h2>
           <p className={s.modalSubtitle}>
-            Creating, compiling, and exporting cards is free. Support Spellwake on Patreon to test against AI and host custom friend tables.
+            Creating, compiling, and exporting cards is free. Support Spellwake on Patreon to test against AI bots and host custom friend tables.
           </p>
 
           <ul className={s.benefitList}>
             <li className={s.benefitItem}>
               <Bot size={18} className={s.benefitIcon} />
-              <span>Quick Test vs. Bot (let the AI pilot your custom card too)</span>
+              <span>Quick Test vs. Bot (let the bot pilot your custom card too)</span>
             </li>
             <li className={s.benefitItem}>
               <Users size={18} className={s.benefitIcon} />

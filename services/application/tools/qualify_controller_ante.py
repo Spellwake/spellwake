@@ -13,7 +13,7 @@ from native_source_reader_acceptance import prepare_source_reader_reservation
 from qualification_http import make_opener, request_json, object_json
 
 REPO = ROOT.parent.parent
-REV = REPO / '.quzzar-system-design/application-architecture/reviews'
+REV = REPO / 'work/reviews/application-architecture'
 TEST = 'controller_ante::connected::owned_private_ai_ante_possession_originals_and_economics'
 
 def sha(path: Path) -> str:
