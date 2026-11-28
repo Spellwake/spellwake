@@ -1,4 +1,172 @@
 {
+  "patreon": {
+    "schemaVersion": 1,
+    "label": "health-patreon",
+    "message": "pass \u00b7 152",
+    "color": "green",
+    "isError": false
+  },
+  "patreon-live": {
+    "schemaVersion": 1,
+    "label": "health-patreon-live",
+    "message": "unknown",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "stripe": {
+    "schemaVersion": 1,
+    "label": "health-stripe",
+    "message": "pass \u00b7 53",
+    "color": "green",
+    "isError": false
+  },
+  "stripe-live": {
+    "schemaVersion": 1,
+    "label": "health-stripe-live",
+    "message": "unknown",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "matchmaking": {
+    "schemaVersion": 1,
+    "label": "health-matchmaking",
+    "message": "pass \u00b7 61",
+    "color": "green",
+    "isError": false
+  },
+  "matchmaking-live": {
+    "schemaVersion": 1,
+    "label": "health-matchmaking-live",
+    "message": "unknown",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "predictions": {
+    "schemaVersion": 1,
+    "label": "health-predictions",
+    "message": "pass \u00b7 94",
+    "color": "green",
+    "isError": false
+  },
+  "predictions-live": {
+    "schemaVersion": 1,
+    "label": "health-predictions-live",
+    "message": "unknown",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "market": {
+    "schemaVersion": 1,
+    "label": "health-market",
+    "message": "pass \u00b7 110",
+    "color": "green",
+    "isError": false
+  },
+  "market-live": {
+    "schemaVersion": 1,
+    "label": "health-market-live",
+    "message": "unknown",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "cosmetics": {
+    "schemaVersion": 1,
+    "label": "health-cosmetics",
+    "message": "partial \u00b7 18",
+    "color": "yellow",
+    "isError": false
+  },
+  "cosmetics-live": {
+    "schemaVersion": 1,
+    "label": "health-cosmetics-live",
+    "message": "unknown",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "account-auth": {
+    "schemaVersion": 1,
+    "label": "health-account-auth",
+    "message": "pass \u00b7 193",
+    "color": "green",
+    "isError": false
+  },
+  "account-auth-live": {
+    "schemaVersion": 1,
+    "label": "health-account-auth-live",
+    "message": "unknown",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "decks-collection": {
+    "schemaVersion": 1,
+    "label": "health-decks-collection",
+    "message": "pass \u00b7 130",
+    "color": "green",
+    "isError": false
+  },
+  "decks-collection-live": {
+    "schemaVersion": 1,
+    "label": "health-decks-collection-live",
+    "message": "n/a \u00b7 offline",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "custom-cards": {
+    "schemaVersion": 1,
+    "label": "health-custom-cards",
+    "message": "pass \u00b7 21",
+    "color": "green",
+    "isError": false
+  },
+  "custom-cards-live": {
+    "schemaVersion": 1,
+    "label": "health-custom-cards-live",
+    "message": "unknown",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "social": {
+    "schemaVersion": 1,
+    "label": "health-social",
+    "message": "pass \u00b7 82",
+    "color": "green",
+    "isError": false
+  },
+  "social-live": {
+    "schemaVersion": 1,
+    "label": "health-social-live",
+    "message": "n/a \u00b7 offline",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "league-progression": {
+    "schemaVersion": 1,
+    "label": "health-league-progression",
+    "message": "pass \u00b7 121",
+    "color": "green",
+    "isError": false
+  },
+  "league-progression-live": {
+    "schemaVersion": 1,
+    "label": "health-league-progression-live",
+    "message": "n/a \u00b7 offline",
+    "color": "lightgrey",
+    "isError": false
+  },
+  "rendering": {
+    "schemaVersion": 1,
+    "label": "health-rendering",
+    "message": "pass \u00b7 564",
+    "color": "green",
+    "isError": false
+  },
+  "rendering-live": {
+    "schemaVersion": 1,
+    "label": "health-rendering-live",
+    "message": "n/a \u00b7 offline",
+    "color": "lightgrey",
+    "isError": false
+  },
   "oracle-parser": {
     "schemaVersion": 1,
     "label": "health-oracle-parser",
@@ -13,31 +181,17 @@
     "color": "lightgrey",
     "isError": false
   },
-  "patreon": {
+  "rules-engine": {
     "schemaVersion": 1,
-    "label": "health-patreon",
-    "message": "pass \u00b7 141",
+    "label": "health-rules-engine",
+    "message": "pass \u00b7 867",
     "color": "green",
     "isError": false
   },
-  "patreon-live": {
+  "rules-engine-live": {
     "schemaVersion": 1,
-    "label": "health-patreon-live",
-    "message": "unknown",
-    "color": "lightgrey",
-    "isError": false
-  },
-  "stripe": {
-    "schemaVersion": 1,
-    "label": "health-stripe",
-    "message": "pass \u00b7 42",
-    "color": "green",
-    "isError": false
-  },
-  "stripe-live": {
-    "schemaVersion": 1,
-    "label": "health-stripe-live",
-    "message": "unknown",
+    "label": "health-rules-engine-live",
+    "message": "n/a \u00b7 offline",
     "color": "lightgrey",
     "isError": false
   },
@@ -55,59 +209,10 @@
     "color": "lightgrey",
     "isError": false
   },
-  "matchmaking": {
+  "rules-engine-benchmarks": {
     "schemaVersion": 1,
-    "label": "health-matchmaking",
-    "message": "pass \u00b7 51",
-    "color": "green",
-    "isError": false
-  },
-  "matchmaking-live": {
-    "schemaVersion": 1,
-    "label": "health-matchmaking-live",
-    "message": "unknown",
-    "color": "lightgrey",
-    "isError": false
-  },
-  "predictions": {
-    "schemaVersion": 1,
-    "label": "health-predictions",
-    "message": "pass \u00b7 89",
-    "color": "green",
-    "isError": false
-  },
-  "predictions-live": {
-    "schemaVersion": 1,
-    "label": "health-predictions-live",
-    "message": "unknown",
-    "color": "lightgrey",
-    "isError": false
-  },
-  "market": {
-    "schemaVersion": 1,
-    "label": "health-market",
-    "message": "pass \u00b7 104",
-    "color": "green",
-    "isError": false
-  },
-  "market-live": {
-    "schemaVersion": 1,
-    "label": "health-market-live",
-    "message": "unknown",
-    "color": "lightgrey",
-    "isError": false
-  },
-  "pet-cosmetics": {
-    "schemaVersion": 1,
-    "label": "health-pet-cosmetics",
-    "message": "unknown",
-    "color": "lightgrey",
-    "isError": false
-  },
-  "pet-cosmetics-live": {
-    "schemaVersion": 1,
-    "label": "health-pet-cosmetics-live",
-    "message": "unknown",
+    "label": "Rules Benchmarks",
+    "message": "0/15 pass \u00b7 15 pending",
     "color": "lightgrey",
     "isError": false
   }
