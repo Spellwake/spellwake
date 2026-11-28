@@ -39,12 +39,15 @@ fn test_vocab() -> Arc<CreatureTypeVocabulary> {
         "Bear".to_string(),
         "Beast".to_string(),
         "Bird".to_string(),
+        "Construct".to_string(),
         "Druid".to_string(),
+        "Elemental".to_string(),
         "Elf".to_string(),
         "Goblin".to_string(),
         "Human".to_string(),
         "Knight".to_string(),
         "Mercenary".to_string(),
+        "Peasant".to_string(),
         "Pirate".to_string(),
         "Rogue".to_string(),
         "Shapeshifter".to_string(),
@@ -3788,5 +3791,496 @@ fn wave9_first_spell_discount_target_object_stat_and_copy_keeps_ability() {
         pt2.derived.power,
         2.into(),
         "mimic must retain its copy ability via HasThisAbility and re-copy into a 2/2"
+    );
+}
+
+#[test]
+fn wave10_celebration_graveyard_activated_spell_and_retained_mana() {
+    let vocab = test_vocab();
+    let guest = compile_card(
+        &vocab,
+        "Grand Ball Guest",
+        "Creature \u{2014} Human Peasant",
+        Some("{1}{R}"),
+        Some(("2", "2")),
+        "Celebration \u{2014} This creature gets +1/+1 and has trample as long as two or more nonland permanents entered the battlefield under your control this turn.",
+    );
+    let forest = compile_card(
+        &vocab,
+        "Forest",
+        "Basic Land \u{2014} Forest",
+        None,
+        None,
+        "",
+    );
+    let trinket = compile_card(&vocab, "Bauble Test", "Artifact", Some("{0}"), None, "");
+    let recurring_burn = compile_card(
+        &vocab,
+        "Recurring Flame Test",
+        "Sorcery",
+        Some("{R}"),
+        None,
+        "Recurring Flame Test deals 2 damage to any target.\n{1}{R}: Return this card from your graveyard to your hand.",
+    );
+    let construct = compile_card(
+        &vocab,
+        "Mana Construct Test",
+        "Artifact Creature \u{2014} Construct",
+        Some("{4}"),
+        Some(("2", "2")),
+        "When this creature dies, add {C}{C}. Until end of turn, you don't lose this mana as steps and phases end.",
+    );
+    let kill = compile_card(
+        &vocab,
+        "Shatter Test",
+        "Instant",
+        Some("{B}"),
+        None,
+        "Destroy target creature.",
+    );
+    let two_drop = compile_card(&vocab, "Relic Test", "Artifact", Some("{2}"), None, "");
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: guest,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: forest,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: trinket.clone(),
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: trinket,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::Graveyard,
+                program: recurring_burn,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: construct,
+            },
+            SeedCard {
+                card: CardId(7),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: kill,
+            },
+            SeedCard {
+                card: CardId(8),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: two_drop,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Red, 1),
+            (ALICE, ManaType::Black, 1),
+            (ALICE, ManaType::Colourless, 1),
+        ],
+    );
+
+    // 1. Celebration: 0 entered -> 2/2 without trample.
+    let guest_id = object(&game, 1).id();
+    let chars0 = game
+        .execution()
+        .current_characteristics(guest_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        chars0.power_toughness.as_ref().unwrap().derived.power,
+        2.into()
+    );
+    assert!(
+        !chars0
+            .keywords
+            .contains(&spellwake_engine::characteristics::KeywordAbility::Trample)
+    );
+
+    // Play 1 Land + cast 1 Artifact -> only 1 nonland entered -> STILL 2/2 without trample!
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::PlayLand {
+            land: object(&game, 2).id(),
+        },
+    )
+    .into_state();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 3).id(),
+            target: None,
+            payment: CastingPayment::default(),
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let chars1 = game
+        .execution()
+        .current_characteristics(guest_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        chars1.power_toughness.as_ref().unwrap().derived.power,
+        2.into(),
+        "1 land + 1 nonland must NOT trigger Celebration (requires 2 nonlands)"
+    );
+
+    // Cast 2nd Artifact -> 2 nonlands entered -> Celebration active (3/3 with Trample)!
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: None,
+            payment: CastingPayment::default(),
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let chars2 = game
+        .execution()
+        .current_characteristics(guest_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        chars2.power_toughness.as_ref().unwrap().derived.power,
+        3.into(),
+        "2 nonlands entered this turn must activate Celebration (+1/+1)"
+    );
+    assert!(
+        chars2
+            .keywords
+            .contains(&spellwake_engine::characteristics::KeywordAbility::Trample),
+        "Celebration must grant Trample"
+    );
+
+    // 2. Graveyard-activated spell: activate `{1}{R}: Return this card from your graveyard to your hand.`
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateUntargetedAbility {
+            source: object(&game, 5).id(),
+            ability: first_activated_id(&game, 5),
+            payment: pay_mana(&[(ManaType::Red, 1), (ManaType::Colourless, 1)]),
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 5).zone(),
+        ObjectZone::Hand(ALICE),
+        "graveyard-activated sorcery ability must return the card to Alice's hand"
+    );
+
+    // 3. Retained mana across steps: destroy Mana Construct -> adds {C}{C} retained until end of turn
+    //    -> advance through Combat into PostcombatMain -> cast {2} Relic using retained {C}{C}!
+    let construct_id = object(&game, 6).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 7).id(),
+            target: Some(TargetRef::Object(construct_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game); // Shatter resolves -> Construct dies -> dies trigger on stack
+    game = resolve_top(&game); // Dies trigger resolves -> adds {C}{C} retained until end of turn
+    for _ in 0..20 {
+        if game
+            .turn()
+            .is_some_and(|t| t.position().step == Step::PostcombatMain)
+        {
+            break;
+        }
+        game = pass(&game);
+    }
+    assert_eq!(
+        game.turn().unwrap().position().step,
+        Step::PostcombatMain,
+        "should have advanced across combat to PostcombatMain"
+    );
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 8).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Colourless, 2)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 8).zone(),
+        ObjectZone::Battlefield,
+        "retained {{C}}{{C}} mana must survive across combat steps to cast Relic in PostcombatMain"
+    );
+}
+
+#[test]
+fn wave10_cda_token_suspect_exclude_basic_land_and_reanimate_under_owner_control() {
+    let vocab = test_vocab();
+    let voice_spell = compile_card(
+        &vocab,
+        "Elemental Call Test",
+        "Sorcery",
+        Some("{G}"),
+        None,
+        "Create a green and white Elemental creature token with \"This token's power and toughness are each equal to the number of creatures you control.\"",
+    );
+    let suspect_spell = compile_card(
+        &vocab,
+        "Suspect Warrant Test",
+        "Instant",
+        Some("{R}"),
+        None,
+        "Suspect target creature.",
+    );
+    let purge_nonbasic = compile_card(
+        &vocab,
+        "Graveyard Purge Test",
+        "Sorcery",
+        Some("{B}"),
+        None,
+        "Exile all cards from target player's graveyard other than basic land cards.",
+    );
+    let jailbreak = compile_card(
+        &vocab,
+        "Jailbreak Test",
+        "Sorcery",
+        Some("{W}"),
+        None,
+        "Return target creature card in an opponent's graveyard to the battlefield under their control.",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Forest Bear",
+        "Creature \u{2014} Bear",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+    let basic_forest = compile_card(
+        &vocab,
+        "Forest",
+        "Basic Land \u{2014} Forest",
+        None,
+        None,
+        "",
+    );
+    let nonbasic_land = compile_card(&vocab, "Wastes Manor", "Land", None, None, "");
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: voice_spell,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: suspect_spell,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: purge_nonbasic,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: jailbreak,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: bear.clone(),
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: BOB,
+                destination: ObjectDestination::Graveyard,
+                program: basic_forest,
+            },
+            SeedCard {
+                card: CardId(7),
+                owner: BOB,
+                destination: ObjectDestination::Graveyard,
+                program: nonbasic_land,
+            },
+            SeedCard {
+                card: CardId(8),
+                owner: BOB,
+                destination: ObjectDestination::Graveyard,
+                program: bear,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Green, 1),
+            (ALICE, ManaType::Red, 1),
+            (ALICE, ManaType::Black, 1),
+            (ALICE, ManaType::White, 1),
+        ],
+    );
+
+    // 1. CDA `*/*` token: Alice has 1 Bear -> creating Elemental token gives 2 creatures -> token is 2/2!
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Green, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let token_id = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .find(|o| o.zone() == ObjectZone::Battlefield && o.is_token())
+        .expect("Elemental CDA token should be on battlefield")
+        .id();
+    let tok_chars = game
+        .execution()
+        .current_characteristics(token_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tok_chars.power_toughness.as_ref().unwrap().derived.power,
+        2.into(),
+        "CDA Elemental token must have power equal to creatures you control (2)"
+    );
+    assert_eq!(
+        tok_chars
+            .power_toughness
+            .as_ref()
+            .unwrap()
+            .derived
+            .toughness,
+        2.into(),
+        "CDA Elemental token must have toughness equal to creatures you control (2)"
+    );
+
+    // 2. Suspect: Suspect Warrant targeting Alice's Bear marks it suspected and grants Menace!
+    let bear_id = object(&game, 5).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 2).id(),
+            target: Some(TargetRef::Object(bear_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let bear_chars = game
+        .execution()
+        .current_characteristics(bear_id)
+        .unwrap()
+        .unwrap();
+    assert!(bear_chars.suspected, "Suspect must mark Bear as suspected");
+    assert!(
+        bear_chars
+            .keywords
+            .contains(&spellwake_engine::characteristics::KeywordAbility::Menace),
+        "Suspected creature must gain Menace (CR 701.60a)"
+    );
+
+    // 3. Reanimate under opponent's control (`lower_move` target before dest): Jailbreak Test
+    //    returns Bob's Bear from Bob's graveyard onto battlefield under BOB's control!
+    let bob_bear_id = object(&game, 8).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: Some(TargetRef::Object(bob_bear_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::White, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(object(&game, 8).zone(), ObjectZone::Battlefield);
+    assert_eq!(
+        object(&game, 8).controller(),
+        Some(BOB),
+        "Jailbreak must return Bob's creature under Bob's control"
+    );
+
+    // 4. De Morgan `Exclude(Basic Land)`: exile all cards from Bob's graveyard other than basic land cards.
+    //    Basic Forest (CardId 6) stays in Bob's graveyard; Nonbasic Land (CardId 7) is exiled!
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 3).id(),
+            target: Some(TargetRef::Player(BOB)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 6).zone(),
+        ObjectZone::Graveyard(BOB),
+        "basic Forest must NOT be exiled by 'other than basic land cards'"
+    );
+    assert_eq!(
+        object(&game, 7).zone(),
+        ObjectZone::Exile,
+        "nonbasic Land MUST be exiled by 'other than basic land cards'"
     );
 }

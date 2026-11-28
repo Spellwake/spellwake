@@ -484,7 +484,7 @@ fn lower_step_with_target_dispatch(
         }
     }
 
-    if !acc.target_set {
+    if !acc.target_set || ctx.inside_control_flow_depth > 0 {
         return lower_one_effect(eff, acc, ctx);
     }
 
@@ -1064,6 +1064,65 @@ fn apply_mana_restriction_to_yield(
         }),
         _ => None,
     }
+}
+
+fn wrap_add_mana_retained_until_cleanup(ins: &mut Instruction) -> bool {
+    match ins {
+        Instruction::MutatePlayer(spec) => {
+            if let spellwake_engine::toolbox::PlayerMutation::AddMana(yield_kind) = &mut spec.op {
+                if !matches!(yield_kind, EffectManaYield::RetainedUntilCleanup(_)) {
+                    let inner =
+                        mem::replace(yield_kind, EffectManaYield::Fixed(Default::default()));
+                    *yield_kind = EffectManaYield::RetainedUntilCleanup(Box::new(inner));
+                }
+                true
+            } else {
+                false
+            }
+        }
+        Instruction::RepeatLoop { body, .. } => {
+            let mut any = false;
+            for inner in &mut body.instructions {
+                any |= wrap_add_mana_retained_until_cleanup(inner);
+            }
+            any
+        }
+        _ => false,
+    }
+}
+
+fn wrap_recent_add_mana_retained(
+    rule_player: v2::PlayerRef,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<bool> {
+    let expected_rp = atoms::lower_resolving_player(rule_player, acc, ctx)?;
+    let mut wrapped = false;
+    for ins in acc.instructions.iter_mut().rev() {
+        let matches_player = match ins {
+            Instruction::MutatePlayer(spec) => {
+                matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::AddMana(_)
+                ) && spec.players == PlayerSelector::Resolving(expected_rp)
+            }
+            Instruction::RepeatLoop { body, .. } => body.instructions.iter().any(|inner| {
+                matches!(
+                    inner,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::AddMana(_))
+                            && spec.players == PlayerSelector::Resolving(expected_rp)
+                )
+            }),
+            _ => false,
+        };
+        if matches_player {
+            wrapped |= wrap_add_mana_retained_until_cleanup(ins);
+        } else if wrapped {
+            break;
+        }
+    }
+    Ok(wrapped)
 }
 
 fn try_fuse_add_mana_with_rule(
@@ -2583,6 +2642,19 @@ fn lower_one_effect(
         } => mutation::lower_object_mutation(subject, obj_mut, duration, acc, ctx),
         v2::Effect::MutatePlayer {
             player,
+            mutation: v2::PlayerMutation::Action(v2::PlayerActionKind::KeepManaAcrossSteps),
+            duration: v2::Duration::UntilEndOfTurn,
+        } => {
+            if wrap_recent_add_mana_retained(*player, acc, ctx)? {
+                Ok(())
+            } else {
+                Err(LoweringError::Unsupported(
+                    "v2:player-action-keep-mana-across-steps",
+                ))
+            }
+        }
+        v2::Effect::MutatePlayer {
+            player,
             mutation: player_mut,
             duration,
         } => mutation::lower_player_mutation(*player, player_mut, duration, acc, ctx),
@@ -3474,9 +3546,8 @@ fn lower_prompt_choice(
                 }
                 v2::SubjectRef::TargetObject { .. } | v2::SubjectRef::AnyTarget => {
                     // "Choose [up to N / any number of] target <objects>" selects targets on cast;
-                    // register the target on `acc` and bind `ObjectQuery::Targets` into a local slot
-                    // so `Program::validate()` sees the target consumed and intermediate zone ops
-                    // cannot clobber the chosen reference.
+                    // register the target on `acc` and clear `last_moved_binding` so downstream
+                    // anaphora (`it`/`them`/`those cards`) binds directly to `ObjectQuery::Targets`.
                     let (bt, tc) = atoms::lower_subject_to_target(subj, ctx)?;
                     acc.register_target(bt, tc)?;
                     ctx.has_object_target = acc.target_set
@@ -3484,11 +3555,7 @@ fn lower_prompt_choice(
                             acc.target,
                             BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
                         );
-                    let chosen_slot = ctx.alloc_binding()?;
-                    let mut snap = ZoneOpSpec::move_all(ObjectQuery::Targets, EngineZoneDest::None);
-                    snap.bind_moved = Some(chosen_slot);
-                    acc.push(Instruction::ZoneOp(Box::new(snap)));
-                    ctx.last_moved_binding = Some(chosen_slot);
+                    ctx.last_moved_binding = None;
                     return Ok(());
                 }
                 _ => {}
@@ -4048,6 +4115,7 @@ fn lower_branch_condition(
     }
 
     let prev_zone_put = ctx.last_zone_put;
+    ctx.inside_control_flow_depth += 1;
     let res: LowerResult<()> = (|| {
         if then_body.is_empty() {
             let negated = EngineConditionExpr::Not(Box::new(lowered_cond));
@@ -4113,6 +4181,7 @@ fn lower_branch_condition(
         }
         Ok(())
     })();
+    ctx.inside_control_flow_depth -= 1;
     ctx.self_antecedent = prev_self;
     res
 }
@@ -4363,6 +4432,9 @@ fn lower_unless_effect(
             acc.target,
             BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
         );
+        if matches!(acc.target, BodyTarget::Player { .. }) {
+            ctx.last_player_target = Some(ResolvingPlayer::TargetPlayer);
+        }
     }
 
     let payer_v2 = infer_unless_effect_actor(unless).unwrap_or(if acc.target_set {
@@ -4841,6 +4913,23 @@ fn lower_scoped_duration(
             } => {
                 let effective = merge_scoped_duration(outer_duration, inner_dur)?;
                 mutation::lower_object_mutation(subject, obj_mut, effective, acc, ctx)?;
+            }
+            v2::Effect::MutatePlayer {
+                player,
+                mutation: v2::PlayerMutation::Action(v2::PlayerActionKind::KeepManaAcrossSteps),
+                duration: inner_dur,
+            } => {
+                let effective = merge_scoped_duration(outer_duration, inner_dur)?;
+                if *effective == v2::Duration::UntilEndOfTurn
+                    && wrap_recent_add_mana_retained(*player, acc, ctx)?
+                {
+                    // Retroactively upgraded the preceding `AddMana` in this body to
+                    // `EffectManaYield::RetainedUntilCleanup`.
+                } else {
+                    return Err(LoweringError::Unsupported(
+                        "v2:player-action-keep-mana-across-steps",
+                    ));
+                }
             }
             v2::Effect::MutatePlayer {
                 player,

@@ -198,8 +198,9 @@ pub(crate) fn lower_activated_ability(
 
     // 2. Standard activated ability lowering.
     let restriction = lower_activation_restrictions(&all_restrictions, ctx)?;
+    let from_graveyard = is_graveyard_activated_ability(cost, &exec_effects, program);
     let (mana_cost, source_cost, hybrids, extra_costs) =
-        lower_activation_cost_parts(cost, false, ctx)?;
+        lower_activation_cost_parts(cost, from_graveyard, ctx)?;
 
     // 2a. Class level-up activation (`{cost}: Level N`, CR 716.2a).
     if let [
@@ -359,6 +360,45 @@ pub(crate) fn lower_activated_ability(
         body: lowered_body,
     });
     Ok(())
+}
+
+/// Infer graveyard activation (`CR 113.6m`) when an activated ability explicitly moves or exiles
+/// `SelfObject` from `Graveyard` in its effect body, or when a Spell card (instant/sorcery, which
+/// cannot exist on the battlefield) has `Cost::ExileSelf`.
+fn is_graveyard_activated_ability(
+    cost: &[v2::Cost],
+    body: &[v2::Effect],
+    program: &Program,
+) -> bool {
+    if matches!(
+        program.kind,
+        spellwake_engine::program::ProgramKind::Spell(_)
+    ) && cost.iter().any(|c| matches!(c, v2::Cost::ExileSelf))
+    {
+        return true;
+    }
+    body_moves_self_from_graveyard(body)
+}
+
+fn body_moves_self_from_graveyard(effects: &[v2::Effect]) -> bool {
+    effects.iter().any(|eff| match eff {
+        v2::Effect::ZoneOp {
+            op: v2::ZoneOpKind::Move | v2::ZoneOpKind::Exile { .. },
+            subject: v2::SubjectRef::SelfObject,
+            from,
+            ..
+        } => from.iter().any(|z| z.zone == v2::ZoneKind::Graveyard),
+        v2::Effect::Optional { body, .. }
+        | v2::Effect::ScopedDuration { body, .. }
+        | v2::Effect::BindVariable { body, .. }
+        | v2::Effect::ForEach { body, .. } => body_moves_self_from_graveyard(body),
+        v2::Effect::BranchCondition {
+            then_body,
+            else_body,
+            ..
+        } => body_moves_self_from_graveyard(then_body) || body_moves_self_from_graveyard(else_body),
+        _ => false,
+    })
 }
 
 /// True when an activated ability's cost explicitly names its source object (e.g. "Sacrifice this

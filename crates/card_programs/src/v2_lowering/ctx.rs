@@ -71,6 +71,9 @@ pub(crate) struct LowerCtx<'a> {
     /// Binding holding the boolean result (`true` if a card was put into `zone`, `false` otherwise)
     /// for downstream `"If you didn't put a card into <zone> this way"` checks.
     pub last_zone_put: Option<(spellwake_oracle_compiler::v2::ir::ZoneKind, ZonePutTracker)>,
+    /// Nesting depth inside structured control flow (`BranchCondition`, etc.) where
+    /// `lower_step_with_target_dispatch` must NOT promote `acc` into `FixedTargetClause`.
+    pub inside_control_flow_depth: usize,
 }
 
 /// How `"If you didn't put a card into <zone> this way"` observes whether a prior zone move succeeded.
@@ -113,6 +116,7 @@ impl<'a> LowerCtx<'a> {
             last_damage_was_self: false,
             face_ability_count: 0,
             last_zone_put: None,
+            inside_control_flow_depth: 0,
         }
     }
 
@@ -125,6 +129,7 @@ impl<'a> LowerCtx<'a> {
         self.delayed_tag_key = None;
         self.last_damage_was_self = false;
         self.last_zone_put = None;
+        self.inside_control_flow_depth = 0;
     }
 
     pub fn alloc_mana_id(&mut self) -> ManaAbilityId {

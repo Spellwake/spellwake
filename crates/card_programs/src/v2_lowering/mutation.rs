@@ -1730,7 +1730,18 @@ fn lower_object_state_action(
         }
         v2::ObjectStateAction::Flip => Err(LoweringError::Unsupported("v2:state-action-flip")),
         v2::ObjectStateAction::Suspect => {
-            Err(LoweringError::Unsupported("v2:state-action-suspect"))
+            require_instant_duration(duration, "v2:suspect-unexpected-duration")?;
+            let (source, selection) = lower_mutation_source_and_selection(subject, acc, ctx)?;
+            emit_object_mutation_selected(
+                source,
+                selection,
+                EngineObjectMutation::Counters(CounterOp::Add {
+                    kind: EngineCounterKind::Suspect,
+                    amount: EngineValueExpr::literal(1),
+                }),
+                acc,
+                ctx,
+            )
         }
         v2::ObjectStateAction::Detain => Err(LoweringError::Unsupported("v2:state-action-detain")),
         v2::ObjectStateAction::PutSticker => {

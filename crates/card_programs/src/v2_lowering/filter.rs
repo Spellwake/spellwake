@@ -950,6 +950,7 @@ fn apply_predicates_to_clause(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<Option<(ObjectClause, ObjectClause)>> {
     let mut deferred_any_of: Vec<&[v2::ObjectFilter]> = Vec::new();
+    let mut deferred_exclude_basic_land = false;
 
     for pred in predicates {
         match pred {
@@ -1015,7 +1016,13 @@ fn apply_predicates_to_clause(
             },
             v2::FilterPredicate::Exclude(subj) => match subj.as_ref() {
                 v2::SubjectRef::SelfObject => apply_exclude_self(clause, ctx.in_trigger)?,
-                v2::SubjectRef::Group(ex_flt) => apply_excluded_group_filter(clause, ex_flt, ctx)?,
+                v2::SubjectRef::Group(ex_flt) => {
+                    if is_basic_land_only_filter(ex_flt) {
+                        deferred_exclude_basic_land = true;
+                    } else {
+                        apply_excluded_group_filter(clause, ex_flt, ctx)?;
+                    }
+                }
                 _ => return Err(LoweringError::Unsupported("v2:filter:pred:exclude")),
             },
             v2::FilterPredicate::HasCounterKind(ck) => match ck {
@@ -1241,7 +1248,52 @@ fn apply_predicates_to_clause(
         }
     }
 
+    if deferred_exclude_basic_land {
+        // De Morgan expansion: `NOT (Basic AND Land)` <=> `(NOT Land) OR (Land AND NOT Basic)`.
+        let nonland = ObjectClause {
+            forbidden_types: EngineCardTypeMask::LAND,
+            ..Default::default()
+        };
+        let nonbasic_land = ObjectClause {
+            required_types: EngineCardTypeMask::LAND,
+            forbidden_supertypes: lower_supertype_mask(ast::SupertypeMask::BASIC)?,
+            ..Default::default()
+        };
+        if split.is_some() {
+            return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
+        }
+        split = Some((
+            merge_clauses(*clause, nonland)?,
+            merge_clauses(*clause, nonbasic_land)?,
+        ));
+    }
+
     Ok(split)
+}
+
+fn is_basic_land_only_filter(ex: &v2::ObjectFilter) -> bool {
+    let is_land = (ex.all_types == ast::CardTypeMask::LAND && ex.any_types.is_empty())
+        || (ex.any_types == ast::CardTypeMask::LAND && ex.all_types.is_empty());
+    is_land
+        && ex.required_supertypes == ast::SupertypeMask::BASIC
+        && ex.forbidden_types.is_empty()
+        && ex.forbidden_supertypes.is_empty()
+        && ex.subtypes.is_empty()
+        && ex.forbidden_subtypes.is_empty()
+        && ex.any_colors.is_empty()
+        && ex.forbidden_colors.is_empty()
+        && ex.color_arity.is_none()
+        && ex.controller.is_none()
+        && ex.owner.is_none()
+        && ex.zones.is_empty()
+        && ex.combat.is_none()
+        && ex.tapped.is_none()
+        && ex.token.is_none()
+        && ex.required_keywords.is_empty()
+        && ex.forbidden_keywords.is_empty()
+        && ex.stat_bounds.is_empty()
+        && ex.flags.is_empty()
+        && ex.predicates.is_empty()
 }
 
 fn is_self_combat_ref(subj: &v2::SubjectRef, ctx: &LowerCtx<'_>) -> bool {
@@ -1685,7 +1737,6 @@ fn apply_excluded_group_filter(
     // counter kind, keyword, token, tapped, or self exclusion) so we never approximate
     // complex negated conjunctions.
     let no_extra = ex.forbidden_types.is_empty()
-        && ex.required_supertypes.is_empty()
         && ex.forbidden_supertypes.is_empty()
         && ex.forbidden_subtypes.is_empty()
         && ex.forbidden_colors.is_empty()
@@ -1700,6 +1751,7 @@ fn apply_excluded_group_filter(
         return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
     }
     let has_types = !ex.all_types.is_empty() || !ex.any_types.is_empty();
+    let has_supertypes = !ex.required_supertypes.is_empty();
     let has_subs = !ex.subtypes.is_empty();
     let has_colors = !ex.any_colors.is_empty();
     let has_preds = !ex.predicates.is_empty();
@@ -1708,6 +1760,7 @@ fn apply_excluded_group_filter(
     let has_tapped = ex.tapped.is_some();
     let has_flags = !ex.flags.is_empty();
     let active_axes = u8::from(has_types)
+        + u8::from(has_supertypes)
         + u8::from(has_subs)
         + u8::from(has_colors)
         + u8::from(has_preds)
@@ -1719,6 +1772,15 @@ fn apply_excluded_group_filter(
         return Err(LoweringError::Unsupported(
             "v2:filter:pred:multi-axis-exclude",
         ));
+    }
+    if has_supertypes {
+        if ex.required_supertypes.0.count_ones() != 1 {
+            return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
+        }
+        clause.forbidden_supertypes = clause
+            .forbidden_supertypes
+            .union(lower_supertype_mask(ex.required_supertypes)?);
+        return Ok(());
     }
     if has_preds {
         if let [v2::FilterPredicate::HasCounterKind(ck)] = ex.predicates.as_slice() {

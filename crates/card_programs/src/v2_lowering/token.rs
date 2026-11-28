@@ -437,6 +437,23 @@ fn lower_custom_token_creation(
                     (Some(PowerToughness::zero().into()), Some(size))
                 }
             }
+            (None, None)
+                if abilities.iter().any(|face| {
+                    face.statics.iter().any(|st| {
+                        matches!(
+                            st,
+                            v2::StaticAbility::DynamicBasePT {
+                                power: Some(_),
+                                toughness: Some(_),
+                            }
+                        )
+                    })
+                }) =>
+            {
+                // CR 208.2a: `*/*` creature tokens carry a characteristic-defining ability
+                // (`DynamicBasePT`) that sets both power and toughness in Layer 7a.
+                (Some(PowerToughness::zero().into()), None)
+            }
             _ => {
                 return Err(LoweringError::Unsupported("v2:token-creature-missing-pt"));
             }

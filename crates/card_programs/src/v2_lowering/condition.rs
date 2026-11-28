@@ -1824,6 +1824,42 @@ fn lower_permanent_entered_this_turn_condition(
     min_count: u16,
     ctx: &LowerCtx<'_>,
 ) -> LowerResult<ResolutionCondition> {
+    let is_nonland_only = filter.all_types.is_empty()
+        && filter.any_types.is_empty()
+        && filter.forbidden_types == ast::CardTypeMask::LAND
+        && filter.required_supertypes.is_empty()
+        && filter.forbidden_supertypes.is_empty()
+        && filter.subtypes.is_empty()
+        && filter.forbidden_subtypes.is_empty()
+        && filter.any_colors.is_empty()
+        && filter.forbidden_colors.is_empty()
+        && filter.color_arity.is_none()
+        && filter.controller.is_none()
+        && filter.owner.is_none()
+        && filter.zones.is_empty()
+        && filter.combat.is_none()
+        && filter.tapped.is_none()
+        && filter.token.is_none()
+        && filter.required_keywords.is_empty()
+        && filter.forbidden_keywords.is_empty()
+        && filter.stat_bounds.is_empty()
+        && filter.flags.is_empty()
+        && filter.predicates.is_empty();
+
+    if is_nonland_only && controller == v2::PlayerRef::You {
+        // Celebration (CR 700 / WOE): nonland permanents that entered under your control this turn
+        // equals total permanents entered minus lands entered (disjoint, exhaustive partition).
+        let nonland_entered = EngineValueExpr::Sub(
+            Box::new(EngineValueExpr::PlayerStat(
+                PlayerStatExpr::EnteredPermanentThisTurn,
+            )),
+            Box::new(EngineValueExpr::PlayerStat(
+                PlayerStatExpr::LandsEnteredThisTurn(ResolvingPlayer::Controller),
+            )),
+        );
+        return Ok(rc_ge_u16(nonland_entered, min_count));
+    }
+
     let plain_no_extras = filter.forbidden_types.is_empty()
         && filter.required_supertypes.is_empty()
         && filter.forbidden_supertypes.is_empty()

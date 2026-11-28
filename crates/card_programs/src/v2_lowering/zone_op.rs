@@ -267,8 +267,8 @@ fn lower_move(
     let Some(dest_ir) = to else {
         return Err(LoweringError::Unsupported("v2:zone-move-missing-dest"));
     };
-    let destination = atoms::lower_zone_dest(dest_ir, modifiers, acc, ctx)?;
     let built = build_source_and_selection(actor, subject, from, except, count, false, acc, ctx)?;
+    let destination = atoms::lower_zone_dest(dest_ir, modifiers, acc, ctx)?;
     emit_zone_op_with_prior(built, destination, None, acc, ctx)
 }
 
