@@ -36,6 +36,7 @@ impl TriggerCauseMember {
             TriggerRelated::SubtypeCombatDamage { creature, .. }
             | TriggerRelated::AttachedCreatureDamaged { creature, .. } => Some(*creature),
             TriggerRelated::StatusChange(sc) => Some(sc.after.id()),
+            TriggerRelated::SpellCast(cast) => Some(cast.spell().object.id()),
             TriggerRelated::DamageSource(crate::damage::DamageSourceId::Object(id)) => Some(*id),
             TriggerRelated::DeclaredSubtypeAttackers(ids) => ids.first().copied(),
             TriggerRelated::AttackGroup { creatures, .. } => creatures.first().copied(),

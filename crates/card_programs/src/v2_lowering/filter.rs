@@ -928,14 +928,27 @@ fn apply_predicates_to_clause(
                 deferred_any_of.push(subs.as_slice());
             }
             v2::FilterPredicate::AttachedTo(subj) => match subj.as_ref() {
+                v2::SubjectRef::SelfObject
+                | v2::SubjectRef::Anaphora(v2::AnaphoraRef::ThatSource) => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::ATTACHED_TO_SOURCE);
+                }
+                v2::SubjectRef::Anaphora(v2::AnaphoraRef::SameTarget) => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::ATTACHED_TO_TARGET);
+                }
                 v2::SubjectRef::Anaphora(
-                    v2::AnaphoraRef::SameTarget
-                    | v2::AnaphoraRef::It
+                    v2::AnaphoraRef::It
                     | v2::AnaphoraRef::ThatCreature
                     | v2::AnaphoraRef::ThatPermanent
                     | v2::AnaphoraRef::ThatObject,
                 ) => {
-                    clause.flags = clause.flags.union(ObjectFilterFlags::ATTACHED_TO_TARGET);
+                    let flag = if ctx.has_object_target {
+                        ObjectFilterFlags::ATTACHED_TO_TARGET
+                    } else if ctx.in_trigger {
+                        ObjectFilterFlags::ATTACHED_TO_TRIGGER
+                    } else {
+                        ObjectFilterFlags::ATTACHED_TO_SOURCE
+                    };
+                    clause.flags = clause.flags.union(flag);
                 }
                 _ => {
                     return Err(LoweringError::Unsupported("v2:filter:pred:attached-to"));
@@ -1384,6 +1397,7 @@ fn apply_shares_property(
         v2::SubjectRef::SelfObject | v2::SubjectRef::Anaphora(v2::AnaphoraRef::ThatSource)
     ) || (!ctx.has_object_target
         && !ctx.in_trigger
+        && ctx.last_moved_binding.is_none()
         && matches!(
             reference,
             v2::SubjectRef::Anaphora(
@@ -1433,6 +1447,37 @@ fn apply_shares_property(
         };
     }
 
+    if property == v2::SharedProperty::Name
+        && negated
+        && let v2::SubjectRef::Group(ref_flt) = reference
+        && ref_flt.flags == v2::FilterFlags::EXCLUDE_SELF
+        && ref_flt.controller == Some(ast::ControllerRelation::You)
+        && ref_flt.all_types.is_empty()
+        && ref_flt.any_types.is_empty()
+        && ref_flt.forbidden_types.is_empty()
+        && ref_flt.required_supertypes.is_empty()
+        && ref_flt.forbidden_supertypes.is_empty()
+        && ref_flt.subtypes.is_empty()
+        && ref_flt.forbidden_subtypes.is_empty()
+        && ref_flt.any_colors.is_empty()
+        && ref_flt.forbidden_colors.is_empty()
+        && ref_flt.color_arity.is_none()
+        && ref_flt.owner.is_none()
+        && ref_flt.zones.is_empty()
+        && ref_flt.combat.is_none()
+        && ref_flt.tapped.is_none()
+        && ref_flt.token.is_none()
+        && ref_flt.required_keywords.is_empty()
+        && ref_flt.forbidden_keywords.is_empty()
+        && ref_flt.stat_bounds.is_empty()
+        && ref_flt.predicates.is_empty()
+    {
+        clause.flags = clause
+            .flags
+            .union(ObjectFilterFlags::UNIQUE_NAME_AMONG_CONTROLLED);
+        return Ok(());
+    }
+
     match reference {
         v2::SubjectRef::Anaphora(v2::AnaphoraRef::SameTarget) => {
             apply_shares_property_with_target(clause, property, negated)
@@ -1447,19 +1492,112 @@ fn apply_shares_property(
             | v2::AnaphoraRef::It
             | v2::AnaphoraRef::ThatObject,
         ) if ctx.has_object_target => apply_shares_property_with_target(clause, property, negated),
-        v2::SubjectRef::Anaphora(v2::AnaphoraRef::SacrificedObject) => match (property, negated) {
-            (v2::SharedProperty::Color, false) => {
-                clause.flags = clause
-                    .flags
-                    .union(ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED);
-                Ok(())
-            }
-            _ => Err(LoweringError::Unsupported(
-                "v2:filter:pred:shares-property-sacrificed",
-            )),
-        },
+        v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::ThatCreature
+            | v2::AnaphoraRef::ThatPermanent
+            | v2::AnaphoraRef::ThatCard
+            | v2::AnaphoraRef::ThatSpell
+            | v2::AnaphoraRef::ThatLand
+            | v2::AnaphoraRef::ThatToken
+            | v2::AnaphoraRef::It
+            | v2::AnaphoraRef::ThatObject
+            | v2::AnaphoraRef::EquippedCreature
+            | v2::AnaphoraRef::EnchantedCreature
+            | v2::AnaphoraRef::EnchantedPermanent,
+        ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+            apply_shares_property_with_trigger(clause, property, negated)
+        }
+        v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::SacrificedObject
+            | v2::AnaphoraRef::ExiledObject
+            | v2::AnaphoraRef::TheExiledCard
+            | v2::AnaphoraRef::DiscardedObject
+            | v2::AnaphoraRef::RevealedCard,
+        ) => apply_shares_property_with_last_moved(clause, property, negated),
+        v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::ThatCreature
+            | v2::AnaphoraRef::ThatPermanent
+            | v2::AnaphoraRef::ThatCard
+            | v2::AnaphoraRef::ThatSpell
+            | v2::AnaphoraRef::ThatLand
+            | v2::AnaphoraRef::ThatToken
+            | v2::AnaphoraRef::It
+            | v2::AnaphoraRef::ThatObject,
+        ) if ctx.last_moved_binding.is_some() => {
+            apply_shares_property_with_last_moved(clause, property, negated)
+        }
         _ => Err(LoweringError::Unsupported(
             "v2:filter:pred:shares-property-ref",
+        )),
+    }
+}
+
+fn apply_shares_property_with_trigger(
+    clause: &mut ObjectClause,
+    property: v2::SharedProperty,
+    negated: bool,
+) -> LowerResult<()> {
+    match (property, negated) {
+        (v2::SharedProperty::Color, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_COLOR_WITH_TRIGGER);
+            Ok(())
+        }
+        (v2::SharedProperty::CreatureType, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TRIGGER);
+            Ok(())
+        }
+        (v2::SharedProperty::CardType, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TRIGGER);
+            Ok(())
+        }
+        (v2::SharedProperty::Name, false) => {
+            clause.flags = clause.flags.union(ObjectFilterFlags::SAME_NAME_AS_TRIGGER);
+            Ok(())
+        }
+        _ => Err(LoweringError::Unsupported(
+            "v2:filter:pred:shares-property-trigger",
+        )),
+    }
+}
+
+fn apply_shares_property_with_last_moved(
+    clause: &mut ObjectClause,
+    property: v2::SharedProperty,
+    negated: bool,
+) -> LowerResult<()> {
+    match (property, negated) {
+        (v2::SharedProperty::Color, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED);
+            Ok(())
+        }
+        (v2::SharedProperty::CreatureType, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_LAST_MOVED);
+            Ok(())
+        }
+        (v2::SharedProperty::CardType, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_LAST_MOVED);
+            Ok(())
+        }
+        (v2::SharedProperty::Name, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SAME_NAME_AS_LAST_MOVED);
+            Ok(())
+        }
+        _ => Err(LoweringError::Unsupported(
+            "v2:filter:pred:shares-property-last-moved",
         )),
     }
 }
@@ -2462,6 +2600,19 @@ pub(crate) fn lower_spell_filter(
                         | v2::PlayerRef::AnyOpponent
                         | v2::PlayerRef::ThatPlayer,
                     ) => SpellTargetShape::TargetingPlayer,
+                    v2::SubjectRef::Group(obj_flt)
+                    | v2::SubjectRef::Each(obj_flt)
+                    | v2::SubjectRef::All(obj_flt) => {
+                        let lowered_obj = lower_object_filter(obj_flt, ctx)?;
+                        let compact =
+                            spellwake_engine::program::SpellTargetObjectFilter::try_from_object_filter(
+                                lowered_obj,
+                            )
+                            .ok_or(LoweringError::Unsupported(
+                                "v2:spell-filter:targets-subject",
+                            ))?;
+                        SpellTargetShape::TargetingObject(compact)
+                    }
                     _ => {
                         return Err(LoweringError::Unsupported(
                             "v2:spell-filter:targets-subject",

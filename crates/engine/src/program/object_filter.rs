@@ -996,6 +996,24 @@ impl ObjectFilterFlags {
     pub const BLOCKED_THIS_TURN: Self = Self(1 << 64);
     /// Creature currently paired with the ability source via soulbond.
     pub const PAIRED_WITH_SELF: Self = Self(1 << 65);
+    /// Shares at least one color with the resolving trigger's subject object.
+    pub const SHARES_COLOR_WITH_TRIGGER: Self = Self(1 << 66);
+    /// Shares at least one creature type with the resolving trigger's subject object.
+    pub const SHARES_CREATURE_TYPE_WITH_TRIGGER: Self = Self(1 << 67);
+    /// Shares at least one card type with the resolving trigger's subject object.
+    pub const SHARES_CARD_TYPE_WITH_TRIGGER: Self = Self(1 << 68);
+    /// Shares a name with the resolving trigger's subject object (CR 201.2).
+    pub const SAME_NAME_AS_TRIGGER: Self = Self(1 << 69);
+    /// Shares at least one creature type with the most recently moved object (`last_action_lki` / `last_moved_objects`).
+    pub const SHARES_CREATURE_TYPE_WITH_LAST_MOVED: Self = Self(1 << 70);
+    /// Shares at least one card type with the most recently moved object (`last_action_lki` / `last_moved_objects`).
+    pub const SHARES_CARD_TYPE_WITH_LAST_MOVED: Self = Self(1 << 71);
+    /// Shares a name with the most recently moved object (`last_action_lki` / `last_moved_objects`).
+    pub const SAME_NAME_AS_LAST_MOVED: Self = Self(1 << 72);
+    /// Aura or Equipment currently attached to the ability source.
+    pub const ATTACHED_TO_SOURCE: Self = Self(1 << 73);
+    /// Aura or Equipment currently attached to the resolving trigger's subject object.
+    pub const ATTACHED_TO_TRIGGER: Self = Self(1 << 74);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -1455,6 +1473,7 @@ impl ObjectClause {
     #[must_use]
     pub const fn guarantees_creature(self) -> bool {
         self.any_types.0 == CardTypeMask::CREATURE.0
+            || (self.required_types.0 & CardTypeMask::CREATURE.0) != 0
             || matches!(
                 self.combat,
                 CombatFilter::Attacking

@@ -1651,14 +1651,14 @@ pub(crate) fn lower_world_resolving_player(
         v2::PlayerRef::ThatPlayer => {
             if ctx.in_loop_player {
                 Ok(ResolvingPlayer::LoopPlayer)
+            } else if let Some(rp) = ctx.last_player_target {
+                Ok(rp)
             } else if ctx.in_trigger {
                 Ok(if ctx.trigger_has_participant {
                     ResolvingPlayer::UniqueRelatedPlayer
                 } else {
                     ResolvingPlayer::TriggerSubjectController
                 })
-            } else if let Some(rp) = ctx.last_player_target {
-                Ok(rp)
             } else {
                 Ok(ResolvingPlayer::TargetPlayer)
             }

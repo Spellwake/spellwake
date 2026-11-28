@@ -392,31 +392,33 @@ fn cost_establishes_self_antecedent(
     }) {
         return true;
     }
-    cost.iter().any(|c| match c {
-        v2::Cost::SacrificeSelf
-        | v2::Cost::ExileSelf
-        | v2::Cost::ExertSelf
-        | v2::Cost::UnattachSelf => true,
-        v2::Cost::ReturnToHand {
-            subject: v2::SubjectRef::SelfObject,
-        }
-        | v2::Cost::PutCounters {
-            subject: v2::SubjectRef::SelfObject,
-            ..
-        }
-        | v2::Cost::RemoveCounters {
-            subject: Some(v2::SubjectRef::SelfObject) | None,
-            ..
-        }
-        | v2::Cost::RemoveEitherCounter {
-            subject: Some(v2::SubjectRef::SelfObject) | None,
-            ..
-        }
-        | v2::Cost::PutZone {
-            subject: v2::SubjectRef::SelfObject,
-            ..
-        } => true,
-        _ => false,
+    cost.iter().any(|c| {
+        matches!(
+            c,
+            v2::Cost::SacrificeSelf
+                | v2::Cost::ExileSelf
+                | v2::Cost::ExertSelf
+                | v2::Cost::UnattachSelf
+                | v2::Cost::ReturnToHand {
+                    subject: v2::SubjectRef::SelfObject,
+                }
+                | v2::Cost::PutCounters {
+                    subject: v2::SubjectRef::SelfObject,
+                    ..
+                }
+                | v2::Cost::RemoveCounters {
+                    subject: Some(v2::SubjectRef::SelfObject) | None,
+                    ..
+                }
+                | v2::Cost::RemoveEitherCounter {
+                    subject: Some(v2::SubjectRef::SelfObject) | None,
+                    ..
+                }
+                | v2::Cost::PutZone {
+                    subject: v2::SubjectRef::SelfObject,
+                    ..
+                }
+        )
     })
 }
 

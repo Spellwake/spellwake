@@ -1,7 +1,8 @@
 //! Composable spell filter unifying spell-cast trigger filters and spell-target filters.
 use super::{
-    CardType, CardTypeMask, DefinitionError, ObjectClause, ObjectColorFilter, ObjectFilter,
-    ObjectFilterFlags, PowerFilter, Supertype,
+    CardType, CardTypeMask, CombatFilter, ControllerFilter, DefinitionError, ManaValueFilter,
+    ObjectClause, ObjectColorFilter, ObjectFilter, ObjectFilterFlags, PowerFilter, SourceRelation,
+    SubtypeFilter, Supertype, SupertypeMask, ToughnessFilter,
 };
 use crate::{
     characteristics::{Color, ObjectCharacteristics},
@@ -29,6 +30,93 @@ pub enum SpellCastZoneFilter {
     LinkedExile,
 }
 
+/// Compact `Copy` predicate over an object targeted by a spell or ability on the stack.
+///
+/// Stored inline inside [`SpellTargetShape`] without inflating [`SpellFilter`], [`BodyTarget`],
+/// or [`TriggerEvent`]. Converts losslessly back to [`ObjectFilter`] during evaluation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpellTargetObjectFilter {
+    pub any_types: CardTypeMask,
+    pub required_types: CardTypeMask,
+    pub forbidden_types: CardTypeMask,
+    pub required_supertypes: SupertypeMask,
+    pub forbidden_supertypes: SupertypeMask,
+    pub subtype: Option<CreatureTypeId>,
+    pub controller: ControllerFilter,
+    pub owner: ControllerFilter,
+    pub source_relation: SourceRelation,
+    pub color: ObjectColorFilter,
+    pub tapped: Option<bool>,
+    pub token: Option<bool>,
+    pub flags: ObjectFilterFlags,
+}
+
+impl SpellTargetObjectFilter {
+    /// Convert a single-clause [`ObjectFilter`] losslessly into a compact target predicate,
+    /// returning `None` if it uses predicates outside the compact representation.
+    #[must_use]
+    pub fn try_from_object_filter(filter: ObjectFilter) -> Option<Self> {
+        let ObjectFilter::Clause(c) = filter else {
+            return None;
+        };
+        if c.combat != CombatFilter::Any
+            || c.power != PowerFilter::Any
+            || c.toughness != ToughnessFilter::Any
+            || c.mana_value != ManaValueFilter::Any
+            || c.keyword.is_some()
+            || c.forbidden_keyword.is_some()
+            || c.required_counter_kind.is_some()
+            || c.forbidden_counter_kind.is_some()
+            || c.exact_name.is_some()
+        {
+            return None;
+        }
+        let subtype = match c.subtypes {
+            SubtypeFilter::Any => None,
+            SubtypeFilter::Has(id) => Some(id),
+            _ => return None,
+        };
+        Some(Self {
+            any_types: c.any_types,
+            required_types: c.required_types,
+            forbidden_types: c.forbidden_types,
+            required_supertypes: c.required_supertypes,
+            forbidden_supertypes: c.forbidden_supertypes,
+            subtype,
+            controller: c.controller,
+            owner: c.owner,
+            source_relation: c.source_relation,
+            color: c.color,
+            tapped: c.tapped,
+            token: c.token,
+            flags: c.flags,
+        })
+    }
+
+    /// Reconstruct the equivalent [`ObjectFilter`] for full engine evaluation.
+    #[must_use]
+    pub const fn to_object_filter(self) -> ObjectFilter {
+        let mut clause = ObjectClause::any();
+        clause.any_types = self.any_types;
+        clause.required_types = self.required_types;
+        clause.forbidden_types = self.forbidden_types;
+        clause.required_supertypes = self.required_supertypes;
+        clause.forbidden_supertypes = self.forbidden_supertypes;
+        clause.subtypes = match self.subtype {
+            Some(id) => SubtypeFilter::Has(id),
+            None => SubtypeFilter::Any,
+        };
+        clause.controller = self.controller;
+        clause.owner = self.owner;
+        clause.source_relation = self.source_relation;
+        clause.color = self.color;
+        clause.tapped = self.tapped;
+        clause.token = self.token;
+        clause.flags = self.flags;
+        ObjectFilter::Clause(clause)
+    }
+}
+
 /// Target-shape constraint on a spell on the stack.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SpellTargetShape {
@@ -40,6 +128,8 @@ pub enum SpellTargetShape {
     TargetingPlayer,
     /// Targets only the ability source permanent (and at least one target).
     TargetingOnlySource,
+    /// Targets at least one object matching [`SpellTargetObjectFilter`].
+    TargetingObject(SpellTargetObjectFilter),
 }
 
 /// Specialized stack or cast predicate not expressed by static object characteristics.
@@ -258,6 +348,13 @@ impl SpellFilter {
         self
     }
 
+    /// Restrict to spells targeting at least one object matching `filter`.
+    #[must_use]
+    pub const fn targeting_object(mut self, filter: SpellTargetObjectFilter) -> Self {
+        self.target_shape = SpellTargetShape::TargetingObject(filter);
+        self
+    }
+
     /// Restrict to the Nth spell cast this turn.
     #[must_use]
     pub const fn ordinal_this_turn(mut self, ordinal: NonZeroU32) -> Self {
@@ -282,6 +379,11 @@ impl SpellFilter {
     /// Rewrite printed creature-type words when a text-changing effect applies.
     pub(crate) fn rewrite_creature_type(&mut self, from: CreatureTypeId, to: CreatureTypeId) {
         self.object.rewrite_creature_type(from, to);
+        if let SpellTargetShape::TargetingObject(ref mut target_filter) = self.target_shape
+            && target_filter.subtype == Some(from)
+        {
+            target_filter.subtype = Some(to);
+        }
     }
 
     /// Validate that every referenced creature subtype exists in `vocabulary`.
@@ -289,7 +391,14 @@ impl SpellFilter {
         self,
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
-        self.object.validate_vocabulary(vocabulary)
+        self.object.validate_vocabulary(vocabulary)?;
+        if let SpellTargetShape::TargetingObject(target_filter) = self.target_shape
+            && let Some(id) = target_filter.subtype
+            && vocabulary.label(id).is_none()
+        {
+            return Err(DefinitionError::InvalidCreatureSubtypes);
+        }
+        Ok(())
     }
 
     /// Match card types alone (used when only copiable card types are available, e.g. spell copies).

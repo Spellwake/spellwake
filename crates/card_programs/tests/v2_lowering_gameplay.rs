@@ -1372,11 +1372,11 @@ fn wave4_they_gain_keywords_and_pillar_exile_if_dies_and_scent_reveal() {
     )
     .into_state();
     game = resolve_top(&game);
-    if let Some(pending) = game.pending_decision() {
-        if let RuleFrame::TimestampOrder(order) = pending.frame() {
-            let members = order.members().iter().map(|m| m.member).collect();
-            game = reply(&game, DecisionReply::TimestampOrder(members));
-        }
+    if let Some(pending) = game.pending_decision()
+        && let RuleFrame::TimestampOrder(order) = pending.frame()
+    {
+        let members = order.members().iter().map(|m| m.member).collect();
+        game = reply(&game, DecisionReply::TimestampOrder(members));
     }
     let tokens: Vec<_> = game
         .execution()
@@ -1650,5 +1650,413 @@ fn wave4_kodamas_reach_split_search_and_scaled_energy_cost_and_restricted_mana()
     assert!(
         !game.execution().restricted_mana().is_empty(),
         "Untaidake should add restricted colorless mana for legendary spells"
+    );
+}
+
+#[test]
+fn wave5_spell_targeting_object_repartee_and_intervene() {
+    let vocab = test_vocab();
+    let scornmage = compile_card(
+        &vocab,
+        "Lecturing Scornmage",
+        "Creature \u{2014} Human Wizard",
+        Some("{1}{B}"),
+        Some(("2", "2")),
+        "Whenever you cast an instant or sorcery spell that targets a creature, put a +1/+1 counter on this creature.",
+    );
+    let bolt = compile_card(
+        &vocab,
+        "Lightning Bolt",
+        "Instant",
+        Some("{R}"),
+        None,
+        "Lightning Bolt deals 3 damage to any target.",
+    );
+    let intervene = compile_card(
+        &vocab,
+        "Intervene",
+        "Instant",
+        Some("{U}"),
+        None,
+        "Counter target spell that targets a creature.",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Sturdy Beast",
+        "Creature \u{2014} Beast",
+        Some("{2}{G}"),
+        Some(("3", "3")),
+        "",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: scornmage,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: bolt.clone(),
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: bolt,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: BOB,
+                destination: ObjectDestination::Hand,
+                program: intervene,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: bear,
+            },
+        ],
+        &[(ALICE, ManaType::Red, 2), (BOB, ManaType::Blue, 1)],
+    );
+
+    // 1. Cast Lightning Bolt targeting Bob (a player):
+    //    - Repartee must NOT trigger (Scornmage stays 2/2).
+    //    - Intervene must NOT be able to target Bolt on the stack.
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 2).id(),
+            target: Some(TargetRef::Player(BOB)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    assert_eq!(
+        game.execution().window().entries().len(),
+        1,
+        "spell targeting a player must not trigger Repartee"
+    );
+    let bolt1_entry = game.execution().window().entries()[0].id();
+    let bob_prio = pass(&game);
+    let illegal_intervene = bob_prio.advance(GameInput {
+        basis: bob_prio.basis().clone(),
+        actor: BOB,
+        command: GameCommand::CastWithResources {
+            spell: object(&bob_prio, 4).id(),
+            target: Some(TargetRef::Stack(bolt1_entry)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 1)]),
+                ..Default::default()
+            },
+        },
+    });
+    assert!(
+        illegal_intervene.is_err(),
+        "Intervene must reject a spell that only targets a player"
+    );
+    game = resolve_top(&game);
+    assert_eq!(life(&game, BOB), 17.into());
+    let scornmage_pt = game
+        .execution()
+        .current_characteristics(object(&game, 1).id())
+        .unwrap()
+        .unwrap()
+        .power_toughness
+        .unwrap();
+    assert_eq!(scornmage_pt.derived.power, 2.into());
+
+    // 2. Cast Lightning Bolt targeting Bob's 3/3 Beast:
+    //    - Repartee DOES trigger on top of Bolt (stack len == 2).
+    //    - Bob casts Intervene targeting Bolt -> Bolt is countered and Beast survives.
+    //    - Repartee resolves -> Scornmage grows from 2/2 to 3/3.
+    let bear_id = object(&game, 5).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 3).id(),
+            target: Some(TargetRef::Object(bear_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    assert_eq!(
+        game.execution().window().entries().len(),
+        2,
+        "spell targeting a creature must trigger Repartee"
+    );
+    let bolt2_entry = game.execution().window().entries()[0].id();
+    // Pass Alice's priority so Bob can respond with Intervene targeting Bolt.
+    game = pass(&game);
+    game = advance(
+        &game,
+        BOB,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: Some(TargetRef::Stack(bolt2_entry)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    // Resolve Intervene (counters Bolt), then Repartee (+1/+1 counter on Scornmage).
+    game = resolve_top(&game);
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 3).zone(),
+        ObjectZone::Graveyard(ALICE),
+        "Intervene should counter Lightning Bolt targeting a creature"
+    );
+    assert_eq!(
+        object(&game, 5).zone(),
+        ObjectZone::Battlefield,
+        "Bob's Beast should survive after Bolt is countered"
+    );
+    let scornmage_pt2 = game
+        .execution()
+        .current_characteristics(object(&game, 1).id())
+        .unwrap()
+        .unwrap()
+        .power_toughness
+        .unwrap();
+    assert_eq!(
+        scornmage_pt2.derived.power,
+        3.into(),
+        "Repartee should put a +1/+1 counter on Lecturing Scornmage"
+    );
+}
+
+#[test]
+fn wave5_shares_creature_type_trigger_attached_to_source_and_both_directions_prevention() {
+    let vocab = test_vocab();
+    let mana_echoes = compile_card(
+        &vocab,
+        "Mana Echoes",
+        "Enchantment",
+        Some("{2}{R}{R}"),
+        None,
+        "Whenever a creature enters, you may add an amount of {C} equal to the number of creatures you control that share a creature type with it.",
+    );
+    let goblin1 = compile_card(
+        &vocab,
+        "Goblin Scout",
+        "Creature \u{2014} Goblin",
+        Some("{R}"),
+        Some(("1", "1")),
+        "",
+    );
+    let goblin2 = compile_card(
+        &vocab,
+        "Goblin Recruit",
+        "Creature \u{2014} Goblin",
+        Some("{R}"),
+        Some(("1", "1")),
+        "",
+    );
+    let elf = compile_card(
+        &vocab,
+        "Forest Elf",
+        "Creature \u{2014} Elf",
+        Some("{G}"),
+        Some(("1", "1")),
+        "",
+    );
+    let arms_master = compile_card(
+        &vocab,
+        "Arms Master",
+        "Creature \u{2014} Human Soldier",
+        Some("{2}{W}"),
+        Some(("2", "2")),
+        "Haste\n{T}: Create a 1/1 white Soldier creature token for each Equipment attached to this creature.",
+    );
+    let short_sword = compile_card(
+        &vocab,
+        "Test Blade",
+        "Artifact \u{2014} Equipment",
+        Some("{1}"),
+        None,
+        "Equipped creature gets +1/+1.\nEquip {1}",
+    );
+    let chariot = compile_card(
+        &vocab,
+        "Soratami Cloud Chariot",
+        "Artifact",
+        Some("{5}"),
+        None,
+        "{2}: Target creature you control gains flying until end of turn.\n{2}: Prevent all combat damage that would be dealt to and dealt by target creature you control this turn.",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: mana_echoes,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: goblin1,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: elf,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: goblin2,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: arms_master,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: short_sword,
+            },
+            SeedCard {
+                card: CardId(7),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: chariot,
+            },
+        ],
+        &[(ALICE, ManaType::Red, 1), (ALICE, ManaType::Colourless, 3)],
+    );
+
+    // 1. Cast second Goblin: Mana Echoes triggers; accepting adds 2 {C} (two Goblins, not the Elf).
+    let colorless_before = game.execution().mana(ALICE, ManaType::Colourless);
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    // Resolve Goblin Recruit (triggers Mana Echoes).
+    game = resolve_top(&game);
+    // Resolve Mana Echoes trigger and accept optional mana addition.
+    game = resolve_top(&game);
+    if let Some(pending) = game.pending_decision() {
+        assert!(matches!(pending.frame(), RuleFrame::OptionalEffect(_)));
+        game = reply(
+            &game,
+            DecisionReply::OptionalEffect(OptionalEffectChoice::Take),
+        );
+    }
+    let colorless_after = game.execution().mana(ALICE, ManaType::Colourless);
+    assert_eq!(
+        colorless_after,
+        colorless_before.plus(&2.into()),
+        "Mana Echoes should add exactly 2 {{C}} for the 2 Goblins (excluding the Elf)"
+    );
+
+    // 2. Equip Test Blade to Arms Master, then activate `{T}: Create a 1/1 Soldier for each Equipment attached to this creature`.
+    let bf_before_equip = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|o| o.zone() == ObjectZone::Battlefield)
+        .count();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateAbility {
+            source: object(&game, 6).id(),
+            ability: first_activated_id(&game, 6),
+            target: TargetRef::Object(object(&game, 5).id()),
+            payment: pay_mana(&[(ManaType::Colourless, 1)]),
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateUntargetedAbility {
+            source: object(&game, 5).id(),
+            ability: first_activated_id(&game, 5),
+            payment: None,
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let bf_after_equip = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|o| o.zone() == ObjectZone::Battlefield)
+        .count();
+    assert_eq!(
+        bf_after_equip,
+        bf_before_equip + 1,
+        "ATTACHED_TO_SOURCE should count the 1 attached Equipment and create 1 Soldier token"
+    );
+    // Soldier token entering also triggers Mana Echoes; resolve and decline it to clear the stack.
+    game = resolve_top(&game);
+    if let Some(pending) = game.pending_decision() {
+        assert!(matches!(pending.frame(), RuleFrame::OptionalEffect(_)));
+        game = reply(
+            &game,
+            DecisionReply::OptionalEffect(OptionalEffectChoice::Decline),
+        );
+    }
+
+    // 3. Activate Soratami Cloud Chariot's second ability (both_directions combat damage prevention).
+    let chariot_prev_ability = game
+        .execution()
+        .programs()
+        .find_map(|(cid, prog)| (cid == CardId(7)).then(|| prog.activated[1].id))
+        .expect("chariot program");
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateAbility {
+            source: object(&game, 7).id(),
+            ability: chariot_prev_ability,
+            target: TargetRef::Object(object(&game, 2).id()),
+            payment: pay_mana(&[(ManaType::Colourless, 2)]),
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert!(
+        game.execution().window().entries().is_empty(),
+        "Soratami Cloud Chariot both_directions damage prevention should resolve cleanly"
     );
 }

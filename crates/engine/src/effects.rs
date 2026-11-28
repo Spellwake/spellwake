@@ -9493,6 +9493,78 @@ impl EffectWindow {
         {
             return false;
         }
+        if clause.flags.contains(ObjectFilterFlags::ATTACHED_TO_SOURCE)
+            && !ability_source.is_some_and(|src| p.attached_to == Some(TargetRef::Object(src)))
+        {
+            return false;
+        }
+        let resolving_trigger_subject = || -> Option<ObjectId> {
+            self.window
+                .resolving()
+                .and_then(|entry| self.execution_bindings(entry.id()))
+                .and_then(|b| b.trigger.as_ref())
+                .and_then(|t| {
+                    t.causes
+                        .members()
+                        .iter()
+                        .find_map(crate::occurrence::TriggerCauseMember::subject_object_id)
+                })
+        };
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::ATTACHED_TO_TRIGGER)
+            && !resolving_trigger_subject()
+                .is_some_and(|tid| p.attached_to == Some(TargetRef::Object(tid)))
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_COLOR_WITH_TRIGGER)
+            && !resolving_trigger_subject()
+                .and_then(|tid| evaluated.get(tid))
+                .is_some_and(|tv| {
+                    p.current_colors
+                        .iter()
+                        .any(|c| tv.current_colors.contains(c))
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TRIGGER)
+            && !resolving_trigger_subject()
+                .and_then(|tid| evaluated.get(tid))
+                .is_some_and(|tv| {
+                    p.current_creature_subtypes
+                        .iter()
+                        .any(|st| tv.current_creature_subtypes.contains(st))
+                })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TRIGGER)
+            && !resolving_trigger_subject()
+                .and_then(|tid| evaluated.get(tid))
+                .is_some_and(|tv| p.current_types.iter().any(|t| tv.current_types.contains(t)))
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SAME_NAME_AS_TRIGGER)
+            && !resolving_trigger_subject()
+                .and_then(|tid| evaluated.get(tid))
+                .is_some_and(|tv| {
+                    self.name_rules
+                        .shares_name(&p.current_names, &tv.current_names)
+                })
+        {
+            return false;
+        }
         if clause
             .flags
             .contains(ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED)
@@ -9501,7 +9573,76 @@ impl EffectWindow {
                     p.current_colors
                         .iter()
                         .any(|c| lki.current_colors.contains(c))
-                })
+                }) || cursor
+                    .results
+                    .last_moved_objects
+                    .iter()
+                    .filter_map(|oid| evaluated.get(*oid))
+                    .any(|mv| {
+                        p.current_colors
+                            .iter()
+                            .any(|c| mv.current_colors.contains(c))
+                    })
+            })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_LAST_MOVED)
+            && !self.resolution_cursor().is_some_and(|cursor| {
+                cursor.results.last_action_lki.iter().any(|lki| {
+                    p.current_creature_subtypes
+                        .iter()
+                        .any(|st| lki.current_creature_subtypes.contains(st))
+                }) || cursor
+                    .results
+                    .last_moved_objects
+                    .iter()
+                    .filter_map(|oid| evaluated.get(*oid))
+                    .any(|mv| {
+                        p.current_creature_subtypes
+                            .iter()
+                            .any(|st| mv.current_creature_subtypes.contains(st))
+                    })
+            })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_LAST_MOVED)
+            && !self.resolution_cursor().is_some_and(|cursor| {
+                cursor.results.last_action_lki.iter().any(|lki| {
+                    p.current_types
+                        .iter()
+                        .any(|t| lki.current_types.contains(t))
+                }) || cursor
+                    .results
+                    .last_moved_objects
+                    .iter()
+                    .filter_map(|oid| evaluated.get(*oid))
+                    .any(|mv| p.current_types.iter().any(|t| mv.current_types.contains(t)))
+            })
+        {
+            return false;
+        }
+        if clause
+            .flags
+            .contains(ObjectFilterFlags::SAME_NAME_AS_LAST_MOVED)
+            && !self.resolution_cursor().is_some_and(|cursor| {
+                cursor.results.last_action_lki.iter().any(|lki| {
+                    self.name_rules
+                        .shares_name(&p.current_names, &lki.current_names)
+                }) || cursor
+                    .results
+                    .last_moved_objects
+                    .iter()
+                    .filter_map(|oid| evaluated.get(*oid))
+                    .any(|mv| {
+                        self.name_rules
+                            .shares_name(&p.current_names, &mv.current_names)
+                    })
             })
         {
             return false;
@@ -10195,6 +10336,26 @@ impl EffectWindow {
                                     .iter()
                                     .any(|t| matches!(t.choice().target, TargetRef::Player(_))),
                                 crate::program::SpellTargetShape::TargetingOnlySource => false,
+                                crate::program::SpellTargetShape::TargetingObject(obj_filter) => {
+                                    let excluded = BTreeSet::new();
+                                    let full_filter = obj_filter.to_object_filter();
+                                    entry.targets().targets().iter().any(|t| {
+                                        matches!(
+                                            t.choice().target,
+                                            TargetRef::Object(obj_id)
+                                                if evaluated.get(obj_id).is_some_and(|p| {
+                                                    self.matches_object_filter_with_source(
+                                                        full_filter,
+                                                        p,
+                                                        controller,
+                                                        source,
+                                                        &excluded,
+                                                        evaluated,
+                                                    )
+                                                })
+                                        )
+                                    })
+                                }
                             };
                             let controller_ok = match filter.object {
                                 crate::program::ObjectFilter::Clause(c) => match c.controller {
@@ -10278,6 +10439,26 @@ impl EffectWindow {
                                 })
                             }
                             crate::program::SpellTargetShape::TargetingOnlySource => false,
+                            crate::program::SpellTargetShape::TargetingObject(obj_filter) => {
+                                let excluded = BTreeSet::new();
+                                let full_filter = obj_filter.to_object_filter();
+                                entry.targets().targets().iter().any(|target| {
+                                    matches!(
+                                        target.choice().target,
+                                        TargetRef::Object(obj_id)
+                                            if evaluated.get(obj_id).is_some_and(|p| {
+                                                self.matches_object_filter_with_source(
+                                                    full_filter,
+                                                    p,
+                                                    controller,
+                                                    source,
+                                                    &excluded,
+                                                    evaluated,
+                                                )
+                                            })
+                                    )
+                                })
+                            }
                         };
                         if !target_ok {
                             return false;

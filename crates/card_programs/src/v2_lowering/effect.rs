@@ -1531,32 +1531,21 @@ fn try_fuse_split_search_library_sequence(
     if !is_pure_search_shuffle(shuf_eff) && !is_conditional_search_shuffle(shuf_eff) {
         return Ok(None);
     }
-    let split_dest = if m1_dest.zone == v2::ZoneKind::Battlefield
-        && m1_mods.tapped
-        && !m1_mods.attacking
-        && !m1_mods.face_down
-        && m2_dest.zone == v2::ZoneKind::Hand
-        && is_empty_entry_modifiers(m2_mods)
+    let is_bf_tapped = |dest: &v2::ZoneDest, mods: &v2::EntryModifiers| {
+        dest.zone == v2::ZoneKind::Battlefield && mods.tapped && !mods.attacking && !mods.face_down
+    };
+    let is_plain_zone = |dest: &v2::ZoneDest, mods: &v2::EntryModifiers, zone: v2::ZoneKind| {
+        dest.zone == zone && is_empty_entry_modifiers(mods)
+    };
+    let split_dest = if (is_bf_tapped(m1_dest, m1_mods)
+        && is_plain_zone(m2_dest, m2_mods, v2::ZoneKind::Hand))
+        || (is_plain_zone(m1_dest, m1_mods, v2::ZoneKind::Hand) && is_bf_tapped(m2_dest, m2_mods))
     {
         SearchDestination::SplitBattlefieldTappedAndHand
-    } else if m1_dest.zone == v2::ZoneKind::Hand
-        && is_empty_entry_modifiers(m1_mods)
-        && m2_dest.zone == v2::ZoneKind::Battlefield
-        && m2_mods.tapped
-        && !m2_mods.attacking
-        && !m2_mods.face_down
-    {
-        SearchDestination::SplitBattlefieldTappedAndHand
-    } else if m1_dest.zone == v2::ZoneKind::Hand
-        && is_empty_entry_modifiers(m1_mods)
-        && m2_dest.zone == v2::ZoneKind::Graveyard
-        && is_empty_entry_modifiers(m2_mods)
-    {
-        SearchDestination::SplitHandAndGraveyard
-    } else if m1_dest.zone == v2::ZoneKind::Graveyard
-        && is_empty_entry_modifiers(m1_mods)
-        && m2_dest.zone == v2::ZoneKind::Hand
-        && is_empty_entry_modifiers(m2_mods)
+    } else if (is_plain_zone(m1_dest, m1_mods, v2::ZoneKind::Hand)
+        && is_plain_zone(m2_dest, m2_mods, v2::ZoneKind::Graveyard))
+        || (is_plain_zone(m1_dest, m1_mods, v2::ZoneKind::Graveyard)
+            && is_plain_zone(m2_dest, m2_mods, v2::ZoneKind::Hand))
     {
         SearchDestination::SplitHandAndGraveyard
     } else {
@@ -3016,39 +3005,44 @@ fn try_lower_turn_prevention_spec(
     };
 
     // Case 1: `"Prevent all [combat] damage that would be dealt to and dealt by <subject>"`.
+    // `TurnPreventionSpec` with `both_directions: true` matches both source and recipient against
+    // `source` and ignores `recipient`; keeping `recipient: Any` avoids a redundant target-family
+    // conflict in `validate_prevent_damage_spec`.
     if let (Some(src), Some(tgt)) = (source, target) {
         if matches!(src, v2::SubjectRef::SelfObject) && matches!(tgt, v2::SubjectRef::SelfObject) {
             acc.push(Instruction::ApplyContinuous(Box::new(
                 ApplyContinuousSpec::prevent_damage(TurnPreventionSpec {
                     combat_only,
                     source: PreventionSourceSpec::AbilitySource,
-                    recipient: PreventionRecipientSpec::AbilitySource,
+                    recipient: PreventionRecipientSpec::Any,
                     both_directions: true,
                 }),
             )));
             return Ok(true);
         }
-        if is_obj_anaph(src) && is_obj_anaph(tgt) && acc.target_set {
-            if matches!(
+        if is_obj_anaph(src)
+            && is_obj_anaph(tgt)
+            && acc.target_set
+            && matches!(
                 acc.target,
                 BodyTarget::Object {
                     zone: TargetZone::Battlefield,
                     ..
                 }
-            ) && acc.target_bounds.is_none()
-                && !acc.x_target_count
-                && !acc.up_to_x_target_count
-            {
-                acc.push(Instruction::ApplyContinuous(Box::new(
-                    ApplyContinuousSpec::prevent_damage(TurnPreventionSpec {
-                        combat_only,
-                        source: PreventionSourceSpec::TargetPermanent,
-                        recipient: PreventionRecipientSpec::Target,
-                        both_directions: true,
-                    }),
-                )));
-                return Ok(true);
-            }
+            )
+            && acc.target_bounds.is_none()
+            && !acc.x_target_count
+            && !acc.up_to_x_target_count
+        {
+            acc.push(Instruction::ApplyContinuous(Box::new(
+                ApplyContinuousSpec::prevent_damage(TurnPreventionSpec {
+                    combat_only,
+                    source: PreventionSourceSpec::TargetPermanent,
+                    recipient: PreventionRecipientSpec::Any,
+                    both_directions: true,
+                }),
+            )));
+            return Ok(true);
         }
         if matches!(src, v2::SubjectRef::TargetObject { .. })
             && (src == tgt || is_obj_anaph(tgt))
@@ -3067,7 +3061,7 @@ fn try_lower_turn_prevention_spec(
                 ApplyContinuousSpec::prevent_damage(TurnPreventionSpec {
                     combat_only,
                     source: PreventionSourceSpec::TargetPermanent,
-                    recipient: PreventionRecipientSpec::Target,
+                    recipient: PreventionRecipientSpec::Any,
                     both_directions: true,
                 }),
             )));
@@ -3611,7 +3605,8 @@ fn lower_option_branches(
     // Engine requires `PromptChoice.option_branches[i].target == BodyTarget::None` and inherits
     // `self.target` from the enclosing body. Hoist a shared branch target onto `acc` when every
     // targeted branch agrees on the exact same target & cardinality.
-    let mut shared_target: Option<(BodyTarget, Option<(u16, u16)>, bool, bool, bool)> = None;
+    type BranchTargetSig = (BodyTarget, Option<(u16, u16)>, bool, bool, bool);
+    let mut shared_target: Option<BranchTargetSig> = None;
     let mut can_hoist = true;
     for b_acc in &branch_accs {
         if !b_acc.target_set {
@@ -3859,7 +3854,7 @@ fn value_expr_mentions_anaphora(expr: &v2::ValueExpr) -> bool {
     }
 }
 
-fn find_first_direct_target<'a>(effects: &'a [v2::Effect]) -> Option<&'a v2::SubjectRef> {
+fn find_first_direct_target(effects: &[v2::Effect]) -> Option<&v2::SubjectRef> {
     for eff in effects {
         let candidate = match eff {
             v2::Effect::ZoneOp { subject, .. }

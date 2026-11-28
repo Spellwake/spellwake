@@ -1467,9 +1467,105 @@ fn lower_shares_type_condition(
                 ObjectFilterFlags::SAME_NAME_AS_TARGET
             }
             (
-                v2::SubjectRef::Anaphora(v2::AnaphoraRef::SacrificedObject),
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatSpell
+                    | v2::AnaphoraRef::ThatLand
+                    | v2::AnaphoraRef::ThatToken
+                    | v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatObject,
+                ),
+                v2::SharedProperty::Color,
+            ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+                ObjectFilterFlags::SHARES_COLOR_WITH_TRIGGER
+            }
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatSpell
+                    | v2::AnaphoraRef::ThatLand
+                    | v2::AnaphoraRef::ThatToken
+                    | v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatObject,
+                ),
+                v2::SharedProperty::CreatureType,
+            ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+                ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TRIGGER
+            }
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatSpell
+                    | v2::AnaphoraRef::ThatLand
+                    | v2::AnaphoraRef::ThatToken
+                    | v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatObject,
+                ),
+                v2::SharedProperty::CardType,
+            ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+                ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TRIGGER
+            }
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatSpell
+                    | v2::AnaphoraRef::ThatLand
+                    | v2::AnaphoraRef::ThatToken
+                    | v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatObject,
+                ),
+                v2::SharedProperty::Name,
+            ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+                ObjectFilterFlags::SAME_NAME_AS_TRIGGER
+            }
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::SacrificedObject
+                    | v2::AnaphoraRef::ExiledObject
+                    | v2::AnaphoraRef::TheExiledCard
+                    | v2::AnaphoraRef::DiscardedObject
+                    | v2::AnaphoraRef::RevealedCard,
+                ),
                 v2::SharedProperty::Color,
             ) => ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED,
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::SacrificedObject
+                    | v2::AnaphoraRef::ExiledObject
+                    | v2::AnaphoraRef::TheExiledCard
+                    | v2::AnaphoraRef::DiscardedObject
+                    | v2::AnaphoraRef::RevealedCard,
+                ),
+                v2::SharedProperty::CreatureType,
+            ) => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_LAST_MOVED,
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::SacrificedObject
+                    | v2::AnaphoraRef::ExiledObject
+                    | v2::AnaphoraRef::TheExiledCard
+                    | v2::AnaphoraRef::DiscardedObject
+                    | v2::AnaphoraRef::RevealedCard,
+                ),
+                v2::SharedProperty::CardType,
+            ) => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_LAST_MOVED,
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::SacrificedObject
+                    | v2::AnaphoraRef::ExiledObject
+                    | v2::AnaphoraRef::TheExiledCard
+                    | v2::AnaphoraRef::DiscardedObject
+                    | v2::AnaphoraRef::RevealedCard,
+                ),
+                v2::SharedProperty::Name,
+            ) => ObjectFilterFlags::SAME_NAME_AS_LAST_MOVED,
             _ => return Err(LoweringError::Unsupported("v2:cond:shares-type-with")),
         }
     };

@@ -27,6 +27,7 @@ pub use static_rules::*;
 pub use types::*;
 pub(crate) use world_eval::{
     WorldEvalCtx, compute_party_size, eval_world_condition, eval_world_value_expr,
+    matches_world_object_filter,
 };
 
 use crate::priority::SeatId;
