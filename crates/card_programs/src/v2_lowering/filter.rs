@@ -971,12 +971,17 @@ fn apply_predicates_to_clause(
                     | v2::AnaphoraRef::ThatPermanent
                     | v2::AnaphoraRef::ThatObject,
                 ) => {
+                    if ctx.last_moved_binding.is_some() {
+                        return Err(LoweringError::Unsupported("v2:filter:pred:attached-to"));
+                    }
                     let flag = if ctx.has_object_target {
                         ObjectFilterFlags::ATTACHED_TO_TARGET
                     } else if ctx.in_trigger {
                         ObjectFilterFlags::ATTACHED_TO_TRIGGER
-                    } else {
+                    } else if ctx.self_antecedent {
                         ObjectFilterFlags::ATTACHED_TO_SOURCE
+                    } else {
+                        return Err(LoweringError::Unsupported("v2:filter:pred:attached-to"));
                     };
                     clause.flags = clause.flags.union(flag);
                 }
@@ -1592,10 +1597,7 @@ fn apply_shares_property(
             | v2::AnaphoraRef::ThatLand
             | v2::AnaphoraRef::ThatToken
             | v2::AnaphoraRef::It
-            | v2::AnaphoraRef::ThatObject
-            | v2::AnaphoraRef::EquippedCreature
-            | v2::AnaphoraRef::EnchantedCreature
-            | v2::AnaphoraRef::EnchantedPermanent,
+            | v2::AnaphoraRef::ThatObject,
         ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
             apply_shares_property_with_trigger(clause, property, negated)
         }

@@ -4415,6 +4415,11 @@ fn lower_permanent_next_spell_modifier(
     program: &mut Program,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    if !filter.zones.is_empty() {
+        return Err(LoweringError::Unsupported(
+            "v2:static-next-spell-modifier-permanent",
+        ));
+    }
     let any_player = match filter.controller {
         None | Some(ControllerRelation::You) => false,
         _ => {
@@ -4440,15 +4445,39 @@ fn lower_permanent_next_spell_modifier(
         }));
     let matching = lower_spell_filter(filter, ctx)?;
 
+    let is_plain_spell_placeholder = |f: &v2::ObjectFilter| {
+        f.all_types.is_empty()
+            && f.any_types.is_empty()
+            && f.forbidden_types.is_empty()
+            && f.required_supertypes.is_empty()
+            && f.forbidden_supertypes.is_empty()
+            && f.subtypes.is_empty()
+            && f.forbidden_subtypes.is_empty()
+            && f.any_colors.is_empty()
+            && f.forbidden_colors.is_empty()
+            && f.color_arity.is_none()
+            && f.controller.is_none()
+            && f.owner.is_none()
+            && f.zones.is_empty()
+            && f.combat.is_none()
+            && f.tapped.is_none()
+            && f.token.is_none()
+            && f.required_keywords.is_empty()
+            && f.forbidden_keywords.is_empty()
+            && f.stat_bounds.is_empty()
+            && f.flags.is_empty()
+            && f.predicates.is_empty()
+    };
+
     match effect {
         v2::StaticAbility::CostModifier {
+            subject,
             delta,
             less: true,
             scale,
             min_mana: None,
             condition: None,
-            ..
-        } => {
+        } if subject == filter || is_plain_spell_placeholder(subject) => {
             let generic_u8 = lower_pure_generic_mana_u8(delta, "v2:static-cost-modifier-colored")?;
             let amount = match scale {
                 None => {
@@ -4486,33 +4515,48 @@ fn lower_permanent_next_spell_modifier(
             )
         }
         v2::StaticAbility::GrantKeywords {
+            subject,
             keywords,
             condition: None,
-            ..
-        } if !keywords.is_empty() => {
+        } if !keywords.is_empty()
+            && match subject {
+                v2::SubjectRef::Anaphora(v2::AnaphoraRef::It | v2::AnaphoraRef::ThatSpell) => true,
+                v2::SubjectRef::Group(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::All(f) => {
+                    f.as_ref() == filter || is_plain_spell_placeholder(f)
+                }
+                _ => false,
+            } =>
+        {
             for kw in keywords {
-                let permission = if kw.kind == v2::KeywordKind::Cascade && kw.param.is_none() {
-                    CastPermissionRule::GrantSpellCascade {
-                        any_player,
-                        matching,
-                        count: NonZeroU8::MIN,
-                    }
+                if kw.kind == v2::KeywordKind::Cascade && kw.param.is_none() {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::CastPermission {
+                            id: ctx.alloc_static_id(),
+                            permission: CastPermissionRule::GrantSpellCascade {
+                                any_player,
+                                matching,
+                                count: NonZeroU8::MIN,
+                            },
+                        },
+                        Some(first_spell_cond.clone()),
+                    )?;
                 } else {
-                    let engine_kw = lower_keyword_ability(kw, ctx)?;
-                    CastPermissionRule::GrantSpellKeyword {
-                        any_player,
-                        matching,
-                        keyword: engine_kw,
+                    for engine_kw in lower_keyword_abilities(kw, ctx)? {
+                        push_static_ability(
+                            program,
+                            StaticContinuousAbility::CastPermission {
+                                id: ctx.alloc_static_id(),
+                                permission: CastPermissionRule::GrantSpellKeyword {
+                                    any_player,
+                                    matching,
+                                    keyword: engine_kw,
+                                },
+                            },
+                            Some(first_spell_cond.clone()),
+                        )?;
                     }
-                };
-                push_static_ability(
-                    program,
-                    StaticContinuousAbility::CastPermission {
-                        id: ctx.alloc_static_id(),
-                        permission,
-                    },
-                    Some(first_spell_cond.clone()),
-                )?;
+                }
             }
             Ok(())
         }

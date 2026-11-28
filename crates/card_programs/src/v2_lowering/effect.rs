@@ -264,7 +264,7 @@ pub(crate) fn register_value_expr_player_targets(
         | v2::ValueExpr::ColorCount(subject)
         | v2::ValueExpr::ObjectStat { subject, .. }
         | v2::ValueExpr::StatDifference(subject) => {
-            if matches!(subject.as_ref(), v2::SubjectRef::TargetObject { .. }) && !acc.target_set {
+            if matches!(subject.as_ref(), v2::SubjectRef::TargetObject { .. }) {
                 let (bt, tc) = atoms::lower_subject_to_target(subject, ctx)?;
                 acc.register_target(bt, tc)?;
                 ctx.has_object_target = acc.target_set
@@ -940,7 +940,7 @@ fn is_search_anaphora(subj: &v2::SubjectRef) -> bool {
     )
 }
 
-fn is_empty_entry_modifiers(mods: &v2::EntryModifiers) -> bool {
+pub(crate) fn is_empty_entry_modifiers(mods: &v2::EntryModifiers) -> bool {
     !mods.tapped
         && !mods.attacking
         && !mods.face_down
@@ -1035,13 +1035,55 @@ pub(crate) fn emit_choose_any_opponent(
     Ok(())
 }
 
+fn mana_type_in_color_mask(mt: spellwake_engine::mana::ManaType, mask: ast::ColorMask) -> bool {
+    match mt {
+        spellwake_engine::mana::ManaType::White => (mask.0 & ast::ColorMask::WHITE.0) != 0,
+        spellwake_engine::mana::ManaType::Blue => (mask.0 & ast::ColorMask::BLUE.0) != 0,
+        spellwake_engine::mana::ManaType::Black => (mask.0 & ast::ColorMask::BLACK.0) != 0,
+        spellwake_engine::mana::ManaType::Red => (mask.0 & ast::ColorMask::RED.0) != 0,
+        spellwake_engine::mana::ManaType::Green => (mask.0 & ast::ColorMask::GREEN.0) != 0,
+        spellwake_engine::mana::ManaType::Colourless => false,
+    }
+}
+
+fn yield_colors_covered_by_mask(yield_kind: &EffectManaYield, mask: ast::ColorMask) -> bool {
+    match yield_kind {
+        EffectManaYield::Fixed(bundle) => {
+            !bundle.is_empty()
+                && bundle
+                    .iter()
+                    .all(|(&mt, _)| mana_type_in_color_mask(mt, mask))
+        }
+        EffectManaYield::Counted { kind, .. } => mana_type_in_color_mask(*kind, mask),
+        EffectManaYield::Choice { colors, .. } => {
+            !colors.is_empty() && colors.iter().all(|&mt| mana_type_in_color_mask(mt, mask))
+        }
+        EffectManaYield::Split { first, second, .. } => {
+            mana_type_in_color_mask(*first, mask) && mana_type_in_color_mask(*second, mask)
+        }
+        _ => false,
+    }
+}
+
 fn apply_mana_restriction_to_yield(
     yield_kind: EffectManaYield,
     rule: &v2::ManaRuleKind,
+    rule_duration: &v2::Duration,
     ctx: &mut LowerCtx<'_>,
 ) -> Option<EffectManaYield> {
-    if let v2::ManaRuleKind::KeepColorAcrossSteps(_) = rule {
-        return Some(EffectManaYield::RetainedUntilCleanup(Box::new(yield_kind)));
+    if let v2::ManaRuleKind::KeepColorAcrossSteps(mask) = rule {
+        if *rule_duration == v2::Duration::UntilEndOfTurn
+            && yield_colors_covered_by_mask(&yield_kind, *mask)
+        {
+            return Some(EffectManaYield::RetainedUntilCleanup(Box::new(yield_kind)));
+        }
+        return None;
+    }
+    if !matches!(
+        rule_duration,
+        v2::Duration::Instant | v2::Duration::UntilEndOfTurn | v2::Duration::Permanent
+    ) {
+        return None;
     }
     let ManaOutputRestriction::Fixed(restriction) = cost::try_lower_mana_spend_rule(rule, ctx)?
     else {
@@ -1134,7 +1176,7 @@ fn try_fuse_add_mana_with_rule(
     let Some(v2::Effect::MutatePlayer {
         player: rule_player,
         mutation: v2::PlayerMutation::ManaRule(rule),
-        ..
+        duration: rule_dur,
     }) = effects.get(i + 1)
     else {
         return Ok(None);
@@ -1146,7 +1188,8 @@ fn try_fuse_add_mana_with_rule(
             duration: v2::Duration::Instant,
         } if player == rule_player => {
             let yield_kind = atoms::lower_mana_spec(spec, ctx)?;
-            let Some(restricted) = apply_mana_restriction_to_yield(yield_kind, rule, ctx) else {
+            let Some(restricted) = apply_mana_restriction_to_yield(yield_kind, rule, rule_dur, ctx)
+            else {
                 return Ok(None);
             };
             let rp = if *player == v2::PlayerRef::AnyOpponent {
@@ -1177,7 +1220,8 @@ fn try_fuse_add_mana_with_rule(
                 return Ok(None);
             }
             let yield_kind = atoms::lower_mana_spec(spec, ctx)?;
-            let Some(restricted) = apply_mana_restriction_to_yield(yield_kind, rule, ctx) else {
+            let Some(restricted) = apply_mana_restriction_to_yield(yield_kind, rule, rule_dur, ctx)
+            else {
                 return Ok(None);
             };
             register_value_expr_player_targets(expr, acc, ctx)?;
@@ -1218,12 +1262,62 @@ fn is_dealt_damage_this_way_dies_exile_replacement(eff: &v2::Effect) -> bool {
     }
     let subject_ok = match subject {
         v2::SubjectRef::Group(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::All(f) => {
-            let is_creature_or_any = f.all_types.is_empty()
-                && (f.any_types.is_empty() || f.any_types == ast::CardTypeMask::CREATURE);
+            let v2::ObjectFilter {
+                all_types,
+                any_types,
+                forbidden_types,
+                required_supertypes,
+                forbidden_supertypes,
+                subtypes,
+                subtypes_match_any,
+                forbidden_subtypes,
+                any_colors,
+                forbidden_colors,
+                color_arity,
+                controller,
+                owner,
+                zones,
+                combat,
+                tapped,
+                token,
+                required_keywords,
+                keywords_match_any,
+                forbidden_keywords,
+                stat_bounds,
+                flags,
+                predicates,
+                any_permanent: _,
+                any_card,
+                any_spell,
+                is_ability,
+            } = f.as_ref();
+            let is_creature_or_any = all_types.is_empty()
+                && (any_types.is_empty() || *any_types == ast::CardTypeMask::CREATURE);
             is_creature_or_any
-                && f.forbidden_types.is_empty()
-                && f.subtypes.is_empty()
-                && f.predicates
+                && forbidden_types.is_empty()
+                && required_supertypes.is_empty()
+                && forbidden_supertypes.is_empty()
+                && subtypes.is_empty()
+                && !*subtypes_match_any
+                && forbidden_subtypes.is_empty()
+                && any_colors.is_empty()
+                && forbidden_colors.is_empty()
+                && color_arity.is_none()
+                && controller.is_none()
+                && owner.is_none()
+                && zones.is_empty()
+                && combat.is_none()
+                && tapped.is_none()
+                && token.is_none()
+                && required_keywords.is_empty()
+                && !*keywords_match_any
+                && forbidden_keywords.is_empty()
+                && stat_bounds.is_empty()
+                && flags.is_empty()
+                && !*any_card
+                && !*any_spell
+                && !*is_ability
+                && predicates.as_slice()
                     == [v2::FilterPredicate::AffectedByPriorAction(
                         v2::PriorActionKind::DealtDamageThisWay,
                     )]
@@ -1246,8 +1340,13 @@ fn is_dealt_damage_this_way_dies_exile_replacement(eff: &v2::Effect) -> bool {
                     | v2::AnaphoraRef::ThatPermanent
                     | v2::AnaphoraRef::ThatObject
             ),
+            from,
+            to: None,
+            modifiers,
+            except: None,
+            count: None,
             ..
-        }]
+        }] if from.is_empty() && is_empty_entry_modifiers(modifiers)
     )
 }
 
@@ -1535,6 +1634,16 @@ fn try_fuse_split_search_library_sequence(
     if !is_empty_entry_modifiers(modifiers) {
         return Ok(None);
     }
+    let eff_search_count = count.as_ref().or(match subject {
+        v2::SubjectRef::Counted { count: sc, .. } => Some(sc),
+        _ => None,
+    });
+    let Some(search_cs) = eff_search_count else {
+        return Ok(None);
+    };
+    if search_cs.any_number || value::lower_value_const(&search_cs.count) != Some(2) {
+        return Ok(None);
+    }
     let mut j = i + 1;
     let mut merged_reveal = *reveal;
     if let Some(v2::Effect::ZoneOp {
@@ -1554,23 +1663,39 @@ fn try_fuse_split_search_library_sequence(
         Some(v2::Effect::ZoneOp {
             op: v2::ZoneOpKind::Move,
             subject: m1_subj,
+            from: m1_from,
             to: Some(m1_dest),
             modifiers: m1_mods,
             except: None,
+            count: m1_count,
             ..
         }),
         Some(v2::Effect::ZoneOp {
             op: v2::ZoneOpKind::Move,
             subject: m2_subj,
+            from: m2_from,
             to: Some(m2_dest),
             modifiers: m2_mods,
             except: None,
+            count: m2_count,
             ..
         }),
     ) = (effects.get(j), effects.get(j + 1))
     else {
         return Ok(None);
     };
+    let is_single_move_count = |c: &Option<v2::CountSpec>| {
+        c.as_ref().is_none_or(|cs| {
+            !cs.up_to && !cs.any_number && value::lower_value_const(&cs.count) == Some(1)
+        })
+    };
+    if !m1_from.is_empty()
+        || !m2_from.is_empty()
+        || !is_single_move_count(m1_count)
+        || !is_single_move_count(m2_count)
+    {
+        return Ok(None);
+    }
     let is_one_subj = |s: &v2::SubjectRef| {
         matches!(
             s,
@@ -1601,26 +1726,39 @@ fn try_fuse_split_search_library_sequence(
     if !is_pure_search_shuffle(shuf_eff) && !is_conditional_search_shuffle(shuf_eff) {
         return Ok(None);
     }
+    let dest_owner_ok = |dest: &v2::ZoneDest| {
+        matches!(dest.owner, v2::ZoneOwner::Default | v2::ZoneOwner::You)
+            && matches!(
+                dest.under_control,
+                None | Some(v2::ZoneOwner::Default | v2::ZoneOwner::You)
+            )
+            && dest.library_position.is_none()
+            && dest.library_order.is_none()
+    };
     let is_bf_tapped = |dest: &v2::ZoneDest, mods: &v2::EntryModifiers| {
-        dest.zone == v2::ZoneKind::Battlefield && mods.tapped && !mods.attacking && !mods.face_down
+        dest.zone == v2::ZoneKind::Battlefield
+            && dest_owner_ok(dest)
+            && mods.tapped
+            && !mods.attacking
+            && !mods.face_down
+            && !mods.transformed
+            && mods.with_counter.is_none()
+            && mods.attached_to.is_none()
     };
     let is_plain_zone = |dest: &v2::ZoneDest, mods: &v2::EntryModifiers, zone: v2::ZoneKind| {
-        dest.zone == zone && is_empty_entry_modifiers(mods)
+        dest.zone == zone && dest_owner_ok(dest) && is_empty_entry_modifiers(mods)
     };
-    let split_dest = if (is_bf_tapped(m1_dest, m1_mods)
-        && is_plain_zone(m2_dest, m2_mods, v2::ZoneKind::Hand))
-        || (is_plain_zone(m1_dest, m1_mods, v2::ZoneKind::Hand) && is_bf_tapped(m2_dest, m2_mods))
-    {
-        SearchDestination::SplitBattlefieldTappedAndHand
-    } else if (is_plain_zone(m1_dest, m1_mods, v2::ZoneKind::Hand)
-        && is_plain_zone(m2_dest, m2_mods, v2::ZoneKind::Graveyard))
-        || (is_plain_zone(m1_dest, m1_mods, v2::ZoneKind::Graveyard)
-            && is_plain_zone(m2_dest, m2_mods, v2::ZoneKind::Hand))
-    {
-        SearchDestination::SplitHandAndGraveyard
-    } else {
-        return Ok(None);
-    };
+    let split_dest =
+        if is_bf_tapped(m1_dest, m1_mods) && is_plain_zone(m2_dest, m2_mods, v2::ZoneKind::Hand) {
+            SearchDestination::SplitBattlefieldTappedAndHand
+        } else if !search_cs.up_to
+            && is_plain_zone(m1_dest, m1_mods, v2::ZoneKind::Hand)
+            && is_plain_zone(m2_dest, m2_mods, v2::ZoneKind::Graveyard)
+        {
+            SearchDestination::SplitHandAndGraveyard
+        } else {
+            return Ok(None);
+        };
     zone_op::lower_split_search_library(
         *actor,
         merged_reveal,
@@ -2545,7 +2683,7 @@ struct CtxFlowSnapshot {
     last_unchosen_binding: Option<BindingId>,
     last_succeeded_binding: Option<BindingId>,
     self_antecedent: bool,
-    delayed_tag_key: Option<TagKey>,
+    delayed_tag_key: Option<(TagKey, Option<spellwake_engine::toolbox::QueryZone>)>,
     last_damage_was_self: bool,
 }
 
@@ -4708,34 +4846,86 @@ fn body_uses_object_anaphora(effects: &[v2::Effect]) -> bool {
     })
 }
 
-fn outer_antecedent_query_for_delayed(acc: &BodyAcc, ctx: &LowerCtx<'_>) -> Option<ObjectQuery> {
+fn infer_zone_dest_query_zone(
+    dest: &EngineZoneDest,
+) -> Option<spellwake_engine::toolbox::QueryZone> {
+    use spellwake_engine::toolbox::QueryZone;
+    match dest {
+        EngineZoneDest::Battlefield { .. } => Some(QueryZone::Battlefield),
+        EngineZoneDest::Exile { .. } => Some(QueryZone::Exile),
+        EngineZoneDest::Graveyard { .. } => Some(QueryZone::Graveyard(Box::new(
+            PlayerSelector::Group(AffectedPlayers::EachPlayer),
+        ))),
+        EngineZoneDest::Hand
+        | EngineZoneDest::Library { .. }
+        | EngineZoneDest::None
+        | EngineZoneDest::RevealOnly
+        | EngineZoneDest::LookOnly { .. }
+        | EngineZoneDest::Delayed(_)
+        | EngineZoneDest::SwapZones { .. } => None,
+    }
+}
+
+fn infer_binding_query_zone(
+    acc: &BodyAcc,
+    binding: BindingId,
+) -> Option<spellwake_engine::toolbox::QueryZone> {
+    use spellwake_engine::toolbox::QueryZone;
+    for ins in acc.instructions.iter().rev() {
+        match ins {
+            Instruction::ZoneOp(spec) if spec.bind_moved == Some(binding) => {
+                return infer_zone_dest_query_zone(&spec.destination);
+            }
+            Instruction::MutateObject(spec) if spec.bind_mutated == Some(binding) => {
+                return Some(QueryZone::Battlefield);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn outer_antecedent_query_for_delayed(
+    acc: &BodyAcc,
+    ctx: &LowerCtx<'_>,
+) -> Option<(ObjectQuery, Option<spellwake_engine::toolbox::QueryZone>)> {
+    use spellwake_engine::toolbox::QueryZone;
     if let Some(binding) = ctx.in_loop_object {
-        return Some(ObjectQuery::Bound(binding));
+        return Some((
+            ObjectQuery::Bound(binding),
+            infer_binding_query_zone(acc, binding),
+        ));
     }
     if let Some(binding) = ctx.last_moved_binding {
-        return Some(ObjectQuery::Bound(binding));
+        return Some((
+            ObjectQuery::Bound(binding),
+            infer_binding_query_zone(acc, binding),
+        ));
     }
     for ins in acc.instructions.iter().rev() {
         match ins {
-            Instruction::CreateTokens { .. } => return Some(ObjectQuery::CreatedTokens),
+            Instruction::CreateTokens { .. } => {
+                return Some((ObjectQuery::CreatedTokens, Some(QueryZone::Battlefield)));
+            }
             Instruction::MutateObject(spec) => {
                 if let Some(binding) = spec.bind_mutated {
-                    return Some(ObjectQuery::Bound(binding));
+                    return Some((ObjectQuery::Bound(binding), Some(QueryZone::Battlefield)));
                 }
                 if matches!(
                     spec.selection,
                     spellwake_engine::toolbox::ZoneSelection::All
                 ) && !matches!(spec.source, ObjectQuery::Empty)
                 {
-                    return Some(spec.source.clone());
+                    return Some((spec.source.clone(), Some(QueryZone::Battlefield)));
                 }
                 break;
             }
             Instruction::ZoneOp(spec) => {
+                let z = infer_zone_dest_query_zone(&spec.destination);
                 if let Some(binding) = spec.bind_moved {
-                    return Some(ObjectQuery::Bound(binding));
+                    return Some((ObjectQuery::Bound(binding), z));
                 }
-                return Some(ObjectQuery::LastMoved);
+                return Some((ObjectQuery::LastMoved, z));
             }
             _ => {}
         }
@@ -4746,10 +4936,27 @@ fn outer_antecedent_query_for_delayed(acc: &BodyAcc, ctx: &LowerCtx<'_>) -> Opti
             BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
         )
     {
-        return Some(ObjectQuery::Targets);
+        let z = match acc.target {
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            } => Some(QueryZone::Battlefield),
+            BodyTarget::Object {
+                zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                ..
+            } => Some(QueryZone::Graveyard(Box::new(PlayerSelector::Group(
+                AffectedPlayers::EachPlayer,
+            )))),
+            BodyTarget::Object {
+                zone: TargetZone::Exile { .. },
+                ..
+            } => Some(QueryZone::Exile),
+            _ => None,
+        };
+        return Some((ObjectQuery::Targets, z));
     }
     if ctx.in_trigger {
-        return Some(ObjectQuery::TriggerSubject);
+        return Some((ObjectQuery::TriggerSubject, None));
     }
     None
 }
@@ -4784,7 +4991,7 @@ fn lower_delayed_trigger(
             } else {
                 None
             };
-            let sub_body = if let Some(outer_query) = tagged_antecedent {
+            let sub_body = if let Some((outer_query, outer_zone)) = tagged_antecedent {
                 let tag_slot = ctx.alloc_binding()?;
                 let tag_key = TagKey::Label(format!("v2:delayed:{}", tag_slot.0));
                 acc.push(Instruction::SetObjectTag {
@@ -4792,7 +4999,7 @@ fn lower_delayed_trigger(
                     key: tag_key.clone(),
                     value: Some(TagValue::Unit),
                 });
-                let prev_tag = ctx.delayed_tag_key.replace(tag_key.clone());
+                let prev_tag = ctx.delayed_tag_key.replace((tag_key.clone(), outer_zone));
                 let prev_has_obj = ctx.has_object_target;
                 let prev_in_trig = ctx.in_trigger;
                 let prev_last_moved = ctx.last_moved_binding;

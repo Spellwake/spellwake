@@ -140,11 +140,13 @@ pub enum ZoneReplacementSubject {
     DamagedBySourceThisTurn,
 }
 
-/// Optional side effects applied immediately after a zone replacement commits (counters or inline followup body).
+/// Optional side effects applied immediately after a zone replacement commits (counters, library placement, or inline followup body).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ZoneReplacementExtra {
     /// Counters placed on the replaced object in its new destination (e.g. Exile with void/time counters).
     pub exile_counters: Option<(crate::effects::CounterKind, u8)>,
+    /// Ordered library placement when replacing into `PublicZoneDestination::Library` without shuffling (e.g. bottom of owner's library).
+    pub library_placement: Option<super::LibraryPlacement>,
     /// Non-targeted inline followup body executed immediately after the replacement commit (e.g. Kalitas Zombie token).
     pub followup_body: Option<Box<super::ExecutableBody>>,
 }

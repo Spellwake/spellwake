@@ -4284,3 +4284,337 @@ fn wave10_cda_token_suspect_exclude_basic_land_and_reanimate_under_owner_control
         "nonbasic Land MUST be exiled by 'other than basic land cards'"
     );
 }
+
+#[test]
+fn gate4_engine_e1_e2_and_b1_b4_live_gameplay() {
+    let vocab = test_vocab();
+
+    // E2: Graveyard replacement with LibraryPlacement::Bottom places the card on LibraryBottom
+    // without shuffling (so a 2-card library with zero entropy succeeds and preserves top card!).
+    let bottom_guardian = compile_card(
+        &vocab,
+        "Bottom Graveyard Guardian",
+        "Creature \u{2014} Beast",
+        Some("{2}{G}"),
+        Some(("2", "2")),
+        "If this creature would be put into a graveyard from anywhere, put it on the bottom of its owner's library instead.",
+    );
+    let destroy_spell = compile_card(
+        &vocab,
+        "Clean Destroy Test",
+        "Instant",
+        Some("{B}"),
+        None,
+        "Destroy target creature.",
+    );
+    let top_marker = compile_card(&vocab, "Top Marker", "Artifact", Some("{1}"), None, "");
+    let mid_marker = compile_card(&vocab, "Mid Marker", "Artifact", Some("{2}"), None, "");
+
+    let mut game_e2 = start_game_with_padding(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: bottom_guardian,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: destroy_spell,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryBottom,
+                program: top_marker,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryBottom,
+                program: mid_marker,
+            },
+        ],
+        &[(ALICE, ManaType::Black, 1)],
+        0,
+    );
+    let guardian_id = object(&game_e2, 1).id();
+    game_e2 = advance(
+        &game_e2,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game_e2, 2).id(),
+            target: Some(TargetRef::Object(guardian_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    // Resolves cleanly with ZERO shuffle entropy because LibraryPlacement::Bottom does not shuffle!
+    game_e2 = resolve_top(&game_e2);
+    assert_eq!(
+        object(&game_e2, 1).zone(),
+        ObjectZone::Library(ALICE),
+        "E2: destroyed creature with bottom-of-library replacement must go to Alice's library"
+    );
+    let lib_order: Vec<CardId> = game_e2
+        .execution()
+        .window()
+        .cards()
+        .library(ALICE)
+        .iter()
+        .filter_map(|id| game_e2.execution().window().cards().get(*id)?.card_id())
+        .collect();
+    assert_eq!(
+        lib_order.first().copied(),
+        Some(CardId(3)),
+        "E2: top card of library must stay untouched (no shuffle, not placed on top)"
+    );
+    assert_eq!(
+        lib_order.last().copied(),
+        Some(CardId(1)),
+        "E2: replaced card must be placed on the bottom of Alice's library"
+    );
+
+    // E1 live gameplay: Destroy target creature (populates cursor.results.last_action_lki), then
+    // SearchLibrary (must clear last_action_lki), then AdjustLife(Gain(LastActionMatchingCount(any))).
+    // With E1 fixed, Alice gains 0 life (stays at 20); without E1, stale LKI would gain 1 life.
+    let mut e1_spell = compile_card(
+        &vocab,
+        "Destroy Then Search",
+        "Sorcery",
+        Some("{1}{B}"),
+        None,
+        "Destroy target creature. Search your library for a basic land card, put it into your hand, then shuffle.",
+    );
+    if let spellwake_engine::program::ProgramKind::Spell(ref mut spell) = e1_spell.kind {
+        spell
+            .body
+            .instructions
+            .push(spellwake_engine::program::Instruction::AdjustLife(
+                Box::new(spellwake_engine::toolbox::AdjustLifeSpec::new(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::toolbox::LifeOp::Gain(
+                        spellwake_engine::program::ValueExpr::LastActionMatchingCount(
+                            Box::default(),
+                        ),
+                    ),
+                )),
+            ));
+    } else {
+        panic!("expected spell program for E1");
+    }
+    assert!(
+        e1_spell.validate(&vocab).is_ok(),
+        "E1 test program must validate"
+    );
+    let victim = compile_card(
+        &vocab,
+        "E1 Victim",
+        "Creature \u{2014} Bear",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+    let forest = compile_card(
+        &vocab,
+        "Forest",
+        "Basic Land \u{2014} Forest",
+        None,
+        None,
+        "",
+    );
+    let mut game_e1 = start_game_with_padding(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: e1_spell,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: victim,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryBottom,
+                program: forest,
+            },
+        ],
+        &[(ALICE, ManaType::Black, 2)],
+        1,
+    );
+    let victim_id = object(&game_e1, 2).id();
+    let forest_id = object(&game_e1, 3).id();
+    game_e1 = advance(
+        &game_e1,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game_e1, 1).id(),
+            target: Some(TargetRef::Object(victim_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 2)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game_e1 = resolve_top(&game_e1);
+    assert!(
+        matches!(
+            game_e1.pending_decision().map(|p| p.frame()),
+            Some(RuleFrame::LibraryTop(_))
+        ),
+        "E1: expected library search prompt after destroying creature"
+    );
+    game_e1 = reply(
+        &game_e1,
+        DecisionReply::LibraryTop(LibraryTopReply::Search {
+            selected: Some(forest_id),
+        }),
+    );
+    assert_eq!(
+        object(&game_e1, 2).zone(),
+        ObjectZone::Graveyard(BOB),
+        "E1: target creature must have been destroyed"
+    );
+    assert_eq!(
+        object(&game_e1, 3).zone(),
+        ObjectZone::Hand(ALICE),
+        "E1: searched Forest must be in Alice's hand"
+    );
+    assert_eq!(
+        life(&game_e1, ALICE),
+        20.into(),
+        "E1: SearchLibrary must clear last_action_lki so stale destroyed creature does not leak into LastActionMatchingCount"
+    );
+
+    // B1 + B4 live gameplay:
+    //  - B1: Casting a sorcery triggers "Whenever you cast an instant or sorcery spell, create a
+    //    token that's a copy of this creature." -> creates a battlefield creature token copy!
+    //  - B4: "Exile target creature. Return that card to the battlefield under its owner's control
+    //    at the beginning of the next end step." -> returns the tagged creature from Exile!
+    let clone_mage = compile_card(
+        &vocab,
+        "Spell Clone Mage",
+        "Creature \u{2014} Shapeshifter",
+        Some("{2}{U}"),
+        Some(("2", "2")),
+        "Whenever you cast an instant or sorcery spell, create a token that's a copy of this creature.",
+    );
+    let blink_spell = compile_card(
+        &vocab,
+        "Delayed Blink Test",
+        "Instant",
+        Some("{W}"),
+        None,
+        "Exile target creature. Return that card to the battlefield under its owner's control at the beginning of the next end step.",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Forest Bear",
+        "Creature \u{2014} Bear",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: clone_mage,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: blink_spell,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: bear,
+            },
+        ],
+        &[(ALICE, ManaType::White, 1)],
+    );
+
+    let bear_id = object(&game, 3).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 2).id(),
+            target: Some(TargetRef::Object(bear_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::White, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    // Top of stack is Spell Clone Mage's SpellCast trigger (creates a token copy of Spell Clone Mage).
+    game = resolve_top(&game);
+    let token_count = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|o| o.zone() == ObjectZone::Battlefield && o.is_token())
+        .count();
+    assert_eq!(
+        token_count, 1,
+        "B1: SpellCast trigger with TokenSpec::CopyOf(SelfObject) must create 1 battlefield token copy"
+    );
+
+    // Next on stack is Delayed Blink Test -> exiles Bear and schedules end-step return from Exile.
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 3).zone(),
+        ObjectZone::Exile,
+        "B4: Bear must be exiled before the end step"
+    );
+
+    // Advance to End Step; delayed trigger fires and returns Bear from Exile to Battlefield!
+    for _ in 0..30 {
+        if game.turn().is_some_and(|t| t.position().step == Step::End)
+            && !game.execution().window().entries().is_empty()
+        {
+            break;
+        }
+        game = pass(&game);
+    }
+    assert_eq!(
+        game.turn().unwrap().position().step,
+        Step::End,
+        "should reach End step"
+    );
+    assert_eq!(
+        game.execution().window().entries().len(),
+        1,
+        "B4: delayed end-step return trigger should be on the stack"
+    );
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 3).zone(),
+        ObjectZone::Battlefield,
+        "B4: delayed end-step trigger must find the tagged Bear in Exile and return it to the battlefield"
+    );
+}

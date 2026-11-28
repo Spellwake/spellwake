@@ -62,12 +62,13 @@ pub(crate) struct LowerCtx<'a> {
     pub last_succeeded_binding: Option<BindingId>,
     pub self_antecedent: bool,
     pub attached_host_antecedent: bool,
-    pub delayed_tag_key: Option<TagKey>,
+    pub delayed_tag_key: Option<(TagKey, Option<spellwake_engine::toolbox::QueryZone>)>,
     pub is_spell_body: bool,
     pub last_damage_was_self: bool,
-    /// Number of top-level abilities (`compiled.abilities.len()`) on the current face, used to
-    /// verify when `CopyException::HasThisAbility` is exact with `CopyExceptions::keep_abilities`.
-    pub face_ability_count: usize,
+    /// True only when the current face has strictly one top-level ability and zero printed
+    /// keywords, static abilities, or replacements, so `CopyException::HasThisAbility` is
+    /// exact with `CopyExceptions::keep_abilities`.
+    pub has_only_single_ability: bool,
     /// Binding holding the boolean result (`true` if a card was put into `zone`, `false` otherwise)
     /// for downstream `"If you didn't put a card into <zone> this way"` checks.
     pub last_zone_put: Option<(spellwake_oracle_compiler::v2::ir::ZoneKind, ZonePutTracker)>,
@@ -114,7 +115,7 @@ impl<'a> LowerCtx<'a> {
             delayed_tag_key: None,
             is_spell_body: false,
             last_damage_was_self: false,
-            face_ability_count: 0,
+            has_only_single_ability: false,
             last_zone_put: None,
             inside_control_flow_depth: 0,
         }

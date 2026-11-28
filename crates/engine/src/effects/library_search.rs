@@ -554,6 +554,7 @@ impl EffectWindow {
             )?;
             if let Some(cursor) = next.resolution_cursor_mut() {
                 cursor.results.last_moved_objects.clear();
+                cursor.results.last_action_lki.clear();
                 cursor.results.last_action_count = Some(0.into());
                 cursor.results.last_action_succeeded = false;
             }
@@ -690,6 +691,7 @@ impl EffectWindow {
         )?;
         if let Some(cursor) = next.resolution_cursor_mut() {
             cursor.results.last_moved_objects = moved_id.into_iter().collect();
+            cursor.results.last_action_lki.clear();
             cursor.results.last_action_count = Some(i64::from(moved_id.is_some()).into());
             cursor.results.last_action_succeeded = moved_id.is_some();
         }
@@ -1635,6 +1637,7 @@ impl EffectWindow {
                 Some(i64::try_from(moved_ids.len()).unwrap_or(i64::MAX).into());
             cursor.results.last_action_succeeded = !moved_ids.is_empty();
             cursor.results.last_moved_objects = moved_ids;
+            cursor.results.last_action_lki.clear();
         }
         self.advance_instruction()?;
         Ok((entropy, shuffle))

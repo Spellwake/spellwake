@@ -544,6 +544,491 @@ mod tests {
     }
 
     #[test]
+    fn gate4_b1_b2_b3_b4_fail_closed_and_semantics_guards() {
+        use spellwake_engine::{
+            program::Instruction,
+            toolbox::{ObjectQuery, QueryZone},
+        };
+        use spellwake_oracle_compiler::{ast, v2::ir as v2};
+
+        let vocab = test_vocab();
+
+        // B1: TokenSpec::CopyOf(SelfObject) inside a SpellCast trigger creates a token copy of Self,
+        // never a StackOp copying the triggering spell.
+        let b1_card = test_card(
+            "Spell Clone Trigger",
+            "Creature \u{2014} Human",
+            Some("{2}{U}"),
+            Some(("2", "2")),
+            "Whenever you cast an instant or sorcery spell, create a token that's a copy of this creature.",
+        );
+        let b1_prog = compile_v2_with_reason(&b1_card, &vocab).expect("B1 token copy should lower");
+        assert!(b1_prog.validate(&vocab).is_ok());
+        assert!(
+            !b1_prog.triggered[0]
+                .body
+                .instructions
+                .iter()
+                .any(|ins| matches!(ins, Instruction::StackOp(_))),
+            "B1: TokenSpec::CopyOf(SelfObject) must NOT lower to Instruction::StackOp"
+        );
+        assert!(
+            b1_prog.triggered[0]
+                .body
+                .instructions
+                .iter()
+                .any(|ins| matches!(ins, Instruction::MutateObject(_))),
+            "B1: TokenSpec::CopyOf(SelfObject) must emit a token-copy MutateObject"
+        );
+
+        // B1b: Effect::CopyObject(SelfObject) inside a permanent's SpellCast trigger must NOT map
+        // to StackCopyTarget::TriggeringSpell.
+        let mut ctx_b1 = LowerCtx::new(&vocab, "Perm", "Perm");
+        ctx_b1.in_trigger = true;
+        ctx_b1.trigger_is_spell_cast = true;
+        let mut acc_b1 = crate::v2_lowering::ctx::BodyAcc::new();
+        crate::v2_lowering::token::lower_copy_object(
+            v2::PlayerRef::You,
+            &v2::SubjectRef::SelfObject,
+            &v2::ValueExpr::Const(1),
+            &v2::EntryModifiers::default(),
+            &[],
+            &mut acc_b1,
+            &mut ctx_b1,
+        )
+        .expect("token copy of self in trigger");
+        assert!(
+            !acc_b1
+                .instructions
+                .iter()
+                .any(|ins| matches!(ins, Instruction::StackOp(_))),
+            "B1: CopyObject(SelfObject) on a permanent trigger must NOT emit StackOp(TriggeringSpell)"
+        );
+
+        // B2: Second distinct TargetObject embedded in ValueExpr must trigger multiple-distinct-targets,
+        // never silently alias to Target #1.
+        let mut ctx_b2 = LowerCtx::new(&vocab, "Two Target Stat", "Two Target Stat");
+        let mut acc_b2 = crate::v2_lowering::ctx::BodyAcc::new();
+        let creature_target = v2::SubjectRef::TargetObject {
+            filter: Box::new(v2::ObjectFilter {
+                any_types: ast::CardTypeMask::CREATURE,
+                ..v2::ObjectFilter::default()
+            }),
+            count: v2::TargetCount::Exact(1),
+            another: false,
+        };
+        let artifact_target = v2::SubjectRef::TargetObject {
+            filter: Box::new(v2::ObjectFilter {
+                any_types: ast::CardTypeMask::ARTIFACT,
+                ..v2::ObjectFilter::default()
+            }),
+            count: v2::TargetCount::Exact(1),
+            another: false,
+        };
+        let (bt1, tc1) =
+            crate::v2_lowering::atoms::lower_subject_to_target(&creature_target, &mut ctx_b2)
+                .unwrap();
+        acc_b2.register_target(bt1, tc1).unwrap();
+        let val_with_second_target = v2::ValueExpr::ObjectStat {
+            subject: Box::new(artifact_target),
+            stat: ast::StatKind::ManaValue,
+        };
+        let b2_err = crate::v2_lowering::effect::register_value_expr_player_targets(
+            &val_with_second_target,
+            &mut acc_b2,
+            &mut ctx_b2,
+        )
+        .expect_err("B2: distinct TargetObject inside ValueExpr must not silently alias target #1");
+        assert_eq!(b2_err.reason_code(), "v2:multiple-distinct-targets");
+
+        // B3a: AttachedTo(Anaphora(It)) without self_antecedent/target/trigger, or with
+        // last_moved_binding set, must fail closed.
+        let mut ctx_b3 = LowerCtx::new(&vocab, "Attach Guard", "Attach Guard");
+        let attached_it = v2::ObjectFilter {
+            any_types: ast::CardTypeMask::ENCHANTMENT,
+            predicates: vec![v2::FilterPredicate::AttachedTo(Box::new(
+                v2::SubjectRef::Anaphora(v2::AnaphoraRef::It),
+            ))],
+            ..v2::ObjectFilter::default()
+        };
+        assert_eq!(
+            crate::v2_lowering::filter::lower_object_filter(&attached_it, &mut ctx_b3)
+                .expect_err("B3a: unbound AttachedTo(It) must fail closed")
+                .reason_code(),
+            "v2:filter:pred:attached-to"
+        );
+        ctx_b3.self_antecedent = true;
+        ctx_b3.last_moved_binding = Some(ctx_b3.alloc_binding().unwrap());
+        assert_eq!(
+            crate::v2_lowering::filter::lower_object_filter(&attached_it, &mut ctx_b3)
+                .expect_err("B3a: AttachedTo(It) with last_moved_binding must fail closed")
+                .reason_code(),
+            "v2:filter:pred:attached-to"
+        );
+
+        // B3b: SharesPropertyWith(EquippedCreature) in trigger must fail closed (never TriggerSubject).
+        let mut ctx_b3b = LowerCtx::new(&vocab, "Share Guard", "Share Guard");
+        ctx_b3b.in_trigger = true;
+        let shares_equipped = v2::ObjectFilter {
+            any_types: ast::CardTypeMask::CREATURE,
+            predicates: vec![v2::FilterPredicate::SharesPropertyWith {
+                property: v2::SharedProperty::CreatureType,
+                reference: Box::new(v2::SubjectRef::Anaphora(v2::AnaphoraRef::EquippedCreature)),
+                negated: false,
+            }],
+            ..v2::ObjectFilter::default()
+        };
+        assert_eq!(
+            crate::v2_lowering::filter::lower_object_filter(&shares_equipped, &mut ctx_b3b)
+                .expect_err("B3b: SharesPropertyWith(EquippedCreature) must fail closed")
+                .reason_code(),
+            "v2:filter:pred:shares-property-ref"
+        );
+
+        // B4: Delayed step trigger on an exiled target tags with QueryZone::Exile (not Battlefield),
+        // and inner TargetObject takes precedence over outer delayed_tag_key.
+        let b4_card = test_card(
+            "Blink Test",
+            "Instant",
+            Some("{W}"),
+            None,
+            "Exile target creature. Return that card to the battlefield under its owner's control at the beginning of the next end step.",
+        );
+        let b4_prog = compile_v2_with_reason(&b4_card, &vocab).expect("B4 blink should compile");
+        assert!(b4_prog.validate(&vocab).is_ok());
+        let spell_body = match &b4_prog.kind {
+            spellwake_engine::program::ProgramKind::Spell(spell) => &spell.body,
+            _ => panic!("expected spell program"),
+        };
+        let delayed_body = spell_body
+            .instructions
+            .iter()
+            .find_map(|ins| match ins {
+                Instruction::ScheduleDelayedStepTrigger { body, .. } => Some(body),
+                _ => None,
+            })
+            .expect("expected delayed step trigger");
+        let has_exile_tag_query = delayed_body.instructions.iter().any(|ins| {
+            matches!(
+                ins,
+                Instruction::ZoneOp(spec)
+                    if matches!(
+                        spec.source,
+                        ObjectQuery::Tagged {
+                            zone: Some(QueryZone::Exile),
+                            ..
+                        }
+                    )
+            )
+        });
+        assert!(
+            has_exile_tag_query,
+            "B4: delayed return of exiled card must query ObjectQuery::Tagged with QueryZone::Exile"
+        );
+
+        let mut ctx_b4 = LowerCtx::new(&vocab, "Inner Precedence", "Inner Precedence");
+        ctx_b4.delayed_tag_key = Some((
+            spellwake_engine::toolbox::TagKey::Label("v2:delayed:1".to_string()),
+            Some(QueryZone::Battlefield),
+        ));
+        let mut acc_b4 = crate::v2_lowering::ctx::BodyAcc::new();
+        acc_b4
+            .register_target(
+                spellwake_engine::program::BodyTarget::SINGLE_PERMANENT,
+                v2::TargetCount::Exact(1),
+            )
+            .unwrap();
+        let inner_q = crate::v2_lowering::atoms::lower_subject_to_query(
+            &v2::SubjectRef::Anaphora(v2::AnaphoraRef::It),
+            &mut acc_b4,
+            &mut ctx_b4,
+        )
+        .unwrap();
+        assert_eq!(
+            inner_q,
+            ObjectQuery::Targets,
+            "B4: inner target must take precedence over outer delayed_tag_key"
+        );
+    }
+
+    #[test]
+    fn gate4_b5_b6_b7_b8_m2_m5_fail_closed_guards() {
+        use spellwake_oracle_compiler::{ast, v2::ir as v2};
+
+        let vocab = test_vocab();
+
+        // B5: Split search with count=3 or inverted (Hand, Battlefield tapped) must NOT fuse.
+        let basic_land_filter = v2::ObjectFilter {
+            any_types: ast::CardTypeMask::LAND,
+            required_supertypes: ast::SupertypeMask::BASIC,
+            any_card: true,
+            ..v2::ObjectFilter::default()
+        };
+        let inverted_split_effects = vec![
+            v2::Effect::ZoneOp {
+                actor: v2::PlayerRef::You,
+                op: v2::ZoneOpKind::SearchLibrary {
+                    reveal: true,
+                    shuffle: false,
+                    exact: false,
+                },
+                subject: v2::SubjectRef::Group(Box::new(basic_land_filter.clone())),
+                from: vec![v2::ZoneRef {
+                    zone: v2::ZoneKind::Library,
+                    owner: v2::ZoneOwner::You,
+                }],
+                to: None,
+                modifiers: v2::EntryModifiers::default(),
+                except: None,
+                count: Some(v2::CountSpec {
+                    count: v2::ValueExpr::Const(2),
+                    up_to: true,
+                    any_number: false,
+                }),
+            },
+            v2::Effect::ZoneOp {
+                actor: v2::PlayerRef::You,
+                op: v2::ZoneOpKind::Move,
+                subject: v2::SubjectRef::OneOfThem(v2::ValueExpr::Const(1)),
+                from: vec![],
+                to: Some(v2::ZoneDest {
+                    zone: v2::ZoneKind::Hand,
+                    owner: v2::ZoneOwner::You,
+                    library_position: None,
+                    library_order: None,
+                    under_control: None,
+                }),
+                modifiers: v2::EntryModifiers::default(),
+                except: None,
+                count: None,
+            },
+            v2::Effect::ZoneOp {
+                actor: v2::PlayerRef::You,
+                op: v2::ZoneOpKind::Move,
+                subject: v2::SubjectRef::Anaphora(v2::AnaphoraRef::OtherPile),
+                from: vec![],
+                to: Some(v2::ZoneDest {
+                    zone: v2::ZoneKind::Battlefield,
+                    owner: v2::ZoneOwner::You,
+                    library_position: None,
+                    library_order: None,
+                    under_control: None,
+                }),
+                modifiers: v2::EntryModifiers {
+                    tapped: true,
+                    ..v2::EntryModifiers::default()
+                },
+                except: None,
+                count: None,
+            },
+            v2::Effect::ZoneOp {
+                actor: v2::PlayerRef::You,
+                op: v2::ZoneOpKind::Shuffle,
+                subject: v2::SubjectRef::Player(v2::PlayerRef::You),
+                from: vec![],
+                to: None,
+                modifiers: v2::EntryModifiers::default(),
+                except: None,
+                count: None,
+            },
+        ];
+        let mut ctx_b5 = LowerCtx::new(&vocab, "Inverted Split", "Inverted Split");
+        assert!(
+            crate::v2_lowering::effect::lower_effect_body(&inverted_split_effects, &mut ctx_b5)
+                .is_err(),
+            "B5: inverted (Hand, Battlefield tapped) split search must fail closed"
+        );
+
+        // B6: exile_if_dies fusion must NOT strip extra ObjectFilter qualifiers (e.g. color).
+        let b6_effects = vec![
+            v2::Effect::DealDamage {
+                source: v2::SubjectRef::SelfObject,
+                target: v2::SubjectRef::AnyTarget,
+                amount: v2::ValueExpr::Const(2),
+                divided_by: None,
+            },
+            v2::Effect::ApplyReplacement {
+                replacement: Box::new(v2::Replacement::EventInstead {
+                    event: v2::TriggerEvent::Dies {
+                        subject: v2::SubjectRef::Group(Box::new(v2::ObjectFilter {
+                            any_types: ast::CardTypeMask::CREATURE,
+                            any_colors: ast::ColorMask::GREEN,
+                            predicates: vec![v2::FilterPredicate::AffectedByPriorAction(
+                                v2::PriorActionKind::DealtDamageThisWay,
+                            )],
+                            ..v2::ObjectFilter::default()
+                        })),
+                    },
+                    instead: vec![v2::Effect::ZoneOp {
+                        actor: v2::PlayerRef::You,
+                        op: v2::ZoneOpKind::Exile {
+                            face_down: false,
+                            counters: None,
+                        },
+                        subject: v2::SubjectRef::Anaphora(v2::AnaphoraRef::It),
+                        from: vec![],
+                        to: None,
+                        modifiers: v2::EntryModifiers::default(),
+                        except: None,
+                        count: None,
+                    }],
+                }),
+                duration: v2::Duration::UntilEndOfTurn,
+            },
+        ];
+        let mut ctx_b6 = LowerCtx::new(&vocab, "Colored Exile", "Colored Exile");
+        let b6_body = crate::v2_lowering::effect::lower_effect_body(&b6_effects, &mut ctx_b6)
+            .expect("B6: falls through to qualified temporary replacement without fusing");
+        let fused_deal_damage = b6_body.instructions.iter().any(|ins| {
+            matches!(
+                ins,
+                spellwake_engine::program::Instruction::DealDamage(spec) if spec.exile_if_dies
+            )
+        });
+        assert!(
+            !fused_deal_damage,
+            "B6: qualified Dies(green creature dealt damage) => Exile must NOT fuse into unconditional exile_if_dies"
+        );
+        // And when Exile carries an unsupported modifier (`except`), neither fusion nor fallback succeeds.
+        let mut b6_except_effects = b6_effects;
+        if let v2::Effect::ApplyReplacement { replacement, .. } = &mut b6_except_effects[1]
+            && let v2::Replacement::EventInstead { instead, .. } = replacement.as_mut()
+            && let v2::Effect::ZoneOp { except, .. } = &mut instead[0]
+        {
+            *except = Some(Box::new(v2::SubjectRef::SelfObject));
+        }
+        let mut ctx_b6_except = LowerCtx::new(&vocab, "Except Exile", "Except Exile");
+        assert!(
+            crate::v2_lowering::effect::lower_effect_body(&b6_except_effects, &mut ctx_b6_except)
+                .is_err(),
+            "B6: Exile with non-empty `except` must NOT fuse and must fail closed"
+        );
+
+        // B7: KeepColorAcrossSteps(RED) on Green mana or with non-EOT duration must fail closed.
+        let b7_color_mismatch = vec![
+            v2::Effect::MutatePlayer {
+                player: v2::PlayerRef::You,
+                mutation: v2::PlayerMutation::AddMana(v2::ManaSpec::Exact(v2::ManaCost {
+                    symbols: vec![v2::ManaSymbol::Green],
+                })),
+                duration: v2::Duration::Instant,
+            },
+            v2::Effect::MutatePlayer {
+                player: v2::PlayerRef::You,
+                mutation: v2::PlayerMutation::ManaRule(v2::ManaRuleKind::KeepColorAcrossSteps(
+                    ast::ColorMask::RED,
+                )),
+                duration: v2::Duration::UntilEndOfTurn,
+            },
+        ];
+        let mut ctx_b7 = LowerCtx::new(&vocab, "Mana Rule Guard", "Mana Rule Guard");
+        assert!(
+            crate::v2_lowering::effect::lower_effect_body(&b7_color_mismatch, &mut ctx_b7).is_err(),
+            "B7: KeepColorAcrossSteps(RED) must NOT fuse onto Green mana"
+        );
+        let b7_bad_duration = vec![
+            v2::Effect::MutatePlayer {
+                player: v2::PlayerRef::You,
+                mutation: v2::PlayerMutation::AddMana(v2::ManaSpec::Exact(v2::ManaCost {
+                    symbols: vec![v2::ManaSymbol::Red],
+                })),
+                duration: v2::Duration::Instant,
+            },
+            v2::Effect::MutatePlayer {
+                player: v2::PlayerRef::You,
+                mutation: v2::PlayerMutation::ManaRule(v2::ManaRuleKind::KeepColorAcrossSteps(
+                    ast::ColorMask::RED,
+                )),
+                duration: v2::Duration::UntilYourNextTurn,
+            },
+        ];
+        assert!(
+            crate::v2_lowering::effect::lower_effect_body(&b7_bad_duration, &mut ctx_b7).is_err(),
+            "B7: KeepColorAcrossSteps with UntilYourNextTurn must NOT fuse into RetainedUntilCleanup"
+        );
+
+        // B8a: CopyException::HasThisAbility with a printed keyword must fail closed.
+        let b8a_card = test_card(
+            "Flying Mimic",
+            "Creature \u{2014} Human",
+            Some("{2}{U}"),
+            Some(("1", "1")),
+            "Flying\n{U}: This creature becomes a copy of target creature, except it has this ability.",
+        );
+        assert_eq!(
+            compile_v2_with_reason(&b8a_card, &vocab)
+                .expect_err("B8a: HasThisAbility on a creature with Flying must fail closed")
+                .reason_code(),
+            "v2:copy-exception-has-this-ability"
+        );
+
+        // B8b: AdditionalCombat { followed_by_main: false } must fail closed.
+        let b8b_effects = vec![v2::Effect::MutatePlayer {
+            player: v2::PlayerRef::You,
+            mutation: v2::PlayerMutation::AdditionalCombat {
+                followed_by_main: false,
+            },
+            duration: v2::Duration::Instant,
+        }];
+        let mut ctx_b8b = LowerCtx::new(&vocab, "No Main Combat", "No Main Combat");
+        assert_eq!(
+            crate::v2_lowering::effect::lower_effect_body(&b8b_effects, &mut ctx_b8b)
+                .expect_err("B8b: AdditionalCombat without main phase must fail closed")
+                .reason_code(),
+            "v2:additional-combat-without-main"
+        );
+
+        // M2: Permanent NextSpellModifier with non-empty filter.zones must fail closed.
+        let mut m2_prog = spellwake_engine::program::Program::artifact(None, vec![]);
+        let mut ctx_m2 = LowerCtx::new(&vocab, "Zoned First Spell", "Zoned First Spell");
+        let m2_static = v2::StaticAbility::NextSpellModifier {
+            filter: v2::ObjectFilter {
+                any_types: ast::CardTypeMask::INSTANT,
+                zones: vec![v2::ZoneRef {
+                    zone: v2::ZoneKind::Graveyard,
+                    owner: v2::ZoneOwner::You,
+                }],
+                ..v2::ObjectFilter::default()
+            },
+            effect: Box::new(v2::StaticAbility::CostModifier {
+                subject: v2::ObjectFilter::default(),
+                delta: v2::ManaCost {
+                    symbols: vec![v2::ManaSymbol::Generic(1)],
+                },
+                less: true,
+                scale: None,
+                min_mana: None,
+                condition: None,
+            }),
+        };
+        assert_eq!(
+            crate::v2_lowering::static_ability::lower_static_into_program(
+                &m2_static,
+                &mut m2_prog,
+                &mut ctx_m2,
+            )
+            .expect_err("M2: NextSpellModifier with non-empty zones must fail closed")
+            .reason_code(),
+            "v2:static-next-spell-modifier-permanent"
+        );
+
+        // M5: Overload on an `another: true` or non-Exact(1) target must fail closed.
+        let m5_card = test_card(
+            "Bad Overload",
+            "Sorcery",
+            Some("{1}{R}"),
+            None,
+            "Destroy up to two target artifacts.\nOverload {4}{R}",
+        );
+        assert_eq!(
+            compile_v2_with_reason(&m5_card, &vocab)
+                .expect_err("M5: Overload on UpTo(2) target must fail closed")
+                .reason_code(),
+            "v2:kw:overload"
+        );
+    }
+
+    #[test]
     #[ignore = "uses saved dated Scryfall bulk corpus and creature vocabulary"]
     fn v2_lowering_corpus_coverage_audit() {
         let (inventory, vocabulary, _registry) =

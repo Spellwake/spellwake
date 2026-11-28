@@ -1904,12 +1904,25 @@ fn try_lower_temp_exile_replacement(
                     counters: None,
                 },
             subject: dest_subject,
+            from,
+            to,
+            modifiers,
+            except,
+            count,
             ..
         },
     ] = instead
     else {
         return Ok(None);
     };
+    if !from.is_empty()
+        || to.is_some()
+        || except.is_some()
+        || count.is_some()
+        || !crate::v2_lowering::effect::is_empty_entry_modifiers(modifiers)
+    {
+        return Ok(None);
+    }
     if !is_replaced_event_anaphora(dest_subject) {
         return Ok(None);
     }
@@ -2038,7 +2051,7 @@ fn try_lower_zone_replacement(
     let matches_replaced = |s: &v2::SubjectRef| {
         matches!(s, v2::SubjectRef::SelfObject) || is_replaced_event_anaphora(s)
     };
-    let (replace_with, exile_counters) = match first {
+    let (replace_with, exile_counters, library_placement) = match first {
         v2::Effect::ZoneOp {
             op:
                 v2::ZoneOpKind::Exile {
@@ -2046,8 +2059,19 @@ fn try_lower_zone_replacement(
                     counters,
                 },
             subject: dest_subj,
+            from,
+            to,
+            modifiers,
+            except,
+            count,
             ..
-        } if matches_replaced(dest_subj) => {
+        } if matches_replaced(dest_subj)
+            && from.is_empty()
+            && to.is_none()
+            && except.is_none()
+            && count.is_none()
+            && crate::v2_lowering::effect::is_empty_entry_modifiers(modifiers) =>
+        {
             let ctr = match counters {
                 None => None,
                 Some((k, v)) => {
@@ -2066,30 +2090,46 @@ fn try_lower_zone_replacement(
                     Some((ek, n))
                 }
             };
-            (PublicZoneDestination::Exile, ctr)
+            (PublicZoneDestination::Exile, ctr, None)
         }
         v2::Effect::ZoneOp {
             op: v2::ZoneOpKind::Move,
             subject: dest_subj,
             to: Some(dest),
             ..
-        } if matches_replaced(dest_subj) => {
-            let pub_dest = match dest.zone {
-                v2::ZoneKind::Exile => PublicZoneDestination::Exile,
-                v2::ZoneKind::Hand => PublicZoneDestination::Hand,
-                v2::ZoneKind::Library => PublicZoneDestination::Library,
-                v2::ZoneKind::Battlefield => PublicZoneDestination::Battlefield,
-                _ => return Ok(None),
-            };
-            (pub_dest, None)
-        }
+        } if matches_replaced(dest_subj) => match dest.zone {
+            v2::ZoneKind::Exile => (PublicZoneDestination::Exile, None, None),
+            v2::ZoneKind::Hand => (PublicZoneDestination::Hand, None, None),
+            v2::ZoneKind::Library => {
+                if dest.library_order.is_some()
+                    || !matches!(
+                        dest.owner,
+                        v2::ZoneOwner::Default | v2::ZoneOwner::ItsOwner | v2::ZoneOwner::You
+                    )
+                {
+                    return Ok(None);
+                }
+                let placement = match dest.library_position {
+                    Some(v2::LibraryPosition::Bottom) => {
+                        Some(spellwake_engine::program::LibraryPlacement::Bottom)
+                    }
+                    Some(v2::LibraryPosition::Top) => {
+                        Some(spellwake_engine::program::LibraryPlacement::Top)
+                    }
+                    _ => return Ok(None),
+                };
+                (PublicZoneDestination::Library, None, placement)
+            }
+            v2::ZoneKind::Battlefield => (PublicZoneDestination::Battlefield, None, None),
+            _ => return Ok(None),
+        },
         v2::Effect::ZoneOp {
             op: v2::ZoneOpKind::Shuffle,
             subject: dest_subj,
             to: Some(dest),
             ..
         } if matches_replaced(dest_subj) && dest.zone == v2::ZoneKind::Library => {
-            (PublicZoneDestination::Library, None)
+            (PublicZoneDestination::Library, None, None)
         }
         _ => return Ok(None),
     };
@@ -2179,14 +2219,16 @@ fn try_lower_zone_replacement(
         None
     };
 
-    let extra = if exile_counters.is_some() || followup_body.is_some() {
-        Some(ZoneReplacementExtra {
-            exile_counters,
-            followup_body,
-        })
-    } else {
-        None
-    };
+    let extra =
+        if exile_counters.is_some() || library_placement.is_some() || followup_body.is_some() {
+            Some(ZoneReplacementExtra {
+                exile_counters,
+                library_placement,
+                followup_body,
+            })
+        } else {
+            None
+        };
 
     Ok(Some((
         ZoneReplacementAbility {

@@ -2864,14 +2864,6 @@ pub(crate) fn lower_anaphora_to_query(
         | v2::AnaphoraRef::ThoseCreatures
         | v2::AnaphoraRef::ThosePermanents
         | v2::AnaphoraRef::ThoseCards => {
-            if let Some(tag_key) = &ctx.delayed_tag_key {
-                return Ok(ObjectQuery::Tagged {
-                    key: tag_key.clone(),
-                    value: Some(spellwake_engine::toolbox::TagValue::Unit),
-                    zone: Some(QueryZone::Battlefield),
-                    filter: None,
-                });
-            }
             if let Some(binding) = ctx.in_loop_object {
                 return Ok(ObjectQuery::Bound(binding));
             }
@@ -2880,6 +2872,14 @@ pub(crate) fn lower_anaphora_to_query(
             }
             if has_obj_target {
                 return Ok(ObjectQuery::Targets);
+            }
+            if let Some((tag_key, tag_zone)) = &ctx.delayed_tag_key {
+                return Ok(ObjectQuery::Tagged {
+                    key: tag_key.clone(),
+                    value: Some(spellwake_engine::toolbox::TagValue::Unit),
+                    zone: tag_zone.clone(),
+                    filter: None,
+                });
             }
             if ctx.in_trigger {
                 return Ok(ObjectQuery::TriggerSubject);
@@ -2939,17 +2939,17 @@ pub(crate) fn lower_anaphora_to_query(
             Err(LoweringError::Unsupported("v2:subject:unbound-anaphora"))
         }
         v2::AnaphoraRef::SameTarget => {
-            if let Some(tag_key) = &ctx.delayed_tag_key {
-                Ok(ObjectQuery::Tagged {
-                    key: tag_key.clone(),
-                    value: Some(spellwake_engine::toolbox::TagValue::Unit),
-                    zone: Some(QueryZone::Battlefield),
-                    filter: None,
-                })
-            } else if has_obj_target {
+            if has_obj_target {
                 Ok(ObjectQuery::Targets)
             } else if let Some(binding) = ctx.last_moved_binding {
                 Ok(ObjectQuery::Bound(binding))
+            } else if let Some((tag_key, tag_zone)) = &ctx.delayed_tag_key {
+                Ok(ObjectQuery::Tagged {
+                    key: tag_key.clone(),
+                    value: Some(spellwake_engine::toolbox::TagValue::Unit),
+                    zone: tag_zone.clone(),
+                    filter: None,
+                })
             } else {
                 Err(LoweringError::Unsupported("v2:subject:unbound-same-target"))
             }

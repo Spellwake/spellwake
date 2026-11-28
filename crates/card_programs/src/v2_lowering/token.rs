@@ -69,9 +69,9 @@ pub(crate) fn lower_token_creation(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
     match spec {
-        v2::TokenSpec::CopyOf { source, exceptions } => {
-            lower_copy_object(controller, source, count, modifiers, exceptions, acc, ctx)
-        }
+        v2::TokenSpec::CopyOf { source, exceptions } => lower_copy_object_inner(
+            controller, source, count, modifiers, exceptions, false, acc, ctx,
+        ),
         v2::TokenSpec::Predefined(kind) => {
             lower_predefined_token_creation(controller, count, *kind, modifiers, acc, ctx)
         }
@@ -111,8 +111,24 @@ pub(crate) fn lower_copy_object(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
-    if let Some(stack_op) =
-        try_lower_stack_copy(actor, subject, count, modifiers, exceptions, acc, ctx)?
+    lower_copy_object_inner(actor, subject, count, modifiers, exceptions, true, acc, ctx)
+}
+
+// Parameters mirror `lower_copy_object` plus the explicit stack-copy admission flag.
+#[allow(clippy::too_many_arguments)]
+fn lower_copy_object_inner(
+    actor: v2::PlayerRef,
+    subject: &v2::SubjectRef,
+    count: &v2::ValueExpr,
+    modifiers: &v2::EntryModifiers,
+    exceptions: &[v2::CopyException],
+    allow_stack_copy: bool,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    if allow_stack_copy
+        && let Some(stack_op) =
+            try_lower_stack_copy(actor, subject, count, modifiers, exceptions, acc, ctx)?
     {
         acc.push(Instruction::StackOp(Box::new(stack_op)));
         return Ok(());
@@ -288,7 +304,7 @@ pub(crate) fn lower_copy_exceptions(
                 }
             }
             v2::CopyException::HasThisAbility => {
-                if ctx.face_ability_count == 1 {
+                if ctx.has_only_single_ability {
                     out.keep_abilities = true;
                 } else {
                     return Err(LoweringError::Unsupported(
@@ -704,11 +720,12 @@ fn try_lower_stack_copy(
     let is_stack_subject = match subject {
         v2::SubjectRef::TargetObject { filter, .. } => is_stack_only_filter(filter),
         v2::SubjectRef::Anaphora(v2::AnaphoraRef::ThatSpell) => true,
-        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It) | v2::SubjectRef::SelfObject
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It)
             if ctx.in_trigger && ctx.trigger_is_spell_cast =>
         {
             true
         }
+        v2::SubjectRef::SelfObject if !ctx.in_trigger && ctx.is_spell_body => true,
         _ => false,
     };
     if !is_stack_subject {
@@ -776,7 +793,7 @@ fn try_lower_stack_copy(
                 true,
             )))
         }
-        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It) | v2::SubjectRef::SelfObject
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It)
             if ctx.in_trigger && ctx.trigger_is_spell_cast =>
         {
             Ok(Some(StackOpSpec::copy_stack(
@@ -785,11 +802,9 @@ fn try_lower_stack_copy(
                 true,
             )))
         }
-        v2::SubjectRef::SelfObject if ctx.is_spell_body => Ok(Some(StackOpSpec::copy_stack(
-            StackCopyTarget::ResolvingSpell,
-            amount,
-            true,
-        ))),
+        v2::SubjectRef::SelfObject if !ctx.in_trigger && ctx.is_spell_body => Ok(Some(
+            StackOpSpec::copy_stack(StackCopyTarget::ResolvingSpell, amount, true),
+        )),
         _ => Ok(None),
     }
 }

@@ -247,7 +247,10 @@ fn lower_face_v2_inner(
 
     let mut program = build_base_program(card, face, opts, vocab)?;
     let mut ctx = LowerCtx::new(vocab, &card.name, &face.name);
-    ctx.face_ability_count = compiled.abilities.len();
+    ctx.has_only_single_ability = compiled.abilities.len() == 1
+        && compiled.keywords.is_empty()
+        && compiled.statics.is_empty()
+        && compiled.replacements.is_empty();
     let is_spell = matches!(program.kind, ProgramKind::Spell(_));
 
     // Wire Siege defeated trigger (exile defeated Siege, then cast transformed).
@@ -352,7 +355,12 @@ fn lower_face_v2_inner(
             let each_res = crate::v2_lowering::effect::lower_effect_body(&rewritten, &mut ctx);
             ctx.is_spell_body = prev_is_spell;
             let each_body = each_res?;
-            if each_body.target != BodyTarget::None {
+            if each_body.target != BodyTarget::None
+                || each_body
+                    .instructions
+                    .iter()
+                    .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+            {
                 return Err(LoweringError::Unsupported("v2:kw:overload"));
             }
             program.conditional_cost =
@@ -1832,11 +1840,24 @@ fn rewrite_subject_for_overload(
     changed: &mut bool,
 ) -> LowerResult<v2::SubjectRef> {
     match subj {
-        v2::SubjectRef::TargetObject { filter, .. } => {
+        v2::SubjectRef::TargetObject {
+            filter,
+            count,
+            another,
+        } => {
+            if *another || *count != v2::TargetCount::Exact(1) {
+                return Err(LoweringError::Unsupported("v2:kw:overload"));
+            }
             *changed = true;
             Ok(v2::SubjectRef::All(filter.clone()))
         }
-        v2::SubjectRef::TargetPlayer { opponent_only, .. } => {
+        v2::SubjectRef::TargetPlayer {
+            opponent_only,
+            count,
+        } => {
+            if *count != v2::TargetCount::Exact(1) {
+                return Err(LoweringError::Unsupported("v2:kw:overload"));
+            }
             *changed = true;
             Ok(v2::SubjectRef::Player(if *opponent_only {
                 v2::PlayerRef::EachOpponent

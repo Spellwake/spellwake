@@ -667,14 +667,38 @@ impl EffectWindow {
                                             }
                                         }
                                         PublicZoneDestination::Library => {
-                                            *dest = ObjectDestination::LibraryTop;
-                                            if let Some(owner) = self
-                                                .window
-                                                .cards()
-                                                .get(*obj_id)
-                                                .map(GameObject::owner)
-                                            {
-                                                shuffle_owners.insert(owner);
+                                            match self.library_placement_for(&batch, *obj_id) {
+                                                Some(
+                                                    crate::program::LibraryPlacement::Bottom
+                                                    | crate::program::LibraryPlacement::BottomRandom,
+                                                ) => {
+                                                    *dest = ObjectDestination::LibraryBottom;
+                                                }
+                                                Some(crate::program::LibraryPlacement::Top) => {
+                                                    *dest = ObjectDestination::LibraryTop;
+                                                }
+                                                Some(crate::program::LibraryPlacement::FromTop(
+                                                    offset,
+                                                )) => {
+                                                    *dest =
+                                                        ObjectDestination::LibraryFromTop(offset);
+                                                }
+                                                None
+                                                | Some(
+                                                    crate::program::LibraryPlacement::ChoiceTopOrBottom {
+                                                        ..
+                                                    },
+                                                ) => {
+                                                    *dest = ObjectDestination::LibraryTop;
+                                                    if let Some(owner) = self
+                                                        .window
+                                                        .cards()
+                                                        .get(*obj_id)
+                                                        .map(GameObject::owner)
+                                                    {
+                                                        shuffle_owners.insert(owner);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1200,7 +1224,20 @@ impl EffectWindow {
                                             *dest = ObjectDestination::Hand;
                                         }
                                         PublicZoneDestination::Library => {
-                                            *dest = ObjectDestination::LibraryTop;
+                                            *dest = match self
+                                                .library_placement_for(&batch, *obj_id)
+                                            {
+                                                Some(
+                                                    crate::program::LibraryPlacement::Bottom
+                                                    | crate::program::LibraryPlacement::BottomRandom,
+                                                ) => ObjectDestination::LibraryBottom,
+                                                Some(
+                                                    crate::program::LibraryPlacement::FromTop(
+                                                        offset,
+                                                    ),
+                                                ) => ObjectDestination::LibraryFromTop(offset),
+                                                _ => ObjectDestination::LibraryTop,
+                                            };
                                         }
                                     }
                                 }

@@ -865,9 +865,12 @@ pub(crate) fn lower_player_mutation(
             )));
             Ok(())
         }
-        v2::PlayerMutation::AdditionalCombat {
-            followed_by_main: _,
-        } => {
+        v2::PlayerMutation::AdditionalCombat { followed_by_main } => {
+            if !*followed_by_main {
+                return Err(LoweringError::Unsupported(
+                    "v2:additional-combat-without-main",
+                ));
+            }
             if !matches!(
                 duration,
                 v2::Duration::Instant
