@@ -1257,3 +1257,398 @@ fn wave3_conditional_alt_cost_and_chosen_source_damage_prevention() {
         "chosen-source turn prevention should prevent all 3 damage from Goblin Pinger"
     );
 }
+
+#[test]
+fn wave4_they_gain_keywords_and_pillar_exile_if_dies_and_scent_reveal() {
+    let vocab = test_vocab();
+    let haste_tokens = compile_card(
+        &vocab,
+        "Hasty Reinforcements",
+        "Sorcery",
+        Some("{1}{R}"),
+        None,
+        "Create two 1/1 white Soldier creature tokens. They gain haste until end of turn.",
+    );
+    let pillar = compile_card(
+        &vocab,
+        "Pillar of Flame",
+        "Sorcery",
+        Some("{R}"),
+        None,
+        "Pillar of Flame deals 2 damage to any target. If a creature dealt damage this way would die this turn, exile it instead.",
+    );
+    let scent = compile_card(
+        &vocab,
+        "Scent of Jasmine",
+        "Instant",
+        Some("{W}"),
+        None,
+        "Reveal any number of white cards in your hand. You gain 2 life for each card revealed this way.",
+    );
+    let white_card_a = compile_card(
+        &vocab,
+        "Savannah Lions",
+        "Creature \u{2014} Soldier",
+        Some("{W}"),
+        Some(("2", "1")),
+        "",
+    );
+    let white_card_b = compile_card(
+        &vocab,
+        "Squire",
+        "Creature \u{2014} Human Soldier",
+        Some("{1}{W}"),
+        Some(("1", "2")),
+        "",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Grizzly Bears",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: haste_tokens,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: pillar,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: scent,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: white_card_a,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: white_card_b,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: bear,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Red, 2),
+            (ALICE, ManaType::White, 1),
+            (ALICE, ManaType::Colourless, 1),
+        ],
+    );
+
+    // 1. Create two tokens with "They gain haste until end of turn" -> both tokens have Haste.
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    if let Some(pending) = game.pending_decision() {
+        if let RuleFrame::TimestampOrder(order) = pending.frame() {
+            let members = order.members().iter().map(|m| m.member).collect();
+            game = reply(&game, DecisionReply::TimestampOrder(members));
+        }
+    }
+    let tokens: Vec<_> = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|o| o.zone() == ObjectZone::Battlefield && o.is_token())
+        .map(|o| o.id())
+        .collect();
+    assert_eq!(tokens.len(), 2, "should have created two Soldier tokens");
+    for tok_id in tokens {
+        let chars = game
+            .execution()
+            .current_characteristics(tok_id)
+            .unwrap()
+            .unwrap();
+        assert!(
+            chars
+                .keywords
+                .contains(&spellwake_engine::characteristics::KeywordAbility::Haste),
+            "tokens created before 'They gain haste' should gain Haste"
+        );
+    }
+
+    // 2. Pillar of Flame deals 2 damage to Bob's 2/2 Bear -> exiled instead of graveyard!
+    let bear_id = object(&game, 6).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 2).id(),
+            target: Some(TargetRef::Object(bear_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 6).zone(),
+        ObjectZone::Exile,
+        "Pillar of Flame should exile a creature dealt lethal damage this way"
+    );
+
+    // 3. Scent of Jasmine reveals 2 white cards from Alice's hand -> Alice gains 4 life (20 -> 24).
+    let w1 = object(&game, 4).id();
+    let w2 = object(&game, 5).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 3).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::White, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let pending = game
+        .pending_decision()
+        .expect("expected prompt to choose white cards to reveal");
+    assert!(matches!(pending.frame(), RuleFrame::PromptChoice(_)));
+    game = reply(
+        &game,
+        DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![w1, w2])),
+    );
+    assert_eq!(
+        life(&game, ALICE),
+        24.into(),
+        "revealing 2 white cards with Scent of Jasmine should gain 4 life"
+    );
+}
+
+#[test]
+fn wave4_kodamas_reach_split_search_and_scaled_energy_cost_and_restricted_mana() {
+    let vocab = test_vocab();
+    let kodama = compile_card(
+        &vocab,
+        "Kodama's Reach",
+        "Sorcery \u{2014} Arcane",
+        Some("{2}{G}"),
+        None,
+        "Search your library for up to two basic land cards, reveal those cards, put one onto the battlefield tapped and the other into your hand, then shuffle.",
+    );
+    let forest = compile_card(
+        &vocab,
+        "Forest",
+        "Basic Land \u{2014} Forest",
+        None,
+        None,
+        "",
+    );
+    let plains = compile_card(
+        &vocab,
+        "Plains",
+        "Basic Land \u{2014} Plains",
+        None,
+        None,
+        "",
+    );
+    let energy_spell = compile_card(
+        &vocab,
+        "Aether Surge",
+        "Sorcery",
+        Some("{U}"),
+        None,
+        "You get {E}{E}{E}{E}{E}{E}.",
+    );
+    let energy_engine = compile_card(
+        &vocab,
+        "Aether Reservoir",
+        "Artifact",
+        Some("{3}"),
+        None,
+        "{T}, Pay six {E}: Draw a card.",
+    );
+    let untaidake = compile_card(
+        &vocab,
+        "Untaidake, the Cloud Keeper",
+        "Legendary Land",
+        None,
+        None,
+        "Untaidake enters tapped.\n{T}, Pay 2 life: Add {C}{C}. Spend this mana only to cast legendary spells.",
+    );
+
+    let mut game = start_game_with_padding(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: kodama,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryTop,
+                program: forest,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryTop,
+                program: plains,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: energy_spell,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: energy_engine,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: untaidake,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Green, 1),
+            (ALICE, ManaType::Blue, 1),
+            (ALICE, ManaType::Colourless, 2),
+        ],
+        1,
+    );
+
+    // 1. Kodama's Reach searches 2 basic lands: Forest to battlefield tapped, Plains to hand.
+    let forest_id = object(&game, 2).id();
+    let plains_id = object(&game, 3).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Green, 1), (ManaType::Colourless, 2)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let pending = game.pending_decision().expect("expected library search");
+    assert!(matches!(pending.frame(), RuleFrame::LibraryTop(_)));
+    game = reply(
+        &game,
+        DecisionReply::LibraryTop(LibraryTopReply::SearchSplit {
+            battlefield: Some(forest_id),
+            hand: Some(plains_id),
+        }),
+    );
+    assert_eq!(
+        object(&game, 2).zone(),
+        ObjectZone::Battlefield,
+        "Forest should enter the battlefield"
+    );
+    assert_eq!(
+        object(&game, 2).tapped(),
+        Some(true),
+        "Forest should enter tapped from Kodama's Reach"
+    );
+    assert_eq!(
+        object(&game, 3).zone(),
+        ObjectZone::Hand(ALICE),
+        "Plains should go to hand from Kodama's Reach"
+    );
+
+    // 2. Gain 6 energy then activate `{T}, Pay six {E}: Draw two cards`.
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let hand_before_draw = hand_count(&game, ALICE);
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateUntargetedAbility {
+            source: object(&game, 5).id(),
+            ability: first_activated_id(&game, 5),
+            payment: None,
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert!(
+        hand_count(&game, ALICE) > hand_before_draw,
+        "Pay six {{E}} activated ability should draw cards"
+    );
+
+    // 3. Activate Untaidake (`{T}, Pay 2 life: Add {C}{C}` restricted to legendary spells).
+    let life_before = life(&game, ALICE);
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateUntargetedAbility {
+            source: object(&game, 6).id(),
+            ability: first_activated_id(&game, 6),
+            payment: None,
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        life(&game, ALICE),
+        life_before.minus(&2.into()),
+        "Untaidake should pay 2 life on activation"
+    );
+    assert!(
+        !game.execution().restricted_mana().is_empty(),
+        "Untaidake should add restricted colorless mana for legendary spells"
+    );
+}

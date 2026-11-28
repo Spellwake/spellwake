@@ -16,9 +16,11 @@ use spellwake_engine::{
     damage::{
         DamageSourceChoiceFilter, PreventionRecipientSpec, PreventionSourceSpec, TurnPreventionSpec,
     },
+    mana::ManaOutputRestriction,
     program::{
-        AffectedPlayers, BodyTarget, DamageAmountSpec, ExecutableBody, Instruction,
-        ObjectFilter as EngineObjectFilter, ResolvingPlayer, TargetZone, TemporaryRuleKind,
+        AffectedPlayers, BodyTarget, DamageAmountSpec, EffectManaYield, ExecutableBody,
+        Instruction, LookTopKeepDest, LookTopRestDest, ObjectFilter as EngineObjectFilter,
+        ResolvingPlayer, SearchDestination, TargetZone, TemporaryRuleKind,
         ValueExpr as EngineValueExpr,
     },
     toolbox::{
@@ -34,7 +36,7 @@ use spellwake_engine::{
 use spellwake_oracle_compiler::{ast, v2::ir as v2};
 
 use crate::v2_lowering::{
-    atoms, condition,
+    atoms, condition, cost,
     ctx::{BodyAcc, LowerCtx},
     error::{LowerResult, LoweringError},
     filter, mutation, replacement, static_ability, token, trigger, value, zone_op,
@@ -96,6 +98,25 @@ pub(crate) fn lower_effects_into(
             continue;
         }
 
+        // 3a2. Fuse `[AddMana / BindVariable(AddMana), ManaRule]` into restricted/retained `EffectManaYield`.
+        if let Some(next_i) = try_fuse_add_mana_with_rule(effects, i, acc, ctx)? {
+            i = next_i;
+            continue;
+        }
+
+        // 3a3. Fuse `[DealDamage, ApplyReplacement(Dies(DealtDamageThisWay) => Exile)]` into `exile_if_dies`.
+        if let Some(next_i) = try_fuse_deal_damage_exile_if_dies(effects, i, acc, ctx)? {
+            i = next_i;
+            continue;
+        }
+
+        // 3a4. Fuse `[LookTop(reveal), SeparateIntoPiles(2), (ChoosePile)?, Move(OnePile), Move(OtherPile)]`
+        //      into `PlayerMutation::RevealTopTwoPiles` (Fact or Fiction / Sphinx of Uthuun / Steam Augury).
+        if let Some(next_i) = try_fuse_reveal_top_two_piles(effects, i, acc, ctx)? {
+            i = next_i;
+            continue;
+        }
+
         // 3b. Fuse `[CopyObject / Optional(CopyObject) / DelayedTrigger(CopyObject), (Optional)? MutatePlayer(Retarget(TheCopy|TheCopies))]`
         //     since `StackOpKind::Copy { may_choose_new_targets: true }` already implements retargeting.
         if matches!(
@@ -120,6 +141,12 @@ pub(crate) fn lower_effects_into(
         // 4. Fuse `[SearchLibrary { shuffle: false }, (Reveal)?, (Move|Exile)?, Shuffle, (Move to Top)?]`.
         if let Some((fused, next_i)) = try_fuse_search_library_sequence(effects, i) {
             lower_step_with_target_dispatch(&fused, acc, ctx)?;
+            i = next_i;
+            continue;
+        }
+
+        // 4a. Fuse split-destination search (`[SearchLibrary(shuffle: false), (Reveal)?, Move(OneOfThem -> Bf tapped), Move(TheRest -> Hand), Shuffle]`, etc.).
+        if let Some(next_i) = try_fuse_split_search_library_sequence(effects, i, acc, ctx)? {
             i = next_i;
             continue;
         }
@@ -965,15 +992,589 @@ fn is_conditional_search_shuffle(eff: &v2::Effect) -> bool {
 }
 
 fn is_energy_only_mana_cost(cost: &v2::Cost) -> bool {
+    match cost {
+        v2::Cost::Mana(mc) => cost::is_energy_only_mana_symbols(mc),
+        v2::Cost::ScaledMana { base, .. } => cost::is_energy_only_mana_symbols(base),
+        _ => false,
+    }
+}
+
+/// Emit a player choice selecting one opponent into `chosen_opponent` (`ResolvingPlayer::ChosenPlayer`).
+pub(crate) fn emit_choose_any_opponent(
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    let bind_to = ctx.alloc_binding()?;
+    acc.push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+        chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+        domain: PromptDomain::Players {
+            selector: PlayerSelector::Group(AffectedPlayers::EachOpponent),
+            min: 1,
+            max: 1,
+            random: false,
+        },
+        category: ChoiceCategory::Generic,
+        bind_to,
+        bind_unchosen: None,
+        tag_partition: None,
+        auto_resolve_trivial: true,
+        option_branches: Vec::new(),
+    })));
+    ctx.last_player_target = Some(ResolvingPlayer::ChosenPlayer);
+    Ok(())
+}
+
+fn apply_mana_restriction_to_yield(
+    yield_kind: EffectManaYield,
+    rule: &v2::ManaRuleKind,
+    ctx: &mut LowerCtx<'_>,
+) -> Option<EffectManaYield> {
+    if let v2::ManaRuleKind::KeepColorAcrossSteps(_) = rule {
+        return Some(EffectManaYield::RetainedUntilCleanup(Box::new(yield_kind)));
+    }
+    let ManaOutputRestriction::Fixed(restriction) = cost::try_lower_mana_spend_rule(rule, ctx)?
+    else {
+        return None;
+    };
+    match yield_kind {
+        EffectManaYield::Fixed(bundle) => Some(EffectManaYield::RestrictedFixed {
+            bundle,
+            restriction,
+        }),
+        EffectManaYield::Choice { colors, amount } => Some(EffectManaYield::RestrictedChoice {
+            colors,
+            amount,
+            restriction,
+        }),
+        EffectManaYield::Counted { kind, amount } => Some(EffectManaYield::RestrictedCounted {
+            kind,
+            amount,
+            restriction,
+        }),
+        _ => None,
+    }
+}
+
+fn try_fuse_add_mana_with_rule(
+    effects: &[v2::Effect],
+    i: usize,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<Option<usize>> {
+    let Some(v2::Effect::MutatePlayer {
+        player: rule_player,
+        mutation: v2::PlayerMutation::ManaRule(rule),
+        ..
+    }) = effects.get(i + 1)
+    else {
+        return Ok(None);
+    };
+    match &effects[i] {
+        v2::Effect::MutatePlayer {
+            player,
+            mutation: v2::PlayerMutation::AddMana(spec),
+            duration: v2::Duration::Instant,
+        } if player == rule_player => {
+            let yield_kind = atoms::lower_mana_spec(spec, ctx)?;
+            let Some(restricted) = apply_mana_restriction_to_yield(yield_kind, rule, ctx) else {
+                return Ok(None);
+            };
+            let rp = if *player == v2::PlayerRef::AnyOpponent {
+                emit_choose_any_opponent(acc, ctx)?;
+                ResolvingPlayer::ChosenPlayer
+            } else {
+                atoms::lower_resolving_player(*player, acc, ctx)?
+            };
+            acc.push(Instruction::MutatePlayer(Box::new(
+                MutatePlayerSpec::add_mana(rp, restricted),
+            )));
+            Ok(Some(i + 2))
+        }
+        v2::Effect::BindVariable {
+            var: v2::VarName::X,
+            expr,
+            body,
+        } if body.len() == 1 => {
+            let v2::Effect::MutatePlayer {
+                player,
+                mutation: v2::PlayerMutation::AddMana(spec),
+                duration: v2::Duration::Instant,
+            } = &body[0]
+            else {
+                return Ok(None);
+            };
+            if player != rule_player {
+                return Ok(None);
+            }
+            let yield_kind = atoms::lower_mana_spec(spec, ctx)?;
+            let Some(restricted) = apply_mana_restriction_to_yield(yield_kind, rule, ctx) else {
+                return Ok(None);
+            };
+            register_value_expr_player_targets(expr, acc, ctx)?;
+            let val = value::lower_value_expr(expr, ctx)?;
+            acc.push(Instruction::MutatePlayer(Box::new(
+                MutatePlayerSpec::bind_resolution_x(val),
+            )));
+            let rp = atoms::lower_resolving_player(*player, acc, ctx)?;
+            acc.push(Instruction::MutatePlayer(Box::new(
+                MutatePlayerSpec::add_mana(rp, restricted),
+            )));
+            Ok(Some(i + 2))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn is_dealt_damage_this_way_dies_exile_replacement(eff: &v2::Effect) -> bool {
+    let v2::Effect::ApplyReplacement {
+        replacement,
+        duration,
+    } = eff
+    else {
+        return false;
+    };
+    let v2::Replacement::EventInstead {
+        event: v2::TriggerEvent::Dies { subject },
+        instead,
+    } = replacement.as_ref()
+    else {
+        return false;
+    };
+    if !matches!(
+        duration,
+        v2::Duration::Instant | v2::Duration::UntilEndOfTurn | v2::Duration::Permanent
+    ) {
+        return false;
+    }
+    let subject_ok = match subject {
+        v2::SubjectRef::Group(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::All(f) => {
+            let is_creature_or_any = f.all_types.is_empty()
+                && (f.any_types.is_empty() || f.any_types == ast::CardTypeMask::CREATURE);
+            is_creature_or_any
+                && f.forbidden_types.is_empty()
+                && f.subtypes.is_empty()
+                && f.predicates
+                    == [v2::FilterPredicate::AffectedByPriorAction(
+                        v2::PriorActionKind::DealtDamageThisWay,
+                    )]
+        }
+        _ => false,
+    };
+    if !subject_ok {
+        return false;
+    }
     matches!(
-        cost,
-        v2::Cost::Mana(mc)
-            if !mc.symbols.is_empty()
-                && mc
-                    .symbols
-                    .iter()
-                    .all(|sym| matches!(sym, v2::ManaSymbol::Energy))
+        instead.as_slice(),
+        [v2::Effect::ZoneOp {
+            op: v2::ZoneOpKind::Exile {
+                face_down: false,
+                counters: None,
+            },
+            subject: v2::SubjectRef::Anaphora(
+                v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatObject
+            ),
+            ..
+        }]
     )
+}
+
+fn try_fuse_deal_damage_exile_if_dies(
+    effects: &[v2::Effect],
+    i: usize,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<Option<usize>> {
+    if !matches!(&effects[i], v2::Effect::DealDamage { .. }) {
+        return Ok(None);
+    }
+    let Some(next) = effects.get(i + 1) else {
+        return Ok(None);
+    };
+    if !is_dealt_damage_this_way_dies_exile_replacement(next) {
+        return Ok(None);
+    }
+    let prev_len = acc.instructions.len();
+    lower_step_with_target_dispatch(&effects[i], acc, ctx)?;
+    let mut marked = false;
+    for ins in &mut acc.instructions[prev_len..] {
+        if let Instruction::DealDamage(spec) = ins {
+            spec.exile_if_dies = true;
+            marked = true;
+        } else if let Instruction::FixedTargetClause(body) = ins {
+            for inner in &mut body.instructions {
+                if let Instruction::DealDamage(spec) = inner {
+                    spec.exile_if_dies = true;
+                    marked = true;
+                }
+            }
+        }
+    }
+    if marked {
+        Ok(Some(i + 2))
+    } else {
+        Ok(Some(i + 1))
+    }
+}
+
+fn lower_pile_chosen_dest(
+    dest: &v2::ZoneDest,
+    mods: &v2::EntryModifiers,
+) -> Option<LookTopKeepDest> {
+    if mods.face_down
+        || mods.transformed
+        || mods.with_counter.is_some()
+        || mods.attached_to.is_some()
+    {
+        return None;
+    }
+    match dest.zone {
+        v2::ZoneKind::Hand if !mods.tapped && !mods.attacking => Some(LookTopKeepDest::Hand),
+        v2::ZoneKind::Battlefield => Some(LookTopKeepDest::Battlefield {
+            tapped: mods.tapped,
+            attacking: mods.attacking,
+        }),
+        v2::ZoneKind::Graveyard if !mods.tapped && !mods.attacking => {
+            Some(LookTopKeepDest::Graveyard)
+        }
+        v2::ZoneKind::Library
+            if !mods.tapped
+                && !mods.attacking
+                && matches!(dest.library_position, None | Some(v2::LibraryPosition::Top)) =>
+        {
+            Some(LookTopKeepDest::LibraryTop)
+        }
+        _ => None,
+    }
+}
+
+fn lower_pile_other_dest(
+    dest: &v2::ZoneDest,
+    mods: &v2::EntryModifiers,
+) -> Option<LookTopRestDest> {
+    if mods.tapped
+        || mods.attacking
+        || mods.face_down
+        || mods.transformed
+        || mods.with_counter.is_some()
+        || mods.attached_to.is_some()
+    {
+        return None;
+    }
+    match dest.zone {
+        v2::ZoneKind::Graveyard => Some(LookTopRestDest::Graveyard),
+        v2::ZoneKind::Exile => Some(LookTopRestDest::Exile),
+        v2::ZoneKind::Hand => Some(LookTopRestDest::Hand),
+        v2::ZoneKind::Library => match (dest.library_position, dest.library_order) {
+            (Some(v2::LibraryPosition::Bottom), Some(v2::LibraryOrder::RandomOrder)) => {
+                Some(LookTopRestDest::BottomRandom)
+            }
+            (Some(v2::LibraryPosition::Bottom), _) => Some(LookTopRestDest::BottomOrder),
+            (None | Some(v2::LibraryPosition::Top), _) => Some(LookTopRestDest::TopOrder),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn try_fuse_reveal_top_two_piles(
+    effects: &[v2::Effect],
+    i: usize,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<Option<usize>> {
+    let v2::Effect::ZoneOp {
+        actor: v2::PlayerRef::You,
+        op: v2::ZoneOpKind::LookTop { reveal: true },
+        subject: look_subj,
+        from: look_from,
+        to: None,
+        except: None,
+        count: look_count,
+        ..
+    } = &effects[i]
+    else {
+        return Ok(None);
+    };
+    if !look_from.is_empty()
+        && look_from.iter().any(|z| {
+            z.zone != v2::ZoneKind::Library
+                || !matches!(z.owner, v2::ZoneOwner::Default | v2::ZoneOwner::You)
+        })
+    {
+        return Ok(None);
+    }
+    let Some(v2::Effect::ZoneOp {
+        actor: sep_actor,
+        op:
+            v2::ZoneOpKind::SeparateIntoPiles {
+                pile_count: 2,
+                face_down_piles: 0,
+            },
+        ..
+    }) = effects.get(i + 1)
+    else {
+        return Ok(None);
+    };
+    let (controller_divides, target_opponent) = match sep_actor {
+        v2::PlayerRef::You => (true, false),
+        v2::PlayerRef::AnyOpponent => (false, false),
+        v2::PlayerRef::TargetOpponent => (false, true),
+        _ => return Ok(None),
+    };
+    let mut j = i + 2;
+    let mut target_opp_chooser = target_opponent;
+    if let Some(v2::Effect::ZoneOp {
+        actor: choose_actor,
+        op: v2::ZoneOpKind::ChoosePile,
+        ..
+    }) = effects.get(j)
+    {
+        let chooser_ok = if controller_divides {
+            match choose_actor {
+                v2::PlayerRef::AnyOpponent => true,
+                v2::PlayerRef::TargetOpponent => {
+                    target_opp_chooser = true;
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            *choose_actor == v2::PlayerRef::You
+        };
+        if !chooser_ok {
+            return Ok(None);
+        }
+        j += 1;
+    }
+    let mut chosen_dest: Option<LookTopKeepDest> = None;
+    let mut other_dest: Option<LookTopRestDest> = None;
+    for _ in 0..2 {
+        let Some(eff) = effects.get(j) else {
+            break;
+        };
+        let (subj, dest, mods) = match eff {
+            v2::Effect::ZoneOp {
+                op: v2::ZoneOpKind::Move,
+                subject,
+                to: Some(dest),
+                modifiers,
+                except: None,
+                count: None,
+                ..
+            } => (subject, dest.clone(), modifiers),
+            v2::Effect::ZoneOp {
+                op:
+                    v2::ZoneOpKind::Exile {
+                        face_down: false,
+                        counters: None,
+                    },
+                subject,
+                modifiers,
+                except: None,
+                count: None,
+                ..
+            } => (
+                subject,
+                v2::ZoneDest {
+                    zone: v2::ZoneKind::Exile,
+                    owner: v2::ZoneOwner::Default,
+                    library_position: None,
+                    library_order: None,
+                    under_control: None,
+                },
+                modifiers,
+            ),
+            _ => break,
+        };
+        match subj {
+            v2::SubjectRef::Anaphora(v2::AnaphoraRef::OnePile) if chosen_dest.is_none() => {
+                let Some(d) = lower_pile_chosen_dest(&dest, mods) else {
+                    return Ok(None);
+                };
+                chosen_dest = Some(d);
+                j += 1;
+            }
+            v2::SubjectRef::Anaphora(v2::AnaphoraRef::OtherPile | v2::AnaphoraRef::TheRest)
+                if other_dest.is_none() =>
+            {
+                let Some(d) = lower_pile_other_dest(&dest, mods) else {
+                    return Ok(None);
+                };
+                other_dest = Some(d);
+                j += 1;
+            }
+            _ => break,
+        }
+    }
+    let (Some(chosen_dest), Some(other_dest)) = (chosen_dest, other_dest) else {
+        return Ok(None);
+    };
+    let count_spec = match (look_count, look_subj) {
+        (Some(c), _) => c,
+        (None, v2::SubjectRef::Counted { count, .. }) => count,
+        _ => return Ok(None),
+    };
+    if count_spec.up_to || count_spec.any_number {
+        return Ok(None);
+    }
+    if target_opp_chooser {
+        acc.register_target(BodyTarget::SINGLE_OPPONENT, v2::TargetCount::Exact(1))?;
+        ctx.last_player_target = Some(ResolvingPlayer::TargetPlayer);
+    }
+    register_value_expr_player_targets(&count_spec.count, acc, ctx)?;
+    let count_val = value::lower_value_expr(&count_spec.count, ctx)?;
+    acc.push(Instruction::MutatePlayer(Box::new(
+        MutatePlayerSpec::reveal_top_two_piles(
+            count_val,
+            controller_divides,
+            target_opp_chooser,
+            chosen_dest,
+            other_dest,
+        ),
+    )));
+    Ok(Some(j))
+}
+
+fn try_fuse_split_search_library_sequence(
+    effects: &[v2::Effect],
+    i: usize,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<Option<usize>> {
+    let v2::Effect::ZoneOp {
+        actor,
+        op:
+            v2::ZoneOpKind::SearchLibrary {
+                reveal,
+                shuffle: false,
+                exact,
+            },
+        subject,
+        from,
+        to: None,
+        modifiers,
+        except,
+        count,
+    } = &effects[i]
+    else {
+        return Ok(None);
+    };
+    if !is_empty_entry_modifiers(modifiers) {
+        return Ok(None);
+    }
+    let mut j = i + 1;
+    let mut merged_reveal = *reveal;
+    if let Some(v2::Effect::ZoneOp {
+        op: v2::ZoneOpKind::Reveal,
+        subject: r_subj,
+        to: None,
+        except: None,
+        count: None,
+        ..
+    }) = effects.get(j)
+        && is_search_anaphora(r_subj)
+    {
+        merged_reveal = true;
+        j += 1;
+    }
+    let (
+        Some(v2::Effect::ZoneOp {
+            op: v2::ZoneOpKind::Move,
+            subject: m1_subj,
+            to: Some(m1_dest),
+            modifiers: m1_mods,
+            except: None,
+            ..
+        }),
+        Some(v2::Effect::ZoneOp {
+            op: v2::ZoneOpKind::Move,
+            subject: m2_subj,
+            to: Some(m2_dest),
+            modifiers: m2_mods,
+            except: None,
+            ..
+        }),
+    ) = (effects.get(j), effects.get(j + 1))
+    else {
+        return Ok(None);
+    };
+    let is_one_subj = |s: &v2::SubjectRef| {
+        matches!(
+            s,
+            v2::SubjectRef::OneOfThem(v2::ValueExpr::Const(1))
+                | v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::It | v2::AnaphoraRef::ThatCard | v2::AnaphoraRef::ThatLand
+                )
+        )
+    };
+    let is_other_subj = |s: &v2::SubjectRef| {
+        matches!(
+            s,
+            v2::SubjectRef::Anaphora(
+                v2::AnaphoraRef::TheRest
+                    | v2::AnaphoraRef::OtherPile
+                    | v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatLand
+            ) | v2::SubjectRef::OneOfThem(v2::ValueExpr::Const(1))
+        )
+    };
+    if !is_one_subj(m1_subj) || !is_other_subj(m2_subj) {
+        return Ok(None);
+    }
+    let Some(shuf_eff) = effects.get(j + 2) else {
+        return Ok(None);
+    };
+    if !is_pure_search_shuffle(shuf_eff) && !is_conditional_search_shuffle(shuf_eff) {
+        return Ok(None);
+    }
+    let split_dest = if m1_dest.zone == v2::ZoneKind::Battlefield
+        && m1_mods.tapped
+        && !m1_mods.attacking
+        && !m1_mods.face_down
+        && m2_dest.zone == v2::ZoneKind::Hand
+        && is_empty_entry_modifiers(m2_mods)
+    {
+        SearchDestination::SplitBattlefieldTappedAndHand
+    } else if m1_dest.zone == v2::ZoneKind::Hand
+        && is_empty_entry_modifiers(m1_mods)
+        && m2_dest.zone == v2::ZoneKind::Battlefield
+        && m2_mods.tapped
+        && !m2_mods.attacking
+        && !m2_mods.face_down
+    {
+        SearchDestination::SplitBattlefieldTappedAndHand
+    } else if m1_dest.zone == v2::ZoneKind::Hand
+        && is_empty_entry_modifiers(m1_mods)
+        && m2_dest.zone == v2::ZoneKind::Graveyard
+        && is_empty_entry_modifiers(m2_mods)
+    {
+        SearchDestination::SplitHandAndGraveyard
+    } else if m1_dest.zone == v2::ZoneKind::Graveyard
+        && is_empty_entry_modifiers(m1_mods)
+        && m2_dest.zone == v2::ZoneKind::Hand
+        && is_empty_entry_modifiers(m2_mods)
+    {
+        SearchDestination::SplitHandAndGraveyard
+    } else {
+        return Ok(None);
+    };
+    zone_op::lower_split_search_library(
+        *actor,
+        merged_reveal,
+        *exact,
+        subject,
+        from,
+        except.as_deref(),
+        count.as_ref(),
+        split_dest,
+        acc,
+        ctx,
+    )?;
+    Ok(Some(j + 3))
 }
 
 struct SearchFusionState {
@@ -1875,6 +2476,7 @@ struct CtxFlowSnapshot {
     last_succeeded_binding: Option<BindingId>,
     self_antecedent: bool,
     delayed_tag_key: Option<TagKey>,
+    last_damage_was_self: bool,
 }
 
 impl CtxFlowSnapshot {
@@ -1886,6 +2488,7 @@ impl CtxFlowSnapshot {
             last_succeeded_binding: ctx.last_succeeded_binding,
             self_antecedent: ctx.self_antecedent,
             delayed_tag_key: ctx.delayed_tag_key.clone(),
+            last_damage_was_self: ctx.last_damage_was_self,
         }
     }
 
@@ -1896,6 +2499,7 @@ impl CtxFlowSnapshot {
         ctx.last_succeeded_binding = self.last_succeeded_binding;
         ctx.self_antecedent = self.self_antecedent;
         ctx.delayed_tag_key = self.delayed_tag_key.clone();
+        ctx.last_damage_was_self = self.last_damage_was_self;
     }
 }
 
@@ -2065,6 +2669,7 @@ fn lower_deal_damage(
             amt,
             max_targets,
         ))));
+        ctx.last_damage_was_self = true;
         return Ok(());
     }
 
@@ -2113,6 +2718,11 @@ fn lower_deal_damage(
         return Ok(());
     }
 
+    let src_is_self = match source {
+        v2::SubjectRef::SelfObject => true,
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It) if ctx.self_antecedent => true,
+        _ => false,
+    };
     let src_query = match source {
         v2::SubjectRef::SelfObject => {
             ctx.self_antecedent = true;
@@ -2130,6 +2740,7 @@ fn lower_deal_damage(
         recipients,
         DamageAmountSpec::Expr(amt),
     ))));
+    ctx.last_damage_was_self = src_is_self;
     Ok(())
 }
 
@@ -2640,6 +3251,10 @@ fn lower_adjust_life(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    if player == v2::PlayerRef::AnyOpponent {
+        emit_choose_any_opponent(acc, ctx)?;
+        return lower_adjust_life(v2::PlayerRef::ChosenPlayer, amount, op, acc, ctx);
+    }
     let ps = atoms::lower_player_ref(player, acc, ctx)?;
     register_value_expr_player_targets(amount, acc, ctx)?;
     let amt = value::lower_value_expr(amount, ctx)?;
@@ -2660,6 +3275,10 @@ fn lower_prompt_choice(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    if chooser == v2::PlayerRef::AnyOpponent {
+        emit_choose_any_opponent(acc, ctx)?;
+        return lower_prompt_choice(v2::PlayerRef::ChosenPlayer, kind, acc, ctx);
+    }
     if !ctx.in_loop_player
         && matches!(
             chooser,
@@ -2827,6 +3446,18 @@ fn lower_prompt_choice(
                 _ => {}
             }
             let (query, min, max) = match subj {
+                v2::SubjectRef::OneOfThem(val_expr) => {
+                    let q = if let Some(slot) = ctx.last_moved_binding {
+                        ObjectQuery::Bound(slot)
+                    } else if acc.target_set && atoms::target_is_object_like(acc.target) {
+                        ObjectQuery::Targets
+                    } else {
+                        return Err(LoweringError::Unsupported("v2:subject:one-of-them"));
+                    };
+                    register_value_expr_player_targets(val_expr, acc, ctx)?;
+                    let amt = value::lower_value_expr(val_expr, ctx)?;
+                    (q, amt.clone(), amt)
+                }
                 v2::SubjectRef::Counted { filter: f, count } => {
                     let has_among_prior = f
                         .predicates

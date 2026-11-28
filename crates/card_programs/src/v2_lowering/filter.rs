@@ -960,6 +960,11 @@ fn apply_predicates_to_clause(
                 | v2::PriorActionKind::CreatedThisWay => {
                     clause.flags = clause.flags.union(ObjectFilterFlags::IN_LAST_MOVED);
                 }
+                v2::PriorActionKind::DealtDamageThisWay if ctx.last_damage_was_self => {
+                    clause.flags = clause
+                        .flags
+                        .union(ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN);
+                }
                 _ => {
                     return Err(LoweringError::Unsupported(
                         "v2:filter:pred:prior-action-kind",

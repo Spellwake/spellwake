@@ -488,6 +488,11 @@ pub(crate) fn lower_extra_cost_atom(
         v2::Cost::ExertSelf => Ok(ExtraActivationCost::ExertSource),
         v2::Cost::UnattachSelf => Ok(ExtraActivationCost::Unattach { self_source: true }),
         v2::Cost::Forage => Ok(ExtraActivationCost::Forage),
+        v2::Cost::Mana(mc) if is_energy_only_mana_symbols(mc) => {
+            let amt = u16::try_from(mc.symbols.len())
+                .map_err(|_| LoweringError::Unsupported("v2:cost:energy-overflow"))?;
+            Ok(ExtraActivationCost::PayEnergy(amt))
+        }
         v2::Cost::Mana(mc) => {
             let (mana, x, hybrids, snow) = lower_v2_mana_cost(mc)?;
             if x != 0 || !hybrids.is_empty() {
@@ -746,13 +751,86 @@ pub(crate) fn lower_extra_cost_atom(
             let right = lower_extra_cost_atom(b, ctx)?;
             Ok(ExtraActivationCost::Either(Box::new(left), Box::new(right)))
         }
-        v2::Cost::ScaledMana { .. }
-        | v2::Cost::PayAnyAmountMana
+        v2::Cost::RemoveEitherCounter {
+            kind1,
+            kind2,
+            subject,
+        } => {
+            let left = lower_extra_cost_atom(
+                &v2::Cost::RemoveCounters {
+                    kind: kind1.clone(),
+                    count: v2::ValueExpr::Const(1),
+                    subject: subject.clone(),
+                },
+                ctx,
+            )?;
+            let right = lower_extra_cost_atom(
+                &v2::Cost::RemoveCounters {
+                    kind: kind2.clone(),
+                    count: v2::ValueExpr::Const(1),
+                    subject: subject.clone(),
+                },
+                ctx,
+            )?;
+            Ok(ExtraActivationCost::Either(Box::new(left), Box::new(right)))
+        }
+        v2::Cost::ScaledMana { base, scale } => {
+            let Some(amt) = extract_energy_cost_amount_scaled(base, scale, ctx)? else {
+                return Err(LoweringError::Unsupported("v2:cost:unsupported-atom"));
+            };
+            match amt {
+                EnergyCostAmt::Fixed(n) => Ok(ExtraActivationCost::PayEnergy(n)),
+                EnergyCostAmt::Dynamic(expr) => Ok(ExtraActivationCost::PayEnergyExpr(expr)),
+            }
+        }
+        v2::Cost::PayAnyAmountMana
         | v2::Cost::PutZone { .. }
         | v2::Cost::ChooseObject(_)
-        | v2::Cost::RemoveEitherCounter { .. }
         | v2::Cost::Behold(_) => Err(LoweringError::Unsupported("v2:cost:unsupported-atom")),
     }
+}
+
+pub(crate) enum EnergyCostAmt {
+    Fixed(u16),
+    Dynamic(EngineValueExpr),
+}
+
+pub(crate) fn is_energy_only_mana_symbols(mc: &v2::ManaCost) -> bool {
+    !mc.symbols.is_empty()
+        && mc
+            .symbols
+            .iter()
+            .all(|sym| matches!(sym, v2::ManaSymbol::Energy))
+}
+
+pub(crate) fn extract_energy_cost_amount_scaled(
+    base: &v2::ManaCost,
+    scale: &v2::ValueExpr,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<Option<EnergyCostAmt>> {
+    if !is_energy_only_mana_symbols(base) {
+        return Ok(None);
+    }
+    let unit = i64::try_from(base.symbols.len())
+        .map_err(|_| LoweringError::Unsupported("v2:cost:energy-overflow"))?;
+    if let v2::ValueExpr::Const(n) = scale {
+        if *n <= 0 {
+            return Err(LoweringError::Unsupported("v2:cost:energy-overflow"));
+        }
+        let total = i64::from(*n)
+            .checked_mul(unit)
+            .and_then(|v| u16::try_from(v).ok())
+            .ok_or(LoweringError::Unsupported("v2:cost:energy-overflow"))?;
+        return Ok(Some(EnergyCostAmt::Fixed(total)));
+    }
+    let mut expr = lower_value_expr(scale, ctx)?;
+    if unit > 1 {
+        expr = EngineValueExpr::Scale {
+            expr: Box::new(expr),
+            factor: RulesInteger::from(unit),
+        };
+    }
+    Ok(Some(EnergyCostAmt::Dynamic(expr)))
 }
 
 /// Lower mandatory additional casting costs (`As an additional cost to cast this spell, ...`)
@@ -999,7 +1077,7 @@ pub(crate) fn lower_activation_cost_parts(
 
     for atom in cost {
         match atom {
-            v2::Cost::Mana(mc) => {
+            v2::Cost::Mana(mc) if !is_energy_only_mana_symbols(mc) => {
                 let (part, x, hybs, snow) = lower_v2_mana_cost(mc)?;
                 merge_mana_cost(&mut mana, &part);
                 x_symbols = x_symbols
@@ -1201,6 +1279,26 @@ fn try_lower_primary_source_cost(
                 amount: amt,
                 tap_source: tap_self,
             }))
+        }
+        v2::Cost::Mana(mc) if !sac_self && is_energy_only_mana_symbols(mc) => {
+            let amt = u16::try_from(mc.symbols.len())
+                .map_err(|_| LoweringError::Unsupported("v2:cost:energy-overflow"))?;
+            Ok(Some(SourceCost::PayEnergy {
+                amount: amt,
+                tap_source: tap_self,
+            }))
+        }
+        v2::Cost::ScaledMana { base, scale } if !sac_self && is_energy_only_mana_symbols(base) => {
+            if let Some(EnergyCostAmt::Fixed(amt)) =
+                extract_energy_cost_amount_scaled(base, scale, ctx)?
+            {
+                Ok(Some(SourceCost::PayEnergy {
+                    amount: amt,
+                    tap_source: tap_self,
+                }))
+            } else {
+                Ok(None)
+            }
         }
         v2::Cost::Mill(val) if !sac_self => {
             let nz = value_to_nonzero_u8(val, "v2:cost:mill-count")?;
@@ -1763,7 +1861,7 @@ fn extract_entry_chosen_color_pair(a: &v2::ManaSpec, b: &v2::ManaSpec) -> Option
     None
 }
 
-fn try_lower_mana_spend_rule(
+pub(crate) fn try_lower_mana_spend_rule(
     rule: &v2::ManaRuleKind,
     ctx: &mut LowerCtx<'_>,
 ) -> Option<ManaOutputRestriction> {

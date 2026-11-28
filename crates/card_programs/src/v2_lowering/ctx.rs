@@ -63,6 +63,7 @@ pub(crate) struct LowerCtx<'a> {
     pub self_antecedent: bool,
     pub delayed_tag_key: Option<TagKey>,
     pub is_spell_body: bool,
+    pub last_damage_was_self: bool,
 }
 
 impl<'a> LowerCtx<'a> {
@@ -92,6 +93,7 @@ impl<'a> LowerCtx<'a> {
             self_antecedent: false,
             delayed_tag_key: None,
             is_spell_body: false,
+            last_damage_was_self: false,
         }
     }
 
@@ -101,6 +103,7 @@ impl<'a> LowerCtx<'a> {
         self.trigger_damage_event = None;
         self.self_antecedent = false;
         self.delayed_tag_key = None;
+        self.last_damage_was_self = false;
     }
 
     pub fn alloc_mana_id(&mut self) -> ManaAbilityId {

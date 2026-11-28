@@ -559,7 +559,7 @@ pub(crate) fn lower_object_mutation(
                     ctx,
                 );
             }
-            let query = lower_mutation_subject_query(subject, acc, ctx)?;
+            let (source, selection) = lower_mutation_source_and_selection(subject, acc, ctx)?;
             let attach_op = match host_subject.as_ref() {
                 v2::SubjectRef::Player(player_ref) => AttachOp::ToPlayer {
                     player: atoms::lower_player_ref(*player_ref, acc, ctx)?,
@@ -583,7 +583,13 @@ pub(crate) fn lower_object_mutation(
                     ability: None,
                 },
             };
-            emit_object_mutation(query, EngineObjectMutation::Attach(attach_op), acc, ctx)
+            emit_object_mutation_selected(
+                source,
+                selection,
+                EngineObjectMutation::Attach(attach_op),
+                acc,
+                ctx,
+            )
         }
         v2::ObjectMutation::ApplyRule(rule) => {
             lower_apply_rule_mutation(subject, rule, duration, acc, ctx)
@@ -705,6 +711,10 @@ pub(crate) fn lower_player_mutation(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    if player == v2::PlayerRef::AnyOpponent {
+        effect::emit_choose_any_opponent(acc, ctx)?;
+        return lower_player_mutation(v2::PlayerRef::ChosenPlayer, mutation, duration, acc, ctx);
+    }
     match mutation {
         v2::PlayerMutation::AddMana(spec) => {
             require_instant_duration(duration, "v2:add-mana-unexpected-duration")?;
@@ -994,6 +1004,39 @@ fn try_lower_player_keyword_grant(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<bool> {
     match subject {
+        v2::SubjectRef::Player(v2::PlayerRef::ThatPlayer) => {
+            // `v2` parses `"They gain <keywords>"` for creatures/tokens/cards as
+            // `Player(ThatPlayer)`. Only treat `ThatPlayer` as a player keyword grant
+            // when every keyword is player-applicable AND there is an explicit player
+            // antecedent without a closer object antecedent.
+            let has_player_context = ctx.in_loop_player
+                || ctx.last_player_target.is_some()
+                || matches!(acc.target, BodyTarget::Player { .. });
+            if !has_player_context {
+                return Ok(false);
+            }
+            let mut kw_set = BTreeSet::new();
+            for kw in kws {
+                let engine_kw = atoms::lower_keyword_ability(kw, ctx)?;
+                if !is_player_applicable_keyword(&engine_kw) {
+                    return Ok(false);
+                }
+                kw_set.insert(engine_kw);
+            }
+            let Some(players) = lower_player_grant_subject_part(subject, acc, ctx)? else {
+                return Ok(false);
+            };
+            acc.push(Instruction::ApplyContinuous(Box::new(
+                ApplyContinuousSpec::temporary_rule(
+                    TemporaryRuleKind::PlayerGrantKeyword {
+                        players,
+                        keywords: kw_set,
+                    },
+                    dur,
+                ),
+            )));
+            Ok(true)
+        }
         v2::SubjectRef::Player(_) | v2::SubjectRef::TargetPlayer { .. } => {
             let Some(players) = lower_player_grant_subject_part(subject, acc, ctx)? else {
                 return Ok(false);
@@ -2145,6 +2188,26 @@ fn lower_inline_pay_cost(
             )));
             Ok(())
         }
+        v2::Cost::ScaledMana { base, scale }
+            if crate::v2_lowering::cost::is_energy_only_mana_symbols(base) =>
+        {
+            let Some(amt_kind) =
+                crate::v2_lowering::cost::extract_energy_cost_amount_scaled(base, scale, ctx)?
+            else {
+                return Err(LoweringError::Unsupported("v2:player-pay-cost-unsupported"));
+            };
+            let ps = atoms::lower_player_ref(player, acc, ctx)?;
+            let amt = match amt_kind {
+                crate::v2_lowering::cost::EnergyCostAmt::Fixed(n) => {
+                    EngineValueExpr::literal(i64::from(n))
+                }
+                crate::v2_lowering::cost::EnergyCostAmt::Dynamic(expr) => expr,
+            };
+            acc.push(Instruction::MutatePlayer(Box::new(
+                MutatePlayerSpec::pay_counter(ps, EngineCounterKind::Energy, amt),
+            )));
+            Ok(())
+        }
         v2::Cost::DiscardHand => {
             let ps = atoms::lower_player_ref(player, acc, ctx)?;
             let mut spec = ZoneOpSpec::move_all(
@@ -2684,28 +2747,7 @@ fn lower_mutation_subject_query(
 ) -> LowerResult<ObjectQuery> {
     effect::register_subject_filter_player_targets(subject, acc, ctx)?;
     if matches!(subject, v2::SubjectRef::Player(v2::PlayerRef::ThatPlayer)) {
-        if let Some(slot) = ctx.in_loop_object.or(ctx.last_moved_binding) {
-            return Ok(ObjectQuery::Bound(slot));
-        }
-        if acc.target_set
-            && matches!(
-                acc.target,
-                BodyTarget::Object { .. }
-                    | BodyTarget::AnyTarget(_)
-                    | BodyTarget::Spell { .. }
-                    | BodyTarget::StackEntry(_)
-            )
-        {
-            return Ok(ObjectQuery::Targets);
-        }
-        if let Some(Instruction::ApplyContinuous(prev)) = acc.instructions.last()
-            && let Some(prev_q) = &prev.selector
-        {
-            return Ok(prev_q.clone());
-        }
-        if ctx.in_trigger {
-            return Ok(ObjectQuery::TriggerSubject);
-        }
+        return atoms::lower_anaphora_to_query(v2::AnaphoraRef::Them, acc, ctx);
     }
     atoms::lower_subject_to_query(subject, acc, ctx)
 }
@@ -2715,6 +2757,26 @@ fn lower_mutation_source_and_selection(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<(ObjectQuery, ZoneSelection)> {
+    if let v2::SubjectRef::OneOfThem(val_expr) = subject {
+        let source = if let Some(slot) = ctx.last_moved_binding {
+            ObjectQuery::Bound(slot)
+        } else if acc.target_set && atoms::target_is_object_like(acc.target) {
+            ObjectQuery::Targets
+        } else {
+            return Err(LoweringError::Unsupported("v2:subject:one-of-them"));
+        };
+        effect::register_value_expr_player_targets(val_expr, acc, ctx)?;
+        let amt = value::lower_value_expr(val_expr, ctx)?;
+        let selection = ZoneSelection::Prompt {
+            chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            min: Box::new(amt.clone()),
+            max: Box::new(amt),
+            constraint: None,
+            category: ChoiceCategory::Generic,
+            hidden: false,
+        };
+        return Ok((source, selection));
+    }
     if let v2::SubjectRef::Counted { filter: f, count } = subject {
         let (f1, chosen_player) = strip_of_chosen_player_local(f);
         let (f_clean, is_random) = strip_at_random_local(&f1);

@@ -50,6 +50,21 @@ pub(crate) fn lower_zone_op(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    if actor == v2::PlayerRef::AnyOpponent {
+        effect::emit_choose_any_opponent(acc, ctx)?;
+        return lower_zone_op(
+            v2::PlayerRef::ChosenPlayer,
+            op,
+            subject,
+            from,
+            to,
+            modifiers,
+            except,
+            count,
+            acc,
+            ctx,
+        );
+    }
     match actor {
         v2::PlayerRef::TargetPlayer => {
             acc.register_target(BodyTarget::SINGLE_PLAYER, v2::TargetCount::Exact(1))?;
@@ -938,6 +953,83 @@ fn lower_search_library(
     Ok(())
 }
 
+/// Lower a fused split-destination library search (e.g. Kodama's Reach / Cultivate /
+/// Flare of Cultivation) using an explicit engine [`SearchDestination`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_split_search_library(
+    actor: v2::PlayerRef,
+    reveal: bool,
+    exact: bool,
+    subject: &v2::SubjectRef,
+    from: &[v2::ZoneRef],
+    except: Option<&v2::SubjectRef>,
+    count: Option<&v2::CountSpec>,
+    destination: SearchDestination,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    if actor == v2::PlayerRef::AnyOpponent {
+        effect::emit_choose_any_opponent(acc, ctx)?;
+        return lower_split_search_library(
+            v2::PlayerRef::ChosenPlayer,
+            reveal,
+            exact,
+            subject,
+            from,
+            except,
+            count,
+            destination,
+            acc,
+            ctx,
+        );
+    }
+    if except.is_some() {
+        return Err(LoweringError::Unsupported("v2:search-library-with-except"));
+    }
+    let source = lower_search_source(from, acc)?;
+    let (matcher, subj_count) = lower_search_matcher(subject, acc, ctx)?;
+    let eff_count = count.or(subj_count);
+    let search_count = lower_search_count(eff_count, exact, acc, ctx)?;
+    if is_multi_player_ref(actor) {
+        let group_sel = atoms::lower_player_ref(actor, acc, ctx)?;
+        let search = LibrarySearch {
+            searcher: ResolvingPlayer::LoopPlayer,
+            source,
+            matcher,
+            mana_value: None,
+            count: search_count,
+            pair_constraint: None,
+            destination,
+            reveal,
+        };
+        acc.push(Instruction::ForEachPlayerQuery {
+            selector: Box::new(group_sel),
+            bind_player: BindingId::LOOP_PLAYER,
+            body: Box::new(ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::SearchLibrary {
+                    filter: Box::new(search),
+                }],
+            )),
+        });
+        return Ok(());
+    }
+    let searcher = atoms::lower_resolving_player(actor, acc, ctx)?;
+    acc.push(Instruction::SearchLibrary {
+        filter: Box::new(LibrarySearch {
+            searcher,
+            source,
+            matcher,
+            mana_value: None,
+            count: search_count,
+            pair_constraint: None,
+            destination,
+            reveal,
+        }),
+    });
+    Ok(())
+}
+
 // Parameters mirror the orthogonal fields of `v2::Effect::ZoneOp` and lowering accumulators.
 #[allow(clippy::too_many_arguments)]
 fn lower_shuffle(
@@ -1115,7 +1207,17 @@ fn lower_reveal(
             ctx,
         );
     }
-    let built = build_source_and_selection(actor, subject, from, except, count, false, acc, ctx)?;
+    let hidden_prompt = from.iter().any(|z| z.zone == v2::ZoneKind::Hand)
+        || matches!(
+            subject,
+            v2::SubjectRef::Counted { filter, .. }
+                | v2::SubjectRef::Group(filter)
+                | v2::SubjectRef::Each(filter)
+                | v2::SubjectRef::All(filter)
+                if filter.zones.iter().any(|z| z.zone == v2::ZoneKind::Hand)
+        );
+    let built =
+        build_source_and_selection(actor, subject, from, except, count, hidden_prompt, acc, ctx)?;
     emit_zone_op_with_prior(built, EngineZoneDest::RevealOnly, None, acc, ctx)
 }
 
@@ -1484,10 +1586,13 @@ fn build_source_and_selection(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<BuiltZoneSource> {
     if let v2::SubjectRef::OneOfThem(val_expr) = subject {
-        let src_slot = ctx
-            .last_moved_binding
-            .ok_or(LoweringError::Unsupported("v2:subject:one-of-them"))?;
-        let mut source = ObjectQuery::Bound(src_slot);
+        let mut source = if let Some(src_slot) = ctx.last_moved_binding {
+            ObjectQuery::Bound(src_slot)
+        } else if acc.target_set && atoms::target_is_object_like(acc.target) {
+            ObjectQuery::Targets
+        } else {
+            return Err(LoweringError::Unsupported("v2:subject:one-of-them"));
+        };
         if let Some(exc) = except {
             let exc_q = atoms::lower_subject_to_query(exc, acc, ctx)?;
             source = ObjectQuery::difference(source, exc_q);
@@ -1535,7 +1640,11 @@ fn build_source_and_selection(
         let (f_clean, is_random) = strip_at_random(&f3);
         let from_prior = among_prior || prior_action_bound;
 
-        if chosen_player.is_some() || from_prior || is_random {
+        if chosen_player.is_some()
+            || from_prior
+            || is_random
+            || matches!(subject, v2::SubjectRef::Counted { .. })
+        {
             effect::register_filter_player_targets(&f_clean, acc, ctx)?;
             let ef = filter::lower_object_filter(&f_clean, ctx)?;
             let prior_source_binding = if from_prior {

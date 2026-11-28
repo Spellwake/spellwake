@@ -2338,7 +2338,7 @@ fn subject_is_targeting(subj: &v2::SubjectRef) -> bool {
     }
 }
 
-fn target_is_object_like(target: BodyTarget) -> bool {
+pub(crate) fn target_is_object_like(target: BodyTarget) -> bool {
     matches!(
         target,
         BodyTarget::Object { .. }
@@ -2807,7 +2807,7 @@ pub(crate) fn lower_subject_to_query(
     }
 }
 
-fn lower_anaphora_to_query(
+pub(crate) fn lower_anaphora_to_query(
     anaph: v2::AnaphoraRef,
     acc: &BodyAcc,
     ctx: &LowerCtx<'_>,
@@ -2992,7 +2992,11 @@ fn lower_group_filter_to_query(
 
     if filter.zones.is_empty()
         && let Some(prior_kind) = filter.predicates.iter().find_map(|p| match p {
-            v2::FilterPredicate::AffectedByPriorAction(k) => Some(*k),
+            v2::FilterPredicate::AffectedByPriorAction(k)
+                if *k != v2::PriorActionKind::DealtDamageThisWay =>
+            {
+                Some(*k)
+            }
             _ => None,
         })
     {
