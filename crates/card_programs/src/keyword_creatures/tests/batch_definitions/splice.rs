@@ -171,7 +171,10 @@ fn splice_rechecks_all_targets_and_preserves_untargeted_text_only_if_spell_resol
                     5,
                     A,
                     ObjectDestination::Hand,
-                    free_instant(BodyTarget::SINGLE_CREATURE, crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()),
+                    free_instant(
+                        BodyTarget::SINGLE_CREATURE,
+                        crate::keyword_creatures::toolbox_emit::return_to_owners_hand(),
+                    ),
                 ),
             ],
             &[(Blue, 5), (Red, 2)],

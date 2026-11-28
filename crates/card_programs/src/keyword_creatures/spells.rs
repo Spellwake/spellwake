@@ -100,21 +100,30 @@ pub(super) fn compile(
                 vec![
                     Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
                         BodyTarget::SINGLE_PERMANENT,
-                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))],
+                        vec![crate::keyword_creatures::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
+                            ),
+                        )],
                     ))),
                     Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
                         BodyTarget::SINGLE_PLAYER,
-                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                        vec![crate::keyword_creatures::toolbox_emit::draw_target_player(
                             spellwake_engine::program::ValueExpr::Literal(4.into()),
                         )],
                     ))),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::take_extra_turn(
+                    crate::keyword_creatures::toolbox_emit::take_extra_turn(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,
                         ),
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_resolving_spell(
-                    ),
+                    crate::keyword_creatures::toolbox_emit::exile_resolving_spell(),
                 ],
             ),
         );
@@ -143,13 +152,13 @@ pub(super) fn compile(
         use spellwake_engine::program::{ConditionalCastCost, ObjectFilter, PublicZoneDestination};
         let each = match text {
             "Destroy target artifact you don't control." => {
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                crate::keyword_creatures::toolbox_emit::destroy_group(
                     ObjectFilter::artifact().not_controlled(),
                     true,
                 )
             }
             "Return target nonland permanent you don't control to its owner's hand." => {
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
+                crate::keyword_creatures::toolbox_emit::move_group(
                     ObjectFilter::nonland().not_controlled(),
                     PublicZoneDestination::Hand,
                 )
@@ -435,27 +444,23 @@ pub(super) fn compile(
         }
         "You gain 4 life." if !cascades.is_empty() => ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(4),
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::literal(4),
+            )],
         ),
         text if !cascades.is_empty()
             && text.strip_prefix(&card.name) == Some(" deals 4 damage to target creature.") =>
         {
             ExecutableBody::new(
                 BodyTarget::SINGLE_CREATURE,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                        spellwake_engine::program::ValueExpr::literal(4),
-                        false,
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(4),
+                    false,
+                )],
             )
         }
 
@@ -465,13 +470,13 @@ pub(super) fn compile(
             ExecutableBody::new(
                 BodyTarget::SINGLE_PLAYER,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    crate::keyword_creatures::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::TargetPlayer,
                         ),
                         spellwake_engine::program::ValueExpr::literal(3),
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    crate::keyword_creatures::toolbox_emit::gain_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,
                         ),
@@ -503,13 +508,11 @@ pub(super) fn compile(
         {
             ExecutableBody::new(
                 BodyTarget::SINGLE_CREATURE,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                        spellwake_engine::program::ValueExpr::literal(4),
-                        false,
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(4),
+                    false,
+                )],
             )
         }
         "Counter target spell [that wasn't cast from its owner's hand]." if cleave.is_some() => {
@@ -538,14 +541,12 @@ pub(super) fn compile(
         _ if cleave.is_some() => return None,
         "You gain 20 life." if exile_action.is_some() => ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(20),
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::literal(20),
+            )],
         ),
         "Target creature gets +1/+1 and gains double strike until end of turn."
             if exile_action.is_some() =>
@@ -582,25 +583,21 @@ pub(super) fn compile(
         {
             ExecutableBody::new(
                 BodyTarget::SINGLE_CREATURE,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                        spellwake_engine::program::ValueExpr::literal(13),
-                        false,
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(13),
+                    false,
+                )],
             )
         }
         "Target player loses 2 life." if escaped => ExecutableBody::new(
             BodyTarget::SINGLE_PLAYER,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(2),
+            vec![crate::keyword_creatures::toolbox_emit::lose_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::TargetPlayer,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::literal(2),
+            )],
         ),
         "Target player mills four cards." if escaped => ExecutableBody::new(
             BodyTarget::SINGLE_PLAYER,
@@ -635,7 +632,7 @@ pub(super) fn compile(
                 vec![
                     pump(2, 2, None),
                     if_not_bargained(3),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
                             AbilityChange::grant_keywords([
@@ -684,13 +681,11 @@ pub(super) fn compile(
         {
             ExecutableBody::new(
                 BodyTarget::SINGLE_CREATURE,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                        spellwake_engine::program::ValueExpr::literal(4),
-                        false,
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(4),
+                    false,
+                )],
             )
         }
         source if !copy_triggers.is_empty() => {
@@ -770,7 +765,7 @@ fn if_not_bargained(destination: usize) -> Instruction {
 }
 
 fn draw(amount: i64) -> Instruction {
-    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+    crate::keyword_creatures::toolbox_emit::draw_controller(
         spellwake_engine::program::ValueExpr::Literal(amount.into()),
     )
 }
@@ -805,51 +800,46 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
         "Draw three cards." => (BodyTarget::None, vec![draw(3)]),
         "Return target creature to its owner's hand." => (
             BodyTarget::SINGLE_CREATURE,
-            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()],
+            vec![crate::keyword_creatures::toolbox_emit::return_to_owners_hand()],
         ),
         "Return target permanent to its owner's hand." => (
             BodyTarget::SINGLE_PERMANENT,
-            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()],
+            vec![crate::keyword_creatures::toolbox_emit::return_to_owners_hand()],
         ),
         "Destroy target creature." => (
             BodyTarget::SINGLE_CREATURE,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                        spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ZoneDest::Graveyard {
-                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                allow_regenerate: true,
-                            },
+            vec![crate::keyword_creatures::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
                         },
-                    ),
+                    },
                 ),
-            ],
+            )],
         ),
         "Destroy target permanent." => (
             BodyTarget::SINGLE_PERMANENT,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                        spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ZoneDest::Graveyard {
-                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                allow_regenerate: true,
-                            },
+            vec![crate::keyword_creatures::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
                         },
-                    ),
+                    },
                 ),
-            ],
+            )],
         ),
         "Return target creature to its owner's hand. Draw a card. If this spell was kicked, you gain 3 life." => {
             (
                 BodyTarget::SINGLE_CREATURE,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
-                    ),
+                    crate::keyword_creatures::toolbox_emit::return_to_owners_hand(),
                     draw(1),
                     if_kicked(kicker?, 4),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    crate::keyword_creatures::toolbox_emit::gain_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,
                         ),
@@ -867,13 +857,13 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
                 BodyTarget::SINGLE_CREATURE,
                 vec![
                     if_kicked(kicker?, 3),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(4),
                         false,
                     ),
                     Instruction::Jump { destination: 4 },
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(2),
                         false,
@@ -899,7 +889,7 @@ fn pump(power: i64, toughness: i64, keyword: Option<KeywordAbility>) -> Instruct
             [keyword],
         )));
     }
-    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+    crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
         spellwake_engine::toolbox::ObjectQuery::Targets,
         ResolvedPartsSpec(parts),
         ResolvedDuration::UntilEndOfTurn,

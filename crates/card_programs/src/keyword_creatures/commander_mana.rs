@@ -47,7 +47,7 @@ pub(super) fn compile(card: &InventoryCard, profile: Profile) -> Option<Program>
                     source_cost: SourceCost::Sacrifice,
                     body: ExecutableBody::new(
                         BodyTarget::None,
-                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        vec![crate::keyword_creatures::toolbox_emit::draw_controller(
                             spellwake_engine::program::ValueExpr::Literal(1.into()),
                         )],
                     ),

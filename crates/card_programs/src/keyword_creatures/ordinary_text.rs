@@ -193,13 +193,13 @@ fn predefined_artifact(
             let (source_cost, instruction) = match kind {
                 ArtifactSubtype::Clue => (
                     SourceCost::Sacrifice,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    crate::keyword_creatures::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
                     ),
                 ),
                 _ => (
                     SourceCost::TapSacrifice,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    crate::keyword_creatures::toolbox_emit::gain_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,
                         ),

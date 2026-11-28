@@ -112,11 +112,11 @@ fn compile_face(
         let (condition, instructions) = match clause {
             "When equipped creature deals combat damage to a player, unattach Elbrus, then transform it." if !reverse => {
                 transforms = true;
-                (spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().attached_to_self(), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true), vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::unattach_query(spellwake_engine::toolbox::ObjectQuery::Source), crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()])
+                (spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().attached_to_self(), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true), vec![crate::keyword_creatures::toolbox_emit::unattach_query(spellwake_engine::toolbox::ObjectQuery::Source), crate::keyword_creatures::toolbox_emit::transform_source()])
             }
             "Whenever a player loses the game, put thirteen +1/+1 counters on Withengar Unbound." if reverse => {
                 (spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::PlayerLosesGame(PlayerRelation::AnyParticipant)),
-                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne, spellwake_engine::program::ValueExpr::literal(13))])
+                    vec![crate::keyword_creatures::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne, spellwake_engine::program::ValueExpr::literal(13))])
             }
             "At the beginning of each upkeep, if no spells were cast last turn, transform this creature."
                 if !reverse =>
@@ -124,7 +124,7 @@ fn compile_face(
                 transforms = true;
                 (
                     spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::Upkeep, spellwake_engine::program::PlayerRelation::AnyParticipant).only_if(spellwake_engine::program::TriggerCondition::PreviousTurnCasts(PreviousTurnCastCondition::NoSpells)),
-                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
+                    vec![crate::keyword_creatures::toolbox_emit::transform_source()],
                 )
             }
             "At the beginning of each upkeep, if a player cast two or more spells last turn, transform this creature."
@@ -133,7 +133,7 @@ fn compile_face(
                 transforms = true;
                 (
                     spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::Upkeep, spellwake_engine::program::PlayerRelation::AnyParticipant).only_if(spellwake_engine::program::TriggerCondition::PreviousTurnCasts(PreviousTurnCastCondition::OnePlayerCastAtLeastTwo,)),
-                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
+                    vec![crate::keyword_creatures::toolbox_emit::transform_source()],
                 )
             }
             "At the beginning of your upkeep, look at the top card of your library. You may reveal that card. If an instant or sorcery card is revealed this way, transform this creature."
@@ -151,7 +151,7 @@ fn compile_face(
                                 comparison: Comparison::Equal,
                                 right: spellwake_engine::program::ValueExpr::Literal(1.into()),
                             }))), destination: 3 },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                        crate::keyword_creatures::toolbox_emit::transform_source(),
                     ],
                 )
             }
@@ -164,7 +164,7 @@ fn compile_face(
                     SourceCost::Tap,
                     NoTarget,
                     vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        crate::keyword_creatures::toolbox_emit::gain_life(
                             spellwake_engine::toolbox::PlayerSelector::Resolving(
                                 ResolvingPlayer::Controller,
                             ),
@@ -175,7 +175,7 @@ fn compile_face(
                                 comparison: Comparison::GreaterOrEqual,
                                 right: spellwake_engine::program::ValueExpr::Literal(10.into()),
                             }))), destination: 3 },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                        crate::keyword_creatures::toolbox_emit::transform_source(),
                     ],
                 ));
                 continue;
@@ -186,7 +186,7 @@ fn compile_face(
                     SourceCost::Tap,
                     BodyTarget::SINGLE_PLAYER,
                     vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                        crate::keyword_creatures::toolbox_emit::lose_life(
                             spellwake_engine::toolbox::PlayerSelector::Resolving(
                                 ResolvingPlayer::TargetPlayer,
                             ),
@@ -210,7 +210,7 @@ fn compile_face(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 3,
                         },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        crate::keyword_creatures::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec {
                                 bind_snapshots: Some(spellwake_engine::toolbox::BindingId(0)),
                                 bind_succeeded: Some(spellwake_engine::toolbox::BindingId(1)),
@@ -233,7 +233,7 @@ fn compile_face(
                             ),
                             destination: 4,
                         },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        crate::keyword_creatures::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Players(
                                 spellwake_engine::toolbox::PlayerSelector::Bound(
                                     spellwake_engine::toolbox::BindingId(0),
@@ -261,7 +261,7 @@ fn compile_face(
                         from_graveyard: false,
                     },
                     NoTarget,
-                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
+                    vec![crate::keyword_creatures::toolbox_emit::transform_source()],
                 );
                 program.activation_restrictions.insert(
                     ability.id,
@@ -304,8 +304,8 @@ fn compile_face(
                                 comparison: Comparison::Equal,
                                 right: spellwake_engine::program::ValueExpr::Literal(0.into()),
                             }))), destination: 4 },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::tap_ability_source(),
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        crate::keyword_creatures::toolbox_emit::tap_ability_source(),
+                        crate::keyword_creatures::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
                                 spellwake_engine::program::DamageRecipientsRef::Group(
                                     DamageCohort::Controller,
@@ -326,7 +326,7 @@ fn compile_face(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 1,
                         },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                        crate::keyword_creatures::toolbox_emit::transform_source(),
                     ],
                 )
             }
@@ -345,7 +345,7 @@ fn compile_face(
                                 2,
                             ),
                         )),
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                        crate::keyword_creatures::toolbox_emit::transform_source(),
                     ],
                 )
             }
@@ -358,7 +358,7 @@ fn compile_face(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 1,
                         },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                        crate::keyword_creatures::toolbox_emit::transform_source(),
                     ],
                 )
             }
@@ -377,7 +377,7 @@ fn compile_face(
                         exclude_source: true,
                     },
                     NoTarget,
-                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
+                    vec![crate::keyword_creatures::toolbox_emit::transform_source()],
                 );
                 ability.id = ActivatedAbilityId(program.activated.len().try_into().ok()?);
                 program.activated.push(ability);
@@ -392,7 +392,7 @@ fn compile_face(
                             .with_keyword(spellwake_engine::characteristics::KeywordAbility::Flying),
                     ),
                     vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        crate::keyword_creatures::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Targets,
                             spellwake_engine::program::ValueExpr::literal(2),
                             false,
@@ -425,7 +425,7 @@ fn compile_face(
                     fixed_cost("{B}")?,
                     SourceCost::None,
                     NoTarget,
-                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source()],
+                    vec![crate::keyword_creatures::toolbox_emit::transform_source()],
                 );
                 ability.id = ActivatedAbilityId(program.activated.len() as u64);
                 program.activation_restrictions.insert(
@@ -461,14 +461,14 @@ fn compile_face(
                     SourceCost::None,
                     NoTarget,
                     vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(kind, spellwake_engine::program::ValueExpr::literal(1)),
+                        crate::keyword_creatures::toolbox_emit::put_counters_on_source(kind, spellwake_engine::program::ValueExpr::literal(1)),
                         BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::counters(spellwake_engine::program::CounterSubjectRef::AbilitySource, Some(kind)),
                                 comparison: Comparison::GreaterOrEqual,
                                 right: spellwake_engine::program::ValueExpr::Literal(5.into()),
                             }))), destination: 4 },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::clear_source_counters(Some(kind)),
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                        crate::keyword_creatures::toolbox_emit::clear_source_counters(Some(kind)),
+                        crate::keyword_creatures::toolbox_emit::transform_source(),
                     ],
                 ));
                 continue;
@@ -486,7 +486,7 @@ fn compile_face(
                     SourceCost::None,
                     NoTarget,
                     vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                             spellwake_engine::toolbox::ObjectQuery::Source,
                             spellwake_engine::characteristics::ResolvedPartsSpec(vec![
                                 spellwake_engine::characteristics::ResolvedPartSpec::ModifyPT(
@@ -514,7 +514,7 @@ fn compile_face(
                     SourceCost::Tap,
                     NoTarget,
                     vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::Literal(1.into())),
+                        crate::keyword_creatures::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::Literal(1.into())),
                         Instruction::ZoneOp(Box::new(
                             spellwake_engine::toolbox::ZoneOpSpec::discard(
                                 spellwake_engine::program::AffectedPlayers::One(
@@ -528,8 +528,8 @@ fn compile_face(
                                 comparison: Comparison::Equal,
                                 right: spellwake_engine::program::ValueExpr::Literal(1.into()),
                             }))), destination: 5 },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::untap_ability_source(),
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                        crate::keyword_creatures::toolbox_emit::untap_ability_source(),
+                        crate::keyword_creatures::toolbox_emit::transform_source(),
                     ],
                 ));
                 continue;
@@ -542,8 +542,8 @@ fn compile_face(
                             comparison: Comparison::Equal,
                             right: spellwake_engine::program::ValueExpr::Literal(0.into()),
                         }))), destination: 3 },
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::tap_ability_source(),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                    crate::keyword_creatures::toolbox_emit::tap_ability_source(),
+                    crate::keyword_creatures::toolbox_emit::transform_source(),
                 ],
             ),
             "When this creature deals combat damage to a player, you may transform it. If you do, attach it to target creature that player controls." if !reverse => {
@@ -556,7 +556,7 @@ fn compile_face(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 2,
                         },
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                        crate::keyword_creatures::toolbox_emit::transform_source(),
                         Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::Source,
@@ -573,7 +573,7 @@ fn compile_face(
             "At the beginning of your end step, you lose 1 life." => (
                 spellwake_engine::program::TriggerSpec::step_began(Step::End, PlayerRelation::Controller),
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    crate::keyword_creatures::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             ResolvingPlayer::Controller,
                         ),
@@ -583,14 +583,14 @@ fn compile_face(
             ),
             "Whenever this creature deals combat damage to a player, draw a card." => (
                 spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player(),
-                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                vec![crate::keyword_creatures::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 )],
             ),
             "Whenever an opponent casts a spell, this creature deals 2 damage to that player." => (
                 spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Opponent, spellwake_engine::program::SpellFilter::any()),
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
                             spellwake_engine::program::DamageRecipientsRef::Group(
                                 DamageCohort::RelatedPlayer,
@@ -605,7 +605,7 @@ fn compile_face(
                 spellwake_engine::program::TriggerSpec::any_of(vec![spellwake_engine::program::TriggerEvent::Enters { subject: spellwake_engine::program::ObjectFilter::self_object(), from_zone: spellwake_engine::program::TriggerFromZone::Any, cast_origin: None, attached_to_creature: false }, spellwake_engine::program::TriggerEvent::StatusChanged { subject: spellwake_engine::program::ObjectFilter::self_object(), kind: spellwake_engine::program::StatusTriggerKind::Transforms }]),
                 vec![
                     ordinary_text::create_tokens("a 2/2 green Wolf creature token", vocabulary)?,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    crate::keyword_creatures::toolbox_emit::gain_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             ResolvingPlayer::Controller,
                         ),

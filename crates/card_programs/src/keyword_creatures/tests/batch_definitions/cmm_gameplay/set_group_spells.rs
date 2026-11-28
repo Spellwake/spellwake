@@ -48,7 +48,7 @@ fn cmm_group_destruction_and_sacrifice_distinguish_types_color_and_regeneration(
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
+                vec![crate::keyword_creatures::toolbox_emit::regenerate_source()],
             ),
         });
         let setup = game(
@@ -215,7 +215,7 @@ fn cmm_star_of_extinction_damages_creatures_and_planeswalkers_only_after_a_legal
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PERMANENT,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {

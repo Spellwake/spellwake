@@ -449,7 +449,7 @@ fn cmm_zones_yedora_ignores_opposing_creatures_tokens_and_its_own_death() {
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {

@@ -217,11 +217,9 @@ fn cast_new_card(
                 ManaCost::free(),
                 spellwake_engine::program::ExecutableBody::new(
                     spellwake_engine::program::BodyTarget::None,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                            spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        ),
-                    ],
+                    vec![crate::keyword_creatures::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    )],
                 ),
             );
             primer.flashback = Some(ManaCost::free());

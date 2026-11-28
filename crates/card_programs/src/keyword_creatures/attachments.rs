@@ -78,20 +78,18 @@ pub(super) fn compile_rules(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                            spellwake_engine::toolbox::ObjectQuery::Intersect(
-                                Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
-                                Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
-                                    spellwake_engine::toolbox::QueryZone::Battlefield,
-                                    spellwake_engine::program::ObjectFilter::any(),
-                                )),
-                            ),
-                            spellwake_engine::toolbox::ZoneDest::exile(),
+                vec![crate::keyword_creatures::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Intersect(
+                            Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                            Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                spellwake_engine::program::ObjectFilter::any(),
+                            )),
                         ),
+                        spellwake_engine::toolbox::ZoneDest::exile(),
                     ),
-                ],
+                )],
             ),
         });
         program.continuous = Some(continuous);
@@ -145,7 +143,7 @@ pub(super) fn compile_rules(
             body: ExecutableBody::new(
                 BodyTarget::SINGLE_CREATURE,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
                             power: 1.into(),
@@ -347,7 +345,7 @@ pub(super) fn compile_rules(
                 ),
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                    crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                         spellwake_engine::effects::CounterKind::Charge,
                         spellwake_engine::program::ValueExpr::literal(1),
                     ),
@@ -361,14 +359,12 @@ pub(super) fn compile_rules(
                         true,
                     ),
                     BodyTarget::None,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_half_life(
-                            spellwake_engine::toolbox::PlayerSelector::Resolving(
-                                ResolvingPlayer::UniqueRelatedPlayer,
-                            ),
-                            true,
+                    vec![crate::keyword_creatures::toolbox_emit::lose_half_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::UniqueRelatedPlayer,
                         ),
-                    ],
+                        true,
+                    )],
                 )
             }
             "Whenever equipped creature is dealt damage, it deals damage equal to its power to target player or planeswalker." => {
@@ -414,13 +410,11 @@ pub(super) fn compile_rules(
                     BodyTarget::filtered_permanent(
                         spellwake_engine::program::ObjectFilter::creature().of_related_player(),
                     ),
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                            spellwake_engine::program::ValueExpr::literal(1),
-                            false,
-                        ),
-                    ],
+                    vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                        false,
+                    )],
                 )
             }
             "Whenever equipped creature attacks, you may search your library for a basic land card, put it onto the battlefield tapped, then shuffle." => {

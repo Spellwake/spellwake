@@ -333,14 +333,12 @@ fn cmm_experiment_kraj_gains_and_loses_other_creatures_activated_abilities() {
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(1),
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::literal(1),
+            )],
         ),
     });
     donor
@@ -764,7 +762,7 @@ fn cmm_kykar_creates_a_flying_spirit_on_cast_and_sacrifices_it_for_red_mana() {
         ObjectDestination::Hand,
         free_instant(
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+            crate::keyword_creatures::toolbox_emit::gain_life(
                 spellwake_engine::toolbox::PlayerSelector::Resolving(
                     spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
@@ -1113,7 +1111,7 @@ fn cmm_geode_golem_casts_the_chosen_commander_during_the_combat_damage_trigger()
             ObjectDestination::LibraryBottom,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+                crate::keyword_creatures::toolbox_emit::return_to_owners_hand(),
             ),
         ),
         named("Experiment Kraj", 100, A, ObjectDestination::Command),

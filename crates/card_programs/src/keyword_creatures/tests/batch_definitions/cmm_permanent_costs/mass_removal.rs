@@ -381,7 +381,7 @@ fn cmm_avacyn_is_flying_vigilant_and_indestructible_and_protects_other_allied_pe
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PERMANENT,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -399,7 +399,7 @@ fn cmm_avacyn_is_flying_vigilant_and_indestructible_and_protects_other_allied_pe
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                crate::keyword_creatures::toolbox_emit::exile_target(),
             ),
         ),
     ]);

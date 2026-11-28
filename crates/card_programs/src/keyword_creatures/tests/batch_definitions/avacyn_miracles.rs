@@ -20,7 +20,7 @@ fn draw_two(
         ObjectDestination::Hand,
         free_instant(
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+            crate::keyword_creatures::toolbox_emit::draw_controller(
                 spellwake_engine::program::ValueExpr::Literal(2.into()),
             ),
         ),

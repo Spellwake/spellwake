@@ -27,7 +27,7 @@ pub(super) fn compile(
             body: ExecutableBody::new(
                 BodyTarget::SINGLE_PLAYER,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec {
                             bind_moved: Some(spellwake_engine::toolbox::BindingId(0)),
                             ..spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -43,13 +43,13 @@ pub(super) fn compile(
                             )
                         },
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    crate::keyword_creatures::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::BoundCount {
                             binding: spellwake_engine::toolbox::BindingId(0),
                             filter: None,
                         },
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    crate::keyword_creatures::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,
                         ),
@@ -97,7 +97,7 @@ pub(super) fn compile(
             body: ExecutableBody::new(
                 BodyTarget::ANY_GRAVEYARD_CREATURE,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec {
                             bind_moved: Some(spellwake_engine::toolbox::BindingId(0)),
                             ..spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -158,12 +158,10 @@ pub(super) fn compile(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
-                        ObjectFilter::any().with_subtype(nightmare),
-                        PublicZoneDestination::Exile,
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::move_group(
+                    ObjectFilter::any().with_subtype(nightmare),
+                    PublicZoneDestination::Exile,
+                )],
             ),
         });
         program.validate(vocabulary).ok()?;
@@ -185,7 +183,7 @@ pub(super) fn compile(
             },
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_hand()],
+                vec![crate::keyword_creatures::toolbox_emit::return_source_graveyard_to_hand()],
             ),
         });
         program.validate(vocabulary).ok()?;
@@ -199,7 +197,11 @@ pub(super) fn compile(
             source_cost: spellwake_engine::activated::SourceCost::GraveyardSelf { unearth: false },
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_battlefield(true)],
+                vec![
+                    crate::keyword_creatures::toolbox_emit::return_source_graveyard_to_battlefield(
+                        true,
+                    ),
+                ],
             ),
         });
         program.validate(vocabulary).ok()?;
@@ -224,7 +226,7 @@ pub(super) fn compile(
                         chooser: ResolvingPlayer::Controller,
                         instructions: 1,
                     },
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_hand(),
+                    crate::keyword_creatures::toolbox_emit::return_source_graveyard_to_hand(),
                 ],
             ),
         });
@@ -267,7 +269,7 @@ pub(super) fn compile(
                     chooser: ResolvingPlayer::Controller,
                     instructions: 1,
                 },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
+                crate::keyword_creatures::toolbox_emit::return_target_to_battlefield(false),
             ],
         ),
     });
@@ -279,10 +281,6 @@ pub(super) fn compile(
 pub(super) fn eldest_reborn_third_chapter() -> ExecutableBody {
     ExecutableBody::new(
         BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER,
-        vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
-                false,
-            ),
-        ],
+        vec![crate::keyword_creatures::toolbox_emit::return_target_to_battlefield(false)],
     )
 }

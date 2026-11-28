@@ -164,13 +164,11 @@ pub(super) fn compile(
             },
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top(
-                        ResolvingPlayer::Controller,
-                        spellwake_engine::program::ValueExpr::literal(1),
-                        false,
-                    ),
-                ],
+                vec![crate::keyword_creatures::toolbox_emit::exile_library_top(
+                    ResolvingPlayer::Controller,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    false,
+                )],
             ),
         });
     }
@@ -260,12 +258,12 @@ pub(super) fn impulse(
                 spellwake_engine::program::AttackTriggerMode::OpponentsAtController { minimum: 1 },
             ),
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top(
+                crate::keyword_creatures::toolbox_emit::exile_library_top(
                     spellwake_engine::program::ResolvingPlayer::UniqueRelatedPlayer,
                     spellwake_engine::program::ValueExpr::literal(1),
                     false,
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::grant_play_permission(
+                crate::keyword_creatures::toolbox_emit::grant_play_permission(
                     spellwake_engine::toolbox::ObjectQuery::LastMoved,
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         spellwake_engine::program::ResolvingPlayer::Controller,
@@ -305,14 +303,14 @@ pub(super) fn impulse(
             spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::End, spellwake_engine::program::PlayerRelation::Controller).only_if(spellwake_engine::program::TriggerCondition::ControlledCreaturePowerAtLeast(minimum)),
             vec![
                 Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(gate))), destination: 3 },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_top_library_group(
+                crate::keyword_creatures::toolbox_emit::exile_top_library_group(
                     spellwake_engine::program::AffectedPlayers::One(
                         spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                     false,
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::impulse_play_last_moved(
+                crate::keyword_creatures::toolbox_emit::impulse_play_last_moved(
                     spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource,
                     false,
                     false,
@@ -339,12 +337,12 @@ pub(super) fn impulse(
             parts: StaticParts(vec![StaticPart::GrantTrigger(Box::new(trigger(
                 spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player(),
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top(
+                    crate::keyword_creatures::toolbox_emit::exile_library_top(
                         spellwake_engine::program::ResolvingPlayer::Controller,
                         spellwake_engine::program::ValueExpr::literal(1),
                         false,
                     ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::grant_play_permission(
+                    crate::keyword_creatures::toolbox_emit::grant_play_permission(
                         spellwake_engine::toolbox::ObjectQuery::LastMoved,
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::Controller,

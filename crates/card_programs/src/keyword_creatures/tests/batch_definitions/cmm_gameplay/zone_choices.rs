@@ -86,7 +86,7 @@ fn cmm_zones_yedora_returns_stolen_creature_to_its_owner_as_a_forest() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -475,7 +475,7 @@ fn cmm_zones_gorex_casts_with_a_graveyard_card_and_recovers_that_card_on_death()
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -556,7 +556,7 @@ fn cmm_zones_isareth_binds_paid_x_to_a_reflexive_target_and_replaces_its_departu
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -706,7 +706,7 @@ fn cmm_zones_abundance_replaces_a_draw_with_a_land_and_orders_the_other_cards() 
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    crate::keyword_creatures::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
                     ),
                 ),
@@ -779,7 +779,7 @@ fn cmm_zones_alms_collector_replaces_an_opponents_multiple_draw_once() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PLAYER,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                    crate::keyword_creatures::toolbox_emit::draw_target_player(
                         spellwake_engine::program::ValueExpr::Literal(3.into()),
                     ),
                 ),
@@ -873,7 +873,7 @@ fn cmm_zones_matter_reshaper_can_put_the_same_revealed_card_into_either_zone() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -1617,7 +1617,7 @@ fn cmm_zones_gonti_exiles_privately_and_casts_after_gonti_leaves_with_other_mana
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -2059,7 +2059,7 @@ fn cmm_zones_matter_reshaper_puts_expensive_permanents_and_nonpermanents_in_hand
                     ObjectDestination::Hand,
                     free_instant(
                         BodyTarget::SINGLE_CREATURE,
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        crate::keyword_creatures::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
                                 spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -2135,7 +2135,7 @@ fn cmm_zones_hoarding_dragon_links_its_optional_search_only_to_its_own_death() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {

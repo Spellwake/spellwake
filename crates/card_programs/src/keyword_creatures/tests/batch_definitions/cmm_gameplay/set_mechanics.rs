@@ -7,7 +7,7 @@ fn cmm_multiplayer_sower_links_exactly_two_seats_and_loses_life_only_once() {
     let bolt = || {
         free_instant(
             BodyTarget::SINGLE_ANY_TARGET,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            crate::keyword_creatures::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(3),
                 false,
@@ -172,7 +172,7 @@ fn cmm_harsh_mercy_collects_all_choices_before_destroying_unchosen_types() {
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
+            vec![crate::keyword_creatures::toolbox_emit::regenerate_source()],
         ),
     });
     let initial = game(
@@ -612,7 +612,7 @@ fn cmm_shirei_restores_its_owners_small_creature_only_if_same_source_survives() 
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -1352,7 +1352,7 @@ fn cmm_heartless_hidetsugu_deals_rounded_down_damage_to_all_players_simultaneous
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PLAYER,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(3),
                         false,

@@ -50,7 +50,7 @@ pub(super) fn rishkar(
         body: ExecutableBody::new(
             BodyTarget::SINGLE_CREATURE,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::literal(1),
                 ),

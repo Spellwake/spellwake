@@ -65,7 +65,7 @@ pub(super) fn compile(
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::filtered_permanent(ObjectFilter::nonland().opposing()),
-            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target_until_source_leaves()],
+            vec![crate::keyword_creatures::toolbox_emit::exile_target_until_source_leaves()],
         ),
     });
     program.validate(vocabulary).ok()?;

@@ -210,7 +210,7 @@ pub(super) fn unblockable_effect() -> spellwake_engine::program::Instruction {
     use spellwake_engine::characteristics::{
         BlockingRestriction, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec,
     };
-    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+    crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
         spellwake_engine::toolbox::ObjectQuery::Targets,
         ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
             BlockingRestriction::CannotBeBlocked,
@@ -273,11 +273,9 @@ pub(super) fn sliver_selected_activation(
         },
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                    spellwake_engine::program::ValueExpr::Literal(1.into()),
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            )],
         ),
     };
     program.continuous = Some(StaticContinuousAbility::Battlefield {

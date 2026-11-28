@@ -18,7 +18,7 @@ fn cmm_zones_murder_of_crows_loots_for_other_deaths_but_never_for_its_own_death(
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -168,7 +168,7 @@ fn cmm_zones_jolrael_rewards_only_the_second_draw_and_sets_allied_base_size_at_r
     let draw = || {
         free_instant(
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+            crate::keyword_creatures::toolbox_emit::draw_controller(
                 spellwake_engine::program::ValueExpr::Literal(1.into()),
             ),
         )
@@ -614,7 +614,7 @@ fn cmm_zones_padeem_protects_only_own_artifacts_and_rechecks_its_upkeep_lead_or_
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PERMANENT,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -907,7 +907,7 @@ fn cmm_zones_losheel_prevents_damage_only_to_controlled_attackers_that_are_artif
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(1),
                     false,

@@ -87,7 +87,7 @@ fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
     let (target, instruction) = match text {
         "return target creature to its owner's hand." => (
             BodyTarget::SINGLE_CREATURE,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+            crate::keyword_creatures::toolbox_emit::return_to_owners_hand(),
         ),
         "target creature gains haste until end of turn."
         | "target creature gains trample until end of turn."
@@ -99,7 +99,7 @@ fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
             };
             (
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
                         AbilityChange::grant_keywords([keyword]),
@@ -121,7 +121,7 @@ fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
             let delta = if text.contains("+3/+3") { 3 } else { -3 };
             (
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
                         power: delta.into(),

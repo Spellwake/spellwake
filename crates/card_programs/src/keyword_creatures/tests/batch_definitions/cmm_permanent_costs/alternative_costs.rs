@@ -212,7 +212,7 @@ fn cmm_deadly_rollick_and_flawless_maneuver_pay_the_printed_price_or_use_a_contr
                     ObjectDestination::LibraryBottom,
                     free_instant(
                         BodyTarget::SINGLE_CREATURE,
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        crate::keyword_creatures::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
                                 spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -365,13 +365,11 @@ fn cmm_deflecting_swat_can_retain_or_change_a_spell_or_an_ability_target_and_use
     use spellwake_engine::effects::CopyTargetChoice;
     let bolt = ExecutableBody::new(
         BodyTarget::SINGLE_PLAYER,
-        vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                spellwake_engine::program::ValueExpr::literal(1),
-                false,
-            ),
-        ],
+        vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            spellwake_engine::program::ValueExpr::literal(1),
+            false,
+        )],
     );
     let mut pinger = Program::artifact(Some(ManaCost::free()), vec![]);
     pinger.activated.push(ActivatedAbility {
@@ -456,14 +454,12 @@ fn cmm_darksteel_monolith_survives_destruction_and_pays_zero_for_only_one_colorl
             ManaCost::generic(3.into()),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                        spellwake_engine::toolbox::PlayerSelector::Resolving(
-                            spellwake_engine::program::ResolvingPlayer::Controller,
-                        ),
-                        spellwake_engine::program::ValueExpr::literal(1),
+                vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
-                ],
+                    spellwake_engine::program::ValueExpr::literal(1),
+                )],
             ),
         )
     };
@@ -482,7 +478,7 @@ fn cmm_darksteel_monolith_survives_destruction_and_pays_zero_for_only_one_colorl
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PERMANENT,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -540,13 +536,11 @@ fn cmm_obscuring_haze_prevents_damage_only_from_opposing_creatures_and_only_duri
  {
     let bolt = ExecutableBody::new(
         BodyTarget::SINGLE_PLAYER,
-        vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                spellwake_engine::program::ValueExpr::literal(2),
-                false,
-            ),
-        ],
+        vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            spellwake_engine::program::ValueExpr::literal(2),
+            false,
+        )],
     );
     let mut pinger = Program::creature(
         Some(ManaCost::free()),
@@ -855,7 +849,7 @@ fn cmm_starfield_mystic_and_herald_of_the_pantheon_discount_enchantments_and_tri
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PERMANENT,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -1079,13 +1073,11 @@ fn cmm_imps_mischief_requires_a_single_target_changes_it_and_costs_life_equal_to
         ManaCost::generic(3.into()),
         ExecutableBody::new(
             BodyTarget::SINGLE_PLAYER,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                    spellwake_engine::program::ValueExpr::literal(2),
-                    false,
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(2),
+                false,
+            )],
         ),
     );
     let opening = game(
@@ -1171,18 +1163,16 @@ fn cmm_not_of_this_world_counters_a_spell_or_ability_targeting_an_own_permanent_
  {
     let body = ExecutableBody::new(
         BodyTarget::SINGLE_PERMANENT,
-        vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                    spellwake_engine::toolbox::ObjectQuery::Targets,
-                    spellwake_engine::toolbox::ZoneDest::Graveyard {
-                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                            allow_regenerate: true,
-                        },
+        vec![crate::keyword_creatures::toolbox_emit::zone_op(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                        allow_regenerate: true,
                     },
-                ),
+                },
             ),
-        ],
+        )],
     );
     let ability = ActivatedAbility {
         id: ActivatedAbilityId(0),
@@ -1373,7 +1363,7 @@ fn cmm_commandeer_pays_the_normal_price_or_exiles_two_blue_hand_cards_takes_cont
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_PLAYER,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(2),
                         false,
@@ -1500,13 +1490,11 @@ fn cmm_abstruse_archaic_copies_controlled_colorless_activated_and_triggered_abil
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SINGLE_PLAYER,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                    spellwake_engine::program::ValueExpr::literal(1),
-                    false,
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(1),
+                false,
+            )],
         ),
     };
     let artifact = Program::artifact(None, vec![ping]);

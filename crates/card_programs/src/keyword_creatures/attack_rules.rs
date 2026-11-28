@@ -126,7 +126,7 @@ pub(super) fn compile(
         if base.continuous.is_some() || !base.triggered.is_empty() {return None;}
         base.continuous=Some(spellwake_engine::characteristics::StaticContinuousAbility::CostModifier { id: StaticAbilityId(0), modifier: spellwake_engine::characteristics::SpellCostModifier::SubtypeDiscountFromCommandOrBattlefield { subtype: vocabulary.resolve_label(subtype)?, amount: std::num::NonZeroU8::new(amount.parse().ok()?)? } });
         base.triggered.push(TriggeredAbility {id:TriggeredAbilityId(0),condition:spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::any(), spellwake_engine::program::AttackTriggerMode::GroupSubtype(vocabulary.resolve_label(attacker_type)?)),grouping:TriggerGrouping::EachOccurrence,
-            body:ExecutableBody::new(BodyTarget::None,vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::DeclaredSubtypeAttackers)),
+            body:ExecutableBody::new(BodyTarget::None,vec![crate::keyword_creatures::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::DeclaredSubtypeAttackers)),
                 Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::put_hand_permanents_onto_battlefield(ResolvingPlayer::Controller, [CardType::Land,CardType::Artifact,CardType::Creature,CardType::Enchantment,CardType::Planeswalker].into(), 1, false)))])});
         return Some(base);
     }

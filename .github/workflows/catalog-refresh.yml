@@ -56,7 +56,7 @@ jobs:
           RUST_MIN_STACK: "67108864"
         run: |
           cargo test --locked -p spellwake-content
-          cargo test --locked -p spellwake-oracle-compiler --test real_card_semantic_suite
+          cargo test --locked -p spellwake-oracle-compiler --test anti_gaming_integrity_gate --test v2_compositional_suite --test custom_card_composability_suite
           cargo test --locked -p spellwake-card-programs -- catalog_support cli_support_report
       - name: Run incremental Scryfall refresh and honest support count report
         env:

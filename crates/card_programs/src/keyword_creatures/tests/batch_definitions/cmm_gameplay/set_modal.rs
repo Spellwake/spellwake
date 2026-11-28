@@ -212,7 +212,7 @@ fn cmm_zones_mystic_confluence_taxes_the_spell_controller_bounces_to_owner_and_d
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_CREATURE,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -405,7 +405,7 @@ fn cmm_zones_kirtars_wrath_prevents_regeneration_and_creates_two_flying_spirits_
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_source()],
+                vec![crate::keyword_creatures::toolbox_emit::regenerate_source()],
             ),
         });
         let mut cards = vec![

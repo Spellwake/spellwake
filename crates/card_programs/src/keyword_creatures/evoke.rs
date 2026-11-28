@@ -119,7 +119,7 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
     let (target, op) = match text {
         "you gain 2 life." | "you gain 3 life." => (
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+            crate::keyword_creatures::toolbox_emit::gain_life(
                 spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
                 spellwake_engine::program::ValueExpr::literal(if text == "you gain 2 life." {
                     2
@@ -139,20 +139,20 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
         ),
         "put two +1/+1 counters on target creature." => (
             BodyTarget::SINGLE_CREATURE,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+            crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                 spellwake_engine::effects::CounterKind::PlusOne,
                 spellwake_engine::program::ValueExpr::literal(2),
             ),
         ),
         "draw a card." => (
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+            crate::keyword_creatures::toolbox_emit::draw_controller(
                 spellwake_engine::program::ValueExpr::Literal(1.into()),
             ),
         ),
         "draw two cards." => (
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+            crate::keyword_creatures::toolbox_emit::draw_controller(
                 spellwake_engine::program::ValueExpr::Literal(2.into()),
             ),
         ),
@@ -165,7 +165,7 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
         ),
         "it deals 6 damage to target creature." => (
             BodyTarget::SINGLE_CREATURE,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            crate::keyword_creatures::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(6),
                 false,

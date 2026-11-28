@@ -25,17 +25,15 @@ pub(super) fn compile(
             _ => return None,
         };
         let mut instructions = vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+            crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                 spellwake_engine::effects::CounterKind::PlusOne,
                 spellwake_engine::program::ValueExpr::Literal(counters.into()),
             ),
         ];
         if draw > 0 {
-            instructions.push(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                    spellwake_engine::program::ValueExpr::Literal(draw.into()),
-                ),
-            );
+            instructions.push(crate::keyword_creatures::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(draw.into()),
+            ));
         }
         abilities.push((
             fixed_cost(cost)?,

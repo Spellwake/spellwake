@@ -48,7 +48,7 @@ pub(super) fn spell_body(text: &str, name: &str) -> Option<ExecutableBody> {
         return Some(ExecutableBody::new(
             BodyTarget::SINGLE_CREATURE,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     ResolvedPartsSpec(vec![ResolvedPartSpec::SwitchPT]),
                     ResolvedDuration::UntilEndOfTurn,
@@ -70,7 +70,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             BodyTarget::filtered_own_graveyard(
                 ObjectFilter::creature().with_mana_value(ManaValueFilter::AtMost(limit)),
             ),
-            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false)],
+            vec![crate::keyword_creatures::toolbox_emit::return_target_to_battlefield(false)],
         ));
     }
     if text.trim()
@@ -79,11 +79,11 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_each_hand_and_graveyard(),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(
+                crate::keyword_creatures::toolbox_emit::shuffle_each_hand_and_graveyard(),
+                crate::keyword_creatures::toolbox_emit::draw_each_player(
                     spellwake_engine::program::ValueExpr::Literal(7.into()),
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::end_turn(),
+                crate::keyword_creatures::toolbox_emit::end_turn(),
             ],
         ));
     }
@@ -103,7 +103,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             _ => return None,
         };
         let mut instructions = vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+            crate::keyword_creatures::toolbox_emit::exile_target(),
             Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(
                     false,
@@ -112,11 +112,9 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             )),
         ];
         if draw {
-            instructions.push(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                    spellwake_engine::program::ValueExpr::Literal(1.into()),
-                ),
-            );
+            instructions.push(crate::keyword_creatures::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ));
         }
         return Some(ExecutableBody::new(
             BodyTarget::filtered_permanent(ObjectFilter::creature().controlled()),
@@ -152,7 +150,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             ExecutableBody::new(
                 BodyTarget::filtered_permanent(filter),
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    crate::keyword_creatures::toolbox_emit::exile_target(),
                     Instruction::ZoneOp(Box::new(
                         spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(
                             next_end_step,
@@ -207,14 +205,14 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                crate::keyword_creatures::toolbox_emit::modify_group_eot(
                     EffectSubject::Matching(ObjectFilter::creature().controlled()),
                     spellwake_engine::program::ValueExpr::literal(3),
                     spellwake_engine::program::ValueExpr::literal(3),
                     BTreeSet::new(),
                     BTreeSet::new(),
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::require_combat_action(
+                crate::keyword_creatures::toolbox_emit::require_combat_action(
                     EffectSubject::Matching(ObjectFilter::creature().opposing()),
                     spellwake_engine::program::CombatActionKind::MustBlock,
                 ),
@@ -256,7 +254,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Intersect(
                                 Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
@@ -292,7 +290,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             }),
         ]);
         return Some(ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, parts, ResolvedDuration::UntilEndOfTurn),
+            crate::keyword_creatures::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, parts, ResolvedDuration::UntilEndOfTurn),
         ]));
     }
     if lower.trim()
@@ -301,11 +299,11 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                crate::keyword_creatures::toolbox_emit::destroy_group(
                     ObjectFilter::creature(),
                     false,
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                crate::keyword_creatures::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::event(
                         spellwake_engine::program::EventValueKind::DestroyedPermanents,
                     ),
@@ -338,7 +336,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                crate::keyword_creatures::toolbox_emit::destroy_group(
                     ObjectFilter::nonland()
                         .with_mana_value(ManaValueFilter::AtMost(limit.parse().ok()?)),
                     true,
@@ -371,12 +369,8 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::SINGLE_OPPONENT,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                    draw_amt.clone(),
-                ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
-                    draw_amt,
-                ),
+                crate::keyword_creatures::toolbox_emit::draw_controller(draw_amt.clone()),
+                crate::keyword_creatures::toolbox_emit::draw_target_player(draw_amt),
             ],
         ));
     }
@@ -387,14 +381,12 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
     }) {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::mill_players(
-                    spellwake_engine::program::AffectedPlayers::EachPlayer,
-                    spellwake_engine::program::ValueExpr::Literal(
-                        super::super::ordinary_text::amount(count)?.into(),
-                    ),
+            vec![crate::keyword_creatures::toolbox_emit::mill_players(
+                spellwake_engine::program::AffectedPlayers::EachPlayer,
+                spellwake_engine::program::ValueExpr::Literal(
+                    super::super::ordinary_text::amount(count)?.into(),
                 ),
-            ],
+            )],
         ));
     }
     if lower
@@ -407,11 +399,11 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::set_group_tapped(
+                crate::keyword_creatures::toolbox_emit::set_group_tapped(
                     ObjectFilter::creature(),
                     false,
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::zone(
                         spellwake_engine::toolbox::QueryZone::Battlefield,
                         ObjectFilter::creature(),
@@ -438,11 +430,11 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::filtered_permanent(ObjectFilter::creature().controlled()),
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::literal(1),
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
                         AbilityChange::grant_keywords([grant]),
@@ -483,7 +475,7 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         == "target creature gains double strike until end of turn. ferocious — that creature also gains trample until end of turn if you control a creature with power 4 or greater."
     {
         let grant = |key| {
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+            crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
                 spellwake_engine::characteristics::ResolvedPartsSpec(vec![
                     spellwake_engine::characteristics::ResolvedPartSpec::Abilities(
@@ -520,7 +512,7 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         let Some(enhanced) = enhanced.strip_prefix(name).and_then(|s|s.strip_prefix(" deals ")).and_then(|s|s.strip_suffix(" damage to each creature and each player instead.")) {
         let damage = |value: &str| {
             Some(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
                         spellwake_engine::program::DamageRecipientsRef::Group(
                             spellwake_engine::program::DamageGroup::CreaturesAndPlayers,
@@ -540,10 +532,10 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         return Some(ExecutableBody::new(
             BodyTarget::SINGLE_CREATURE,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                crate::keyword_creatures::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                crate::keyword_creatures::toolbox_emit::modify_group_eot(
                     EffectSubject::TargetObject,
                     spellwake_engine::program::ValueExpr::PlayerStat(
                         spellwake_engine::program::PlayerStatExpr::CardsDrawnThisTurn,
@@ -562,7 +554,7 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         return Some(ExecutableBody::new(
             BodyTarget::SINGLE_CREATURE,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
                         BlockingRestriction::CannotAttackOrBlock,
@@ -577,25 +569,25 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             BodyTarget::SINGLE_PERMANENT,
             2,
             2,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+            crate::keyword_creatures::toolbox_emit::exile_target(),
         )),
         "destroy two target creatures." => Some((
             BodyTarget::SINGLE_CREATURE,
             2,
             2,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_targets(),
+            crate::keyword_creatures::toolbox_emit::destroy_targets(),
         )),
         "return six target nonland permanents to their owners' hands." => Some((
             BodyTarget::filtered_permanent(ObjectFilter::nonland()),
             6,
             6,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand(),
+            crate::keyword_creatures::toolbox_emit::return_target_to_hand(),
         )),
         "put a +1/+1 counter on each of up to two other target creatures." => Some((
             BodyTarget::filtered_permanent(ObjectFilter::creature().other_than_ability_source()),
             0,
             2,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+            crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                 spellwake_engine::effects::CounterKind::PlusOne,
                 spellwake_engine::program::ValueExpr::literal(1),
             ),
@@ -604,7 +596,7 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             BodyTarget::SINGLE_CREATURE,
             0,
             2,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+            crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                 spellwake_engine::effects::CounterKind::PlusOne,
                 spellwake_engine::program::ValueExpr::literal(1),
             ),
@@ -613,19 +605,19 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             BodyTarget::SINGLE_PERMANENT,
             1,
             1,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false),
+            crate::keyword_creatures::toolbox_emit::set_targets_tapped(false),
         )),
         "untap another target permanent." => Some((
             BodyTarget::filtered_permanent(ObjectFilter::permanent().other_than_ability_source()),
             1,
             1,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false),
+            crate::keyword_creatures::toolbox_emit::set_targets_tapped(false),
         )),
         "untap up to four target permanents." => Some((
             BodyTarget::SINGLE_PERMANENT,
             0,
             4,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false),
+            crate::keyword_creatures::toolbox_emit::set_targets_tapped(false),
         )),
         _ => None,
     };
@@ -637,31 +629,27 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
     if lower == "each player sacrifices all permanents they control that are one or more colors." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                        spellwake_engine::toolbox::ObjectQuery::zone(
-                            spellwake_engine::toolbox::QueryZone::Battlefield,
-                            ObjectFilter::any()
-                                .with_color(spellwake_engine::program::ObjectColorFilter::Colored),
-                        ),
-                        spellwake_engine::toolbox::ZoneDest::Graveyard {
-                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
-                        },
+            vec![crate::keyword_creatures::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::Battlefield,
+                        ObjectFilter::any()
+                            .with_color(spellwake_engine::program::ObjectColorFilter::Colored),
                     ),
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
+                    },
                 ),
-            ],
+            )],
         ));
     }
     if lower == "destroy all creatures. they can't be regenerated." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
-                    ObjectFilter::creature(),
-                    false,
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::destroy_group(
+                ObjectFilter::creature(),
+                false,
+            )],
         ));
     }
     if let Some(result) = lower
@@ -693,7 +681,7 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
                         spellwake_engine::program::PlayerStatExpr::LargestHandSize,
                     ),
                 ))),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(amount),
+                crate::keyword_creatures::toolbox_emit::draw_each_player(amount),
             ],
         ));
     }
@@ -701,7 +689,7 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(
+                crate::keyword_creatures::toolbox_emit::draw_each_player(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
                 Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
@@ -715,30 +703,24 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         use spellwake_engine::program::CreatureTypeSlot;
         let slot = CreatureTypeSlot::new(0);
         let operation = match result {
-            "destroy all creatures that aren't of the chosen type." => Some(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+            "destroy all creatures that aren't of the chosen type." => {
+                Some(crate::keyword_creatures::toolbox_emit::destroy_group(
                     ObjectFilter::creature().except_chosen_slot(slot),
                     true,
-                ),
-            ),
+                ))
+            }
             effect if effect.starts_with("creatures that aren't of the chosen type get ") => {
                 let stats = effect
                     .strip_prefix("creatures that aren't of the chosen type get ")?
                     .strip_suffix(" until end of turn.")?;
                 let (p, t) = stats.split_once('/')?;
-                Some(
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                        EffectSubject::Matching(ObjectFilter::creature().except_chosen_slot(slot)),
-                        spellwake_engine::program::ValueExpr::Literal(
-                            p.parse::<i64>().ok()?.into(),
-                        ),
-                        spellwake_engine::program::ValueExpr::Literal(
-                            t.parse::<i64>().ok()?.into(),
-                        ),
-                        BTreeSet::new(),
-                        BTreeSet::new(),
-                    ),
-                )
+                Some(crate::keyword_creatures::toolbox_emit::modify_group_eot(
+                    EffectSubject::Matching(ObjectFilter::creature().except_chosen_slot(slot)),
+                    spellwake_engine::program::ValueExpr::Literal(p.parse::<i64>().ok()?.into()),
+                    spellwake_engine::program::ValueExpr::Literal(t.parse::<i64>().ok()?.into()),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                ))
             }
             _ => None,
         };
@@ -746,7 +728,7 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             return Some(ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::choose_creature_type(
+                    crate::keyword_creatures::toolbox_emit::choose_creature_type(
                         slot,
                         BTreeSet::new(),
                     ),
@@ -762,11 +744,8 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::choose_creature_type(
-                    slot,
-                    BTreeSet::new(),
-                ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                crate::keyword_creatures::toolbox_emit::choose_creature_type(slot, BTreeSet::new()),
+                crate::keyword_creatures::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::count_battlefield(
                         spellwake_engine::program::ObjectFilter::any()
                             .controlled()
@@ -856,23 +835,21 @@ pub(in crate::keyword_creatures) fn exile_followup(
     {
         let mut destruction = body(&format!("{subject}."), name)?;
         if destruction.instructions.as_slice()
-            != [
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                        spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ZoneDest::Graveyard {
-                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                allow_regenerate: true,
-                            },
+            != [crate::keyword_creatures::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
                         },
-                    ),
+                    },
                 ),
-            ]
+            )]
         {
             return None;
         }
         destruction.instructions = vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+            crate::keyword_creatures::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec {
                     bind_snapshots: Some(spellwake_engine::toolbox::BindingId(0)),
                     ..spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -885,7 +862,7 @@ pub(in crate::keyword_creatures) fn exile_followup(
                     )
                 },
             ),
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+            crate::keyword_creatures::toolbox_emit::lose_life(
                 spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
                 spellwake_engine::program::ValueExpr::BoundStat {
                     binding: spellwake_engine::toolbox::BindingId(0),
@@ -899,21 +876,18 @@ pub(in crate::keyword_creatures) fn exile_followup(
     let (exile, next) = text.split_once(". Its controller ")?;
     let mut body = body(&format!("{exile}."), name)?;
     let destroyed = body.instructions.as_slice()
-        == [
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                    spellwake_engine::toolbox::ObjectQuery::Targets,
-                    spellwake_engine::toolbox::ZoneDest::Graveyard {
-                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                            allow_regenerate: true,
-                        },
+        == [crate::keyword_creatures::toolbox_emit::zone_op(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                        allow_regenerate: true,
                     },
-                ),
+                },
             ),
-        ];
+        )];
     if !destroyed
-        && body.instructions.as_slice()
-            != [crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()]
+        && body.instructions.as_slice() != [crate::keyword_creatures::toolbox_emit::exile_target()]
     {
         return None;
     }
@@ -955,7 +929,7 @@ pub(in crate::keyword_creatures) fn exile_followup(
         if let Some(Instruction::ZoneOp(spec)) = body.instructions.first_mut() {
             spec.bind_snapshots = Some(spellwake_engine::toolbox::BindingId(1));
         }
-        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+        crate::keyword_creatures::toolbox_emit::gain_life(
             spellwake_engine::toolbox::PlayerSelector::Bound(spellwake_engine::toolbox::BindingId(
                 1,
             )),
@@ -1007,9 +981,9 @@ fn controller_life(text: &str, gain: bool) -> Option<(BodyTarget, Instruction)> 
     Some((
         BodyTarget::None,
         if gain {
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(controller, amount)
+            crate::keyword_creatures::toolbox_emit::gain_life(controller, amount)
         } else {
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(controller, amount)
+            crate::keyword_creatures::toolbox_emit::lose_life(controller, amount)
         },
     ))
 }
@@ -1034,27 +1008,23 @@ pub(in crate::keyword_creatures) fn group_modifier(clause: &str) -> Option<Instr
             spellwake_engine::program::ObjectStatKind::Power,
             spellwake_engine::program::StatAggregate::Max,
         );
-        return Some(
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                EffectSubject::AbilitySource,
-                amt.clone(),
-                amt,
-                BTreeSet::new(),
-                BTreeSet::new(),
-            ),
-        );
+        return Some(crate::keyword_creatures::toolbox_emit::modify_group_eot(
+            EffectSubject::AbilitySource,
+            amt.clone(),
+            amt,
+            BTreeSet::new(),
+            BTreeSet::new(),
+        ));
     }
     if lower == "it gets +1/+1 until end of turn for each land you control" {
         let amt = spellwake_engine::program::ValueExpr::controlled_type(CardType::Land);
-        return Some(
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                EffectSubject::AbilitySource,
-                amt.clone(),
-                amt,
-                BTreeSet::new(),
-                BTreeSet::new(),
-            ),
-        );
+        return Some(crate::keyword_creatures::toolbox_emit::modify_group_eot(
+            EffectSubject::AbilitySource,
+            amt.clone(),
+            amt,
+            BTreeSet::new(),
+            BTreeSet::new(),
+        ));
     }
     if let Some((effect, count)) = lower.split_once(" until end of turn, where x is the number of ")
     {
@@ -1088,15 +1058,13 @@ pub(in crate::keyword_creatures) fn group_modifier(clause: &str) -> Option<Instr
                 keywords.insert(super::super::static_keyword(word)?);
             }
         }
-        return Some(
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                group,
-                amount.clone(),
-                amount,
-                keywords,
-                BTreeSet::new(),
-            ),
-        );
+        return Some(crate::keyword_creatures::toolbox_emit::modify_group_eot(
+            group,
+            amount.clone(),
+            amount,
+            keywords,
+            BTreeSet::new(),
+        ));
     }
     let printed = lower.strip_suffix(" until end of turn")?;
     let (group, effect) = [
@@ -1173,15 +1141,13 @@ pub(in crate::keyword_creatures) fn group_modifier(clause: &str) -> Option<Instr
             spellwake_engine::program::ValueExpr::literal(0),
         ),
     };
-    Some(
-        crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-            group,
-            power,
-            toughness,
-            keywords,
-            BTreeSet::new(),
-        ),
-    )
+    Some(crate::keyword_creatures::toolbox_emit::modify_group_eot(
+        group,
+        power,
+        toughness,
+        keywords,
+        BTreeSet::new(),
+    ))
 }
 
 /// Bind the player role once for the existing simultaneous sacrifice and discard operations.
@@ -1337,7 +1303,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     if line == "put a +1/+1 counter on target creature" {
         return Some((
             BodyTarget::SINGLE_CREATURE,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+            crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                 spellwake_engine::effects::CounterKind::PlusOne,
                 spellwake_engine::program::ValueExpr::literal(1),
             ),
@@ -1346,7 +1312,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     if line == "double the number of each kind of counter on any number of target permanents" {
         return Some((
             BodyTarget::SINGLE_PERMANENT,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::double_counters_on_query(
+            crate::keyword_creatures::toolbox_emit::double_counters_on_query(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
                 None,
             ),
@@ -1363,7 +1329,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     if line == "goad all creatures you don't control" {
         return Some((
             NoTarget,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::goad_other_players_creatures(),
+            crate::keyword_creatures::toolbox_emit::goad_other_players_creatures(),
         ));
     }
     if let Some(subject) = line.strip_prefix("goad target ") {
@@ -1379,13 +1345,13 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         };
         return Some((
             target,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::goad_target(),
+            crate::keyword_creatures::toolbox_emit::goad_target(),
         ));
     }
     if line == "take an extra turn after this one" {
         return Some((
             NoTarget,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::take_extra_turn(
+            crate::keyword_creatures::toolbox_emit::take_extra_turn(
                 spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
             ),
         ));
@@ -1418,7 +1384,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         };
         return Some((
             NoTarget,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(spec),
+            crate::keyword_creatures::toolbox_emit::prevent_damage_spec(spec),
         ));
     }
     if line == "you may choose new targets for target spell or ability" {
@@ -1471,15 +1437,9 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         return Some((
             NoTarget,
             destination.map_or(
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
-                    *(group.clone()),
-                    true,
-                ),
+                crate::keyword_creatures::toolbox_emit::destroy_group(*(group.clone()), true),
                 |destination| {
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(
-                        *(group),
-                        destination,
-                    )
+                    crate::keyword_creatures::toolbox_emit::move_group(*(group), destination)
                 },
             ),
         ));
@@ -1513,7 +1473,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         };
         return Some((
             target,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+            crate::keyword_creatures::toolbox_emit::return_to_owners_hand(),
         ));
     }
     if let Some(what) = line.strip_prefix("return target ").and_then(|rest| {
@@ -1543,20 +1503,16 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
             _ => return None,
         };
         let op = if !tapped && target == ObjectFilter::creature() {
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
-                false,
-            )
+            crate::keyword_creatures::toolbox_emit::return_target_to_battlefield(false)
         } else {
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
-                tapped,
-            )
+            crate::keyword_creatures::toolbox_emit::return_target_to_battlefield(tapped)
         };
         return Some((BodyTarget::filtered_own_graveyard(target), op));
     }
     if let Some(target) = line.strip_prefix("exile target ").and_then(filtered_target) {
         return Some((
             target,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+            crate::keyword_creatures::toolbox_emit::exile_target(),
         ));
     }
     if let Some(target) = line
@@ -1565,7 +1521,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     {
         return Some((
             target,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+            crate::keyword_creatures::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -1584,7 +1540,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     {
         return Some((
             target,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+            crate::keyword_creatures::toolbox_emit::return_to_owners_hand(),
         ));
     }
     if let Some(keyword) = line
@@ -1596,7 +1552,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         };
         return Some((
             BodyTarget::SINGLE_CREATURE,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+            crate::keyword_creatures::toolbox_emit::apply_continuous_parts(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
                 ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
                     AbilityChange::grant_keywords([super::super::static_keyword(keyword)?]),
@@ -1636,7 +1592,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         if let Some(group) = group {
             return Some((
                 NoTarget,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
                         spellwake_engine::program::DamageRecipientsRef::Group(group),
                     )),
@@ -1654,7 +1610,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         };
         return Some((
             target,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            crate::keyword_creatures::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(number(amount)?),
                 false,
@@ -1664,7 +1620,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     if line == "put a +1/+1 counter on this creature" {
         return Some((
             NoTarget,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+            crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                 spellwake_engine::effects::CounterKind::PlusOne,
                 spellwake_engine::program::ValueExpr::literal(1),
             ),
@@ -1703,7 +1659,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         };
         return Some((
             NoTarget,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(amount),
+            crate::keyword_creatures::toolbox_emit::draw_controller(amount),
         ));
     }
     if let Some(rest) = line
@@ -1720,12 +1676,12 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         return Some(if line.starts_with("each") {
             (
                 NoTarget,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(amount),
+                crate::keyword_creatures::toolbox_emit::draw_each_player(amount),
             )
         } else {
             (
                 BodyTarget::SINGLE_PLAYER,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(amount),
+                crate::keyword_creatures::toolbox_emit::draw_target_player(amount),
             )
         });
     }
@@ -1760,7 +1716,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     if let Some(rest) = line.strip_prefix("target player loses ") {
         return Some((
             BodyTarget::SINGLE_PLAYER,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+            crate::keyword_creatures::toolbox_emit::lose_life(
                 spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
                 spellwake_engine::program::ValueExpr::literal(number(rest.strip_suffix(" life")?)?),
             ),
@@ -1809,7 +1765,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         ),
         "destroy target creature" => (
             BodyTarget::SINGLE_CREATURE,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+            crate::keyword_creatures::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -1822,7 +1778,7 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         ),
         "destroy target permanent" => (
             BodyTarget::SINGLE_PERMANENT,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+            crate::keyword_creatures::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -1835,11 +1791,11 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         ),
         "return target creature to its owner's hand" => (
             BodyTarget::SINGLE_CREATURE,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+            crate::keyword_creatures::toolbox_emit::return_to_owners_hand(),
         ),
         "return target permanent to its owner's hand" => (
             BodyTarget::SINGLE_PERMANENT,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
+            crate::keyword_creatures::toolbox_emit::return_to_owners_hand(),
         ),
         _ if line.starts_with("scry ") => (
             NoTarget,
@@ -1883,7 +1839,7 @@ pub(super) fn combat_defense(
         BodyTarget::None,
         vec![
             Instruction::CreateTokens { creations },
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+            crate::keyword_creatures::toolbox_emit::prevent_damage_spec(
                 spellwake_engine::damage::TurnPreventionSpec {
                     combat_only: true,
                     source: spellwake_engine::damage::PreventionSourceSpec::Filter(
@@ -1911,10 +1867,8 @@ pub(super) fn threshold_destruction(
         .trim_start()
         .strip_prefix("Threshold — If there are seven or more cards in your graveyard, instead destroy all creatures, then create ")?
         .strip_suffix(". Creatures destroyed this way can't be regenerated.")?;
-    let destroy = crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
-        ObjectFilter::creature(),
-        false,
-    );
+    let destroy =
+        crate::keyword_creatures::toolbox_emit::destroy_group(ObjectFilter::creature(), false);
     Some(ExecutableBody::new(
         BodyTarget::None,
         vec![
@@ -1968,13 +1922,11 @@ mod tests {
         assert_eq!(damage.target, BodyTarget::SINGLE_ANY_TARGET);
         assert_eq!(
             damage.instructions,
-            [
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                    spellwake_engine::program::ValueExpr::literal(3),
-                    false,
-                )
-            ]
+            [crate::keyword_creatures::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(3),
+                false,
+            )]
         );
         for text in [
             "Target creature gets +2/+2 until end of turn. Destroy target creature.",

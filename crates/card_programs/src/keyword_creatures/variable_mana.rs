@@ -117,7 +117,7 @@ fn spell_body(
                     }),
                     destination: 3,
                 },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Both {
                         objects: spellwake_engine::toolbox::ObjectQuery::Targets,
                         players: spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -128,7 +128,7 @@ fn spell_body(
                     false,
                 ),
                 Instruction::Jump { destination: 4 },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     ValueExpr::chosen_x(),
                     false,
@@ -149,7 +149,7 @@ fn spell_body(
         }
         "Each opponent loses X life. You gain life equal to the life lost this way." => (
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::drain_life(
+            crate::keyword_creatures::toolbox_emit::drain_life(
                 spellwake_engine::toolbox::PlayerSelector::Group(
                     spellwake_engine::program::AffectedPlayers::EachOpponent,
                 ),
@@ -162,7 +162,7 @@ fn spell_body(
         ),
         "All creatures get -X/-X until end of turn." => (
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+            crate::keyword_creatures::toolbox_emit::modify_group_eot(
                 spellwake_engine::program::EffectSubject::Matching(
                     spellwake_engine::program::ObjectFilter::creature(),
                 ),
@@ -174,15 +174,11 @@ fn spell_body(
         ),
         "Draw X cards." => (
             BodyTarget::None,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                ValueExpr::chosen_x(),
-            ),
+            crate::keyword_creatures::toolbox_emit::draw_controller(ValueExpr::chosen_x()),
         ),
         "Target player draws X cards." => (
             BodyTarget::SINGLE_PLAYER,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
-                ValueExpr::chosen_x(),
-            ),
+            crate::keyword_creatures::toolbox_emit::draw_target_player(ValueExpr::chosen_x()),
         ),
         other => {
             if let Some(recipient) = other
@@ -199,7 +195,7 @@ fn spell_body(
                 };
                 (
                     target,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         ValueExpr::chosen_x(),
                         false,

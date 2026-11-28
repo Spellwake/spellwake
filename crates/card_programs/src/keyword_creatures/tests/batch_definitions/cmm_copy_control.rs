@@ -218,7 +218,7 @@ fn cmm_starfield_animates_by_mana_value_and_restores_the_fifth_enchantment() {
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PERMANENT,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -311,7 +311,7 @@ fn cmm_myriad_construct_counts_opposing_nonbasic_lands_and_uses_last_power() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -530,7 +530,7 @@ fn cmm_myriad_construct_ignores_ability_targets_and_uses_equipped_power_when_sac
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -548,7 +548,7 @@ fn cmm_myriad_construct_ignores_ability_targets_and_uses_equipped_power_when_sac
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                    crate::keyword_creatures::toolbox_emit::destroy_group(
                         spellwake_engine::program::ObjectFilter::creature()
                             .with_power(spellwake_engine::program::PowerFilter::AtLeast(4)),
                         true,

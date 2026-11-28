@@ -173,14 +173,12 @@ fn cmm_mizzix_awards_experience_only_for_instants_and_sorceries_above_the_thresh
     let spell = |instant, price: &str| {
         let body = ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(1),
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::literal(1),
+            )],
         );
         if instant {
             Program::instant(fixed_cost(price).unwrap(), body)
@@ -398,14 +396,12 @@ fn cmm_grand_abolisher_prohibits_opposing_spells_and_artifact_creature_enchantme
     let gain = || {
         ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(1),
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::literal(1),
+            )],
         )
     };
     let ability = ActivatedAbility {
@@ -631,7 +627,7 @@ fn cmm_soul_of_new_phyrexia_grants_indestructible_to_its_controllers_permanents_
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PERMANENT,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -649,7 +645,7 @@ fn cmm_soul_of_new_phyrexia_grants_indestructible_to_its_controllers_permanents_
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_PERMANENT,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {

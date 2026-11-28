@@ -46,7 +46,7 @@ pub(super) fn great_henge(card: &InventoryCard, profile: Profile) -> Option<Prog
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_query(
                     spellwake_engine::toolbox::ObjectQuery::Intersect(
                         Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
                         Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
@@ -57,7 +57,7 @@ pub(super) fn great_henge(card: &InventoryCard, profile: Profile) -> Option<Prog
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::literal(1),
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                crate::keyword_creatures::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
             ],
@@ -142,14 +142,12 @@ pub(super) fn forsaken_monument(card: &InventoryCard, profile: Profile) -> Optio
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(2),
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
                 ),
-            ],
+                spellwake_engine::program::ValueExpr::literal(2),
+            )],
         ),
     });
     Some(program)
@@ -315,18 +313,15 @@ pub(super) fn bonders_ornament(card: &InventoryCard, profile: Profile) -> Option
         source_cost: spellwake_engine::activated::SourceCost::Tap,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_cards(
-                    spellwake_engine::toolbox::PlayerSelector::ControllersOf(Box::new(
-                        spellwake_engine::toolbox::ObjectQuery::zone(
-                            spellwake_engine::toolbox::QueryZone::Battlefield,
-                            spellwake_engine::program::ObjectFilter::any()
-                                .sharing_name_with_source(),
-                        ),
-                    )),
-                    spellwake_engine::program::ValueExpr::literal(1),
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::draw_cards(
+                spellwake_engine::toolbox::PlayerSelector::ControllersOf(Box::new(
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::Battlefield,
+                        spellwake_engine::program::ObjectFilter::any().sharing_name_with_source(),
+                    ),
+                )),
+                spellwake_engine::program::ValueExpr::literal(1),
+            )],
         ),
     });
     Some(program)
@@ -472,11 +467,9 @@ fn draw_activation(line: &str) -> Option<ActivatedAbility> {
         source_cost: spellwake_engine::activated::SourceCost::TapSacrifice,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
-                    spellwake_engine::program::ValueExpr::Literal(count.into()),
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::draw_controller(
+                spellwake_engine::program::ValueExpr::Literal(count.into()),
+            )],
         ),
     })
 }

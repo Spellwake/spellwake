@@ -132,7 +132,7 @@ fn mode_body(
         return Some(ExecutableBody::new(
             BodyTarget::SINGLE_CREATURE,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::Literal(
                         ordinary_text::amount(count)?.into(),
@@ -145,10 +145,10 @@ fn mode_body(
         return Some(ExecutableBody::new(
             BodyTarget::SINGLE_PLAYER,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                crate::keyword_creatures::toolbox_emit::draw_target_player(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                crate::keyword_creatures::toolbox_emit::lose_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::TargetPlayer,
                     ),

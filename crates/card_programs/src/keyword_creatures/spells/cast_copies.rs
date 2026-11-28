@@ -18,25 +18,21 @@ pub(super) fn body(
         ),
         "You gain 3 life." => (
             BodyTarget::None,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        ResolvingPlayer::Controller,
-                    ),
-                    spellwake_engine::program::ValueExpr::literal(3),
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::literal(3),
+            )],
         ),
         "Target player loses 2 life and you gain 2 life." => (
             BodyTarget::SINGLE_PLAYER,
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                crate::keyword_creatures::toolbox_emit::lose_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::TargetPlayer,
                     ),
                     spellwake_engine::program::ValueExpr::literal(2),
                 ),
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                crate::keyword_creatures::toolbox_emit::gain_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::Controller,
                     ),
@@ -77,13 +73,11 @@ pub(super) fn body(
         }
         source if source.strip_prefix(name) == Some(" deals 1 damage to target creature.") => (
             BodyTarget::SINGLE_CREATURE,
-            vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                    spellwake_engine::program::ValueExpr::literal(1),
-                    false,
-                ),
-            ],
+            vec![crate::keyword_creatures::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(1),
+                false,
+            )],
         ),
         _ => return None,
     };

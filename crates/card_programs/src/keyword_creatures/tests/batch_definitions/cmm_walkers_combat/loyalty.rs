@@ -22,7 +22,7 @@ fn with_loyalty_for_ultimate(
             ExecutableBody::new(
                 BodyTarget::SINGLE_PERMANENT,
                 vec![
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    crate::keyword_creatures::toolbox_emit::put_counters_on_target(
                         spellwake_engine::effects::CounterKind::Loyalty,
                         spellwake_engine::program::ValueExpr::literal(1)
                     );
@@ -279,7 +279,7 @@ fn cmm_the_wanderer_prevents_noncombat_damage_to_its_controller_and_other_perman
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_ANY_TARGET,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    crate::keyword_creatures::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(2),
                         false,
@@ -587,7 +587,7 @@ fn cmm_freyalise_and_ob_nixilis_are_commanders_and_pay_the_tax_when_recast() {
                     ObjectDestination::LibraryBottom,
                     free_instant(
                         BodyTarget::SINGLE_PERMANENT,
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        crate::keyword_creatures::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
                                 spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -810,7 +810,7 @@ fn cmm_ajani_steadfast_grants_combat_abilities_distributes_counters_and_prevents
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SINGLE_ANY_TARGET,
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                crate::keyword_creatures::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(3),
                     false,

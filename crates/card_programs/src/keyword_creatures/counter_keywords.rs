@@ -35,7 +35,7 @@ pub(super) fn adapt(
                     }),
                     destination: 2,
                 },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                crate::keyword_creatures::toolbox_emit::put_counters_on_source(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::literal(i64::from(amount)),
                 ),
@@ -58,15 +58,13 @@ pub(super) fn adapt(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
-                            spellwake_engine::program::EffectSubject::AbilitySource,
-                            spellwake_engine::program::ValueExpr::literal(0),
-                            spellwake_engine::program::ValueExpr::literal(0),
-                            BTreeSet::from([KeywordAbility::DoubleStrike]),
-                            BTreeSet::new(),
-                        ),
-                    ],
+                    vec![crate::keyword_creatures::toolbox_emit::modify_group_eot(
+                        spellwake_engine::program::EffectSubject::AbilitySource,
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        BTreeSet::from([KeywordAbility::DoubleStrike]),
+                        BTreeSet::new(),
+                    )],
                 ),
             });
         }
@@ -249,19 +247,17 @@ mod tests {
                     ManaCost::free(),
                     ExecutableBody::new(
                         BodyTarget::SINGLE_CREATURE,
-                        vec![
-                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                                    spellwake_engine::toolbox::ObjectQuery::Targets,
-                                    spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                        semantics:
-                                            spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                                allow_regenerate: true,
-                                            },
-                                    },
-                                ),
+                        vec![crate::keyword_creatures::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                            allow_regenerate: true,
+                                        },
+                                },
                             ),
-                        ],
+                        )],
                     ),
                 ),
             });

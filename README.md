@@ -30,7 +30,7 @@ Stage 1 Oracle parsing (`crates/oracle_compiler`) is verified on three distinct 
 Run the permanent real-card semantic test suite or full-corpus CLI auditor locally:
 
 ```sh
-RUST_MIN_STACK=67108864 cargo test --locked -p spellwake-oracle-compiler --test real_card_semantic_suite -- --nocapture
+RUST_MIN_STACK=67108864 cargo test --locked -p spellwake-oracle-compiler --test anti_gaming_integrity_gate --test v2_compositional_suite --test custom_card_composability_suite -- --nocapture
 RUST_MIN_STACK=67108864 cargo run --locked --release -p spellwake-oracle-compiler --bin spellwake-oracle-audit -- audit-corpus --snapshot <oracle-cards.jsonl.gz> --vocab <creature-vocabulary.input.json> --max-critical 0
 ```
 

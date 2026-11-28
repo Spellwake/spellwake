@@ -102,7 +102,7 @@ fn cmm_zones_crawling_infestation_may_mill_and_makes_only_one_insect_per_own_tur
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -120,7 +120,7 @@ fn cmm_zones_crawling_infestation_may_mill_and_makes_only_one_insect_per_own_tur
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -325,7 +325,7 @@ fn cmm_zones_furious_rise_checks_power_at_trigger_and_resolution_and_replaces_th
                     ObjectDestination::LibraryBottom,
                     free_instant(
                         BodyTarget::None,
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        crate::keyword_creatures::toolbox_emit::gain_life(
                             spellwake_engine::toolbox::PlayerSelector::Resolving(
                                 spellwake_engine::program::ResolvingPlayer::Controller,
                             ),
@@ -342,7 +342,7 @@ fn cmm_zones_furious_rise_checks_power_at_trigger_and_resolution_and_replaces_th
                     ObjectDestination::Hand,
                     free_instant(
                         BodyTarget::SINGLE_CREATURE,
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        crate::keyword_creatures::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
                                 spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -424,7 +424,7 @@ fn cmm_zones_twilight_prophet_keeps_the_blessing_and_each_opponent_loses_the_rev
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SINGLE_CREATURE,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    crate::keyword_creatures::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             spellwake_engine::toolbox::ZoneDest::Graveyard {
@@ -590,14 +590,12 @@ fn cmm_zones_windrider_wizard_can_draw_then_discard_for_each_instant_sorcery_and
     let vocabulary = current_catalogue().1;
     let spell = ExecutableBody::new(
         BodyTarget::None,
-        vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                spellwake_engine::toolbox::PlayerSelector::Resolving(
-                    spellwake_engine::program::ResolvingPlayer::Controller,
-                ),
-                spellwake_engine::program::ValueExpr::Literal(1.into()),
+        vec![crate::keyword_creatures::toolbox_emit::gain_life(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
             ),
-        ],
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+        )],
     );
     let initial = game(
         vec![A, B],
@@ -727,7 +725,7 @@ fn cmm_zones_inga_scrying_orders_three_and_its_death_counts_itself_and_other_sim
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(
+                    crate::keyword_creatures::toolbox_emit::destroy_group(
                         spellwake_engine::program::ObjectFilter::creature(),
                         true,
                     ),

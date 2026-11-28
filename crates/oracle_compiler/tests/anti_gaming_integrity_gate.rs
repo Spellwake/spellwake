@@ -324,7 +324,7 @@ fn find_long_eat_phrase_calls(content: &str, min_words: usize) -> Vec<(usize, us
         let after_open = call_start + ".eat_any_phrase(".len();
         if let Some(close_rel) = content[after_open..].find(')') {
             let arg = &content[after_open..after_open + close_rel];
-            let mut inner_pos = 0;
+            let mut inner_pos = arg.find("&[").map_or(0, |i| i + 2);
             while let Some(sub_lb) = arg[inner_pos..].find("&[") {
                 let start = inner_pos + sub_lb + 2;
                 let Some(sub_rb) = arg[start..].find(']') else {
@@ -411,4 +411,21 @@ fn has_pipe_combinator_ident(line: &str) -> bool {
         i += 1;
     }
     false
+}
+
+#[test]
+fn gate_eat_any_phrase_flags_first_entry_over_threshold() {
+    let sample = r#"
+        let _ = p.eat_any_phrase(&[
+            &["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven"],
+            &["short", "entry"],
+        ]);
+    "#;
+    let hits = find_long_eat_phrase_calls(sample, 10);
+    assert_eq!(
+        hits.len(),
+        1,
+        "expected entry #0 with 11 words to be flagged, got {hits:?}"
+    );
+    assert_eq!(hits[0].1, 11);
 }

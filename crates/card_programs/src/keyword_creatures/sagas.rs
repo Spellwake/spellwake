@@ -94,7 +94,7 @@ fn chapter_body(
         "Destroy target nonland permanent an opponent controls." => Some(ExecutableBody::new(
             BodyTarget::filtered_permanent(ObjectFilter::nonland().opposing()),
             vec![
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                crate::keyword_creatures::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Graveyard {

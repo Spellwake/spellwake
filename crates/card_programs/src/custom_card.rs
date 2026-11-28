@@ -17,9 +17,11 @@ use spellwake_engine::{
     program::{ArtifactSubtype, EnchantmentSubtype, PlaneswalkerSubtype, SpellSubtype},
 };
 use spellwake_oracle_compiler::{
-    CardInput, CompileOptions, FaceInput, Vocabulary as OracleVocabulary,
-    ast::{AbilityAst, CardAst, FaceAst},
-    compile_card_with_options,
+    CardInput, FaceInput, Vocabulary as OracleVocabulary,
+    v2::{
+        compile_card_v2,
+        ir::{Ability as V2Ability, CompiledCardV2, CompiledFaceV2, LoyaltyDelta},
+    },
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -268,30 +270,21 @@ pub fn compile_custom_card(
         layout: engine_layout,
         faces: face_inputs,
     };
-    let ast = compile_card_with_options(
-        &card_input,
-        &oracle_vocab,
-        CompileOptions {
-            allow_tabletop_honor_system: false,
-        },
-    );
+    let ast = compile_card_v2(&card_input, &oracle_vocab);
     let ast_reading = extract_ast_reading(&ast);
     let stage1_parsed = metadata_valid && ast.strictly_compiled;
     for (face_idx, face_ast) in ast.faces.iter().enumerate() {
-        for failure in &face_ast.failures {
-            let msg: String = format!(
-                "Could not parse clause ({}): {}",
-                failure.reason, failure.text
-            )
-            .chars()
-            .take(512)
-            .collect();
-            let clause: String = failure.text.chars().take(1024).collect();
+        for err in &face_ast.errors {
+            let msg: String = format!("Could not parse clause ({}): {}", err.message, err.text)
+                .chars()
+                .take(512)
+                .collect();
+            let clause: String = err.text.chars().take(1024).collect();
             diagnostics.push(CompileDiagnostic {
                 severity: DiagnosticSeverity::Warning,
                 stage: DiagnosticStage::Stage1,
                 face_index: Some(face_idx),
-                code: format!("ast-{}", failure.stage),
+                code: format!("ast-{:?}", err.stage).to_ascii_lowercase(),
                 message: msg,
                 clause_text: Some(clause),
             });
@@ -565,7 +558,7 @@ fn validate_face_type_line(
     }
 }
 
-fn extract_ast_reading(ast: &CardAst) -> Vec<AstReadingItem> {
+fn extract_ast_reading(ast: &CompiledCardV2) -> Vec<AstReadingItem> {
     let mut items = Vec::new();
     for (face_index, face) in ast.faces.iter().enumerate() {
         extract_face_ast_reading(face_index, face, &mut items);
@@ -573,74 +566,102 @@ fn extract_ast_reading(ast: &CardAst) -> Vec<AstReadingItem> {
     items
 }
 
-fn extract_face_ast_reading(face_index: usize, face: &FaceAst, out: &mut Vec<AstReadingItem>) {
+fn extract_face_ast_reading(
+    face_index: usize,
+    face: &CompiledFaceV2,
+    out: &mut Vec<AstReadingItem>,
+) {
     for kw in &face.keywords {
-        let summary = match &kw.parameter {
-            Some(param) => format!("{} {param}", kw.name),
-            None => kw.name.clone(),
+        let name = format!("{:?}", kw.kind);
+        let summary = match &kw.param {
+            Some(param) => format!("{name} {}", truncate_debug(param, 64)),
+            None => name.clone(),
         };
         out.push(AstReadingItem {
             face_index,
             kind: AstReadingKind::Keyword,
-            label: kw.name.clone(),
+            label: name,
             summary,
         });
     }
     for ab in &face.abilities {
         match ab {
-            AbilityAst::Triggered {
-                ability_word,
-                trigger,
-                body,
-            } => {
-                let label = ability_word
-                    .clone()
-                    .unwrap_or_else(|| "Triggered".to_owned());
+            V2Ability::Triggered { trigger, body } => {
                 out.push(AstReadingItem {
                     face_index,
                     kind: AstReadingKind::Triggered,
-                    label,
+                    label: "Triggered".to_owned(),
                     summary: format!("{:?} -> {} step(s)", trigger.events, body.len()),
                 });
             }
-            AbilityAst::Activated {
-                ability_word,
-                cost,
-                body,
-                ..
-            } => {
-                let label = ability_word
-                    .clone()
-                    .unwrap_or_else(|| "Activated".to_owned());
+            V2Ability::Activated { cost, body, .. } => {
                 out.push(AstReadingItem {
                     face_index,
                     kind: AstReadingKind::Activated,
-                    label,
+                    label: "Activated".to_owned(),
                     summary: format!("{} cost atom(s) -> {} step(s)", cost.len(), body.len()),
                 });
             }
-            AbilityAst::Loyalty { delta, body } => {
+            V2Ability::Loyalty { delta, body } => {
+                let d = match delta {
+                    LoyaltyDelta::Fixed(n) if *n > 0 => format!("+{n}"),
+                    LoyaltyDelta::Fixed(n) => format!("{n}"),
+                    LoyaltyDelta::MinusX => "-X".to_owned(),
+                };
                 out.push(AstReadingItem {
                     face_index,
                     kind: AstReadingKind::Loyalty,
-                    label: format!("Loyalty {delta}"),
-                    summary: format!("{delta}: {} step(s)", body.len()),
+                    label: format!("Loyalty {d}"),
+                    summary: format!("{d}: {} step(s)", body.len()),
                 });
             }
-            AbilityAst::SagaChapter { chapters, body } => {
+            V2Ability::SagaChapter { chapters, body } => {
+                let chs = chapters
+                    .iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 out.push(AstReadingItem {
                     face_index,
                     kind: AstReadingKind::SagaChapter,
-                    label: format!("Chapter {}", chapters.join(", ")),
+                    label: format!("Chapter {chs}"),
                     summary: format!("{} step(s)", body.len()),
                 });
             }
-            AbilityAst::ClassLevel { level, .. } => {
+            V2Ability::TableRow { min, max, .. } => {
+                let label = match max {
+                    Some(hi) => format!("Row {min}-{hi}"),
+                    None => format!("Threshold {min}+"),
+                };
                 out.push(AstReadingItem {
                     face_index,
                     kind: AstReadingKind::ClassLevel,
-                    label: format!("Level {level}"),
-                    summary: format!("Class level {level}"),
+                    label: label.clone(),
+                    summary: label,
+                });
+            }
+            V2Ability::StickerRow { ticket_cost, .. } => {
+                out.push(AstReadingItem {
+                    face_index,
+                    kind: AstReadingKind::Static,
+                    label: format!("Sticker ({ticket_cost} TK)"),
+                    summary: format!("Sticker row ({ticket_cost} TK)"),
+                });
+            }
+            V2Ability::CaseSolveCondition(_) => {
+                out.push(AstReadingItem {
+                    face_index,
+                    kind: AstReadingKind::Static,
+                    label: "To Solve".to_owned(),
+                    summary: "Case solve condition".to_owned(),
+                });
+            }
+            V2Ability::CaseSolved(_) => {
+                out.push(AstReadingItem {
+                    face_index,
+                    kind: AstReadingKind::Static,
+                    label: "Solved".to_owned(),
+                    summary: "Case solved abilities".to_owned(),
                 });
             }
         }
@@ -667,18 +688,6 @@ fn extract_face_ast_reading(face_index: usize, face: &FaceAst, out: &mut Vec<Ast
             kind: AstReadingKind::Replacement,
             label: "Replacement".to_owned(),
             summary: truncate_debug(rp, 96),
-        });
-    }
-    for cl in &face.class_levels {
-        out.push(AstReadingItem {
-            face_index,
-            kind: AstReadingKind::ClassLevel,
-            label: format!("Class Level {}", cl.level),
-            summary: format!(
-                "{} static(s), {} ability(ies)",
-                cl.statics.len(),
-                cl.abilities.len()
-            ),
         });
     }
 }

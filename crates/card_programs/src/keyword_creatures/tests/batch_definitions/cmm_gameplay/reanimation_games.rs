@@ -346,14 +346,12 @@ fn cmm_zones_shipwreck_dowser_returns_an_own_instant_or_sorcery_and_gains_prowes
     let price = [(Colourless, 3), (Blue, 2)];
     let effect = ExecutableBody::new(
         BodyTarget::None,
-        vec![
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
-                spellwake_engine::toolbox::PlayerSelector::Resolving(
-                    spellwake_engine::program::ResolvingPlayer::Controller,
-                ),
-                spellwake_engine::program::ValueExpr::Literal(1.into()),
+        vec![crate::keyword_creatures::toolbox_emit::gain_life(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
             ),
-        ],
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+        )],
     );
     let initial = game(
         vec![A, B],
