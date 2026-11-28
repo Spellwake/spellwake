@@ -247,6 +247,7 @@ fn lower_face_v2_inner(
 
     let mut program = build_base_program(card, face, opts, vocab)?;
     let mut ctx = LowerCtx::new(vocab, &card.name, &face.name);
+    ctx.face_ability_count = compiled.abilities.len();
     let is_spell = matches!(program.kind, ProgramKind::Spell(_));
 
     // Wire Siege defeated trigger (exile defeated Siege, then cast transformed).

@@ -35,7 +35,7 @@ use spellwake_oracle_compiler::{
 
 use crate::v2_lowering::{
     atoms::{
-        lower_card_type_set, lower_color_set, lower_counter_kind, lower_keyword_ability,
+        lower_card_type_set, lower_color_set, lower_counter_kind, lower_keyword_abilities,
         lower_step, lower_supertype_set, lower_world_affected_players,
     },
     card::lower_granted_face,
@@ -1101,7 +1101,8 @@ fn lower_enter_as_copy(
         match exc {
             v2::CopyException::AddKeywords(kws) => {
                 for kw in kws {
-                    spec.extra_keywords.insert(lower_keyword_ability(kw, ctx)?);
+                    spec.extra_keywords
+                        .extend(lower_keyword_abilities(kw, ctx)?);
                 }
             }
             v2::CopyException::NotLegendary => {

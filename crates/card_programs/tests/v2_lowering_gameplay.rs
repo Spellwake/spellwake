@@ -35,6 +35,8 @@ const BOB: SeatId = SeatId(1);
 
 fn test_vocab() -> Arc<CreatureTypeVocabulary> {
     let mut members = vec![
+        "Assassin".to_string(),
+        "Bear".to_string(),
         "Beast".to_string(),
         "Bird".to_string(),
         "Druid".to_string(),
@@ -43,9 +45,14 @@ fn test_vocab() -> Arc<CreatureTypeVocabulary> {
         "Human".to_string(),
         "Knight".to_string(),
         "Mercenary".to_string(),
+        "Pirate".to_string(),
+        "Rogue".to_string(),
+        "Shapeshifter".to_string(),
         "Soldier".to_string(),
         "Spirit".to_string(),
+        "Warlock".to_string(),
         "Warrior".to_string(),
+        "Weird".to_string(),
         "Werewolf".to_string(),
         "Wizard".to_string(),
         "Zombie".to_string(),
@@ -3284,5 +3291,502 @@ fn wave8_werewolf_spells_cast_last_turn_and_didnt_put_in_zone() {
         life(&game2, ALICE),
         23.into(),
         "finding Forest must NOT trigger DidntPutInZone(Hand)"
+    );
+}
+
+#[test]
+fn wave9_outlaw_batching_multicolor_protection_and_any_combination_mana() {
+    let vocab = test_vocab();
+    let shoot = compile_card(
+        &vocab,
+        "Shoot the Sheriff",
+        "Instant",
+        Some("{1}{B}"),
+        None,
+        "Destroy target non-outlaw creature.",
+    );
+    let posse_boss = compile_card(
+        &vocab,
+        "Outlaw Marshal Test",
+        "Creature \u{2014} Human Mercenary",
+        Some("{2}{R}"),
+        Some(("2", "2")),
+        "Other outlaws you control have haste.",
+    );
+    let pirate = compile_card(
+        &vocab,
+        "Corsair Test",
+        "Creature \u{2014} Human Pirate",
+        Some("{1}{R}"),
+        Some(("2", "1")),
+        "",
+    );
+    let rogue = compile_card(
+        &vocab,
+        "Bobs Rogue",
+        "Creature \u{2014} Human Rogue",
+        Some("{1}{U}"),
+        Some(("2", "1")),
+        "",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Bobs Bear",
+        "Creature \u{2014} Bear",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+    let crusader = compile_card(
+        &vocab,
+        "Mirran Crusader",
+        "Creature \u{2014} Human Knight",
+        Some("{1}{W}{W}"),
+        Some(("2", "2")),
+        "Double strike, protection from black and from green",
+    );
+    let manamorphose = compile_card(
+        &vocab,
+        "Mana Mix Test",
+        "Instant",
+        Some("{1}{R}"),
+        None,
+        "Add two mana in any combination of colors.",
+    );
+    let gu_spell = compile_card(
+        &vocab,
+        "Simic Check Test",
+        "Sorcery",
+        Some("{G}{U}"),
+        None,
+        "You gain 3 life.",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: shoot,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: posse_boss,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: pirate,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: rogue,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: bear,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: crusader,
+            },
+            SeedCard {
+                card: CardId(7),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: manamorphose,
+            },
+            SeedCard {
+                card: CardId(8),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: gu_spell,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Black, 1),
+            (ALICE, ManaType::Red, 1),
+            (ALICE, ManaType::Colourless, 2),
+        ],
+    );
+
+    // 1. Outlaw batching static: Alice's Pirate gains Haste; Bob's Bear does not.
+    let pirate_kw = game
+        .execution()
+        .current_characteristics(object(&game, 3).id())
+        .unwrap()
+        .unwrap()
+        .keywords;
+    assert!(
+        pirate_kw.contains(&spellwake_engine::characteristics::KeywordAbility::Haste),
+        "Other outlaws you control should grant Haste to Alice's Pirate"
+    );
+    let bear_kw = game
+        .execution()
+        .current_characteristics(object(&game, 5).id())
+        .unwrap()
+        .unwrap()
+        .keywords;
+    assert!(
+        !bear_kw.contains(&spellwake_engine::characteristics::KeywordAbility::Haste),
+        "Non-outlaw creature should not gain Haste"
+    );
+
+    // 2. Multi-color Protection: Mirran Crusader has both ProtectionFromBlack and ProtectionFromGreen.
+    let crusader_kw = game
+        .execution()
+        .current_characteristics(object(&game, 6).id())
+        .unwrap()
+        .unwrap()
+        .keywords;
+    assert!(
+        crusader_kw
+            .contains(&spellwake_engine::characteristics::KeywordAbility::ProtectionFromBlack)
+            && crusader_kw
+                .contains(&spellwake_engine::characteristics::KeywordAbility::ProtectionFromGreen),
+        "Mirran Crusader must project both ProtectionFromBlack and ProtectionFromGreen"
+    );
+
+    // 3. Shoot the Sheriff cannot target Bob's Rogue (an outlaw) or Mirran Crusader (pro-black),
+    //    but CAN target and destroy Bob's Bear.
+    let rogue_id = object(&game, 4).id();
+    let bear_id = object(&game, 5).id();
+    let crusader_id = object(&game, 6).id();
+    assert!(
+        game.advance(GameInput {
+            basis: game.basis().clone(),
+            actor: ALICE,
+            command: GameCommand::CastWithResources {
+                spell: object(&game, 1).id(),
+                target: Some(TargetRef::Object(rogue_id)),
+                payment: CastingPayment {
+                    mana: pay_mana(&[(ManaType::Black, 1), (ManaType::Colourless, 1)]),
+                    ..Default::default()
+                },
+            },
+        })
+        .is_err(),
+        "Shoot the Sheriff must reject targeting a Rogue (outlaw)"
+    );
+    assert!(
+        game.advance(GameInput {
+            basis: game.basis().clone(),
+            actor: ALICE,
+            command: GameCommand::CastWithResources {
+                spell: object(&game, 1).id(),
+                target: Some(TargetRef::Object(crusader_id)),
+                payment: CastingPayment {
+                    mana: pay_mana(&[(ManaType::Black, 1), (ManaType::Colourless, 1)]),
+                    ..Default::default()
+                },
+            },
+        })
+        .is_err(),
+        "Shoot the Sheriff must reject targeting Mirran Crusader (protection from black)"
+    );
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: Some(TargetRef::Object(bear_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 5).zone(),
+        ObjectZone::Graveyard(BOB),
+        "Shoot the Sheriff must destroy Bob's non-outlaw Bear"
+    );
+
+    // 4. Any-combination mana: cast Mana Mix Test -> choose Green then Blue -> cast {G}{U} spell!
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 7).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert!(matches!(
+        game.pending_decision()
+            .expect("first mana color choice")
+            .frame(),
+        RuleFrame::ResolutionManaColor(_)
+    ));
+    game = reply(&game, DecisionReply::ManaColor(ManaType::Green));
+    assert!(matches!(
+        game.pending_decision()
+            .expect("second mana color choice")
+            .frame(),
+        RuleFrame::ResolutionManaColor(_)
+    ));
+    game = reply(&game, DecisionReply::ManaColor(ManaType::Blue));
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 8).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Green, 1), (ManaType::Blue, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        life(&game, ALICE),
+        23.into(),
+        "spending the {{G}}{{U}} produced by any-combination mana should cast Simic Check Test (20 -> 23)"
+    );
+}
+
+#[test]
+fn wave9_first_spell_discount_target_object_stat_and_copy_keeps_ability() {
+    let vocab = test_vocab();
+    let melek = compile_card(
+        &vocab,
+        "First Spell Scholar",
+        "Creature \u{2014} Weird Wizard",
+        Some("{3}{U}{R}"),
+        Some(("2", "2")),
+        "The first instant or sorcery spell you cast each turn costs {3} less to cast.",
+    );
+    let draw_spell = compile_card(
+        &vocab,
+        "Expensive Insight",
+        "Sorcery",
+        Some("{3}{U}"),
+        None,
+        "Draw a card.",
+    );
+    let reverence = compile_card(
+        &vocab,
+        "Power Blessing",
+        "Sorcery",
+        Some("{W}"),
+        None,
+        "You gain life equal to the power of target creature you control.",
+    );
+    let beast = compile_card(
+        &vocab,
+        "Giant Beast",
+        "Creature \u{2014} Beast",
+        Some("{3}{G}"),
+        Some(("4", "4")),
+        "",
+    );
+    let imitator = compile_card(
+        &vocab,
+        "Shapeshift Mimic",
+        "Creature \u{2014} Shapeshifter",
+        Some("{1}{U}"),
+        Some(("1", "1")),
+        "{U}: This creature becomes a copy of target creature, except it has this ability.",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: melek,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: draw_spell.clone(),
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: draw_spell,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: reverence,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: beast,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: imitator,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Blue, 4),
+            (ALICE, ManaType::White, 1),
+            (ALICE, ManaType::Colourless, 3),
+        ],
+    );
+
+    // 1. First instant/sorcery spell ({3}{U}) costs only {U} thanks to {3} discount!
+    let hand_before = hand_count(&game, ALICE);
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 2).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        hand_count(&game, ALICE),
+        hand_before,
+        "first sorcery should cast for {{U}} (discounted by {{3}}) and draw a card"
+    );
+
+    // Second sorcery this turn is NOT discounted: paying only {U} fails, paying {3}{U} succeeds.
+    assert!(
+        game.advance(GameInput {
+            basis: game.basis().clone(),
+            actor: ALICE,
+            command: GameCommand::CastWithResources {
+                spell: object(&game, 3).id(),
+                target: None,
+                payment: CastingPayment {
+                    mana: pay_mana(&[(ManaType::Blue, 1)]),
+                    ..Default::default()
+                },
+            },
+        })
+        .is_err(),
+        "second sorcery this turn must NOT receive the first-spell {{3}} discount"
+    );
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 3).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 1), (ManaType::Colourless, 3)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+
+    // 2. ObjectStat on TargetObject: Power Blessing targeting 4/4 Beast gains 4 life (20 -> 24).
+    let beast_id = object(&game, 5).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: Some(TargetRef::Object(beast_id)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::White, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        life(&game, ALICE),
+        24.into(),
+        "Power Blessing targeting 4/4 Beast must gain 4 life (20 -> 24)"
+    );
+
+    // 3. CopyException::HasThisAbility: Shapeshift Mimic becomes a 4/4 Beast copy AND keeps its ability!
+    let mimic_id = object(&game, 6).id();
+    let melek_id = object(&game, 1).id();
+    let ability_id = first_activated_id(&game, 6);
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateAbility {
+            source: mimic_id,
+            ability: ability_id,
+            target: TargetRef::Object(beast_id),
+            payment: pay_mana(&[(ManaType::Blue, 1)]),
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let projected = game
+        .execution()
+        .current_characteristics(mimic_id)
+        .unwrap()
+        .unwrap();
+    let pt = projected.power_toughness.as_ref().unwrap();
+    assert_eq!(
+        pt.derived.power,
+        4.into(),
+        "mimic should copy Beast's power"
+    );
+    assert_eq!(
+        pt.derived.toughness,
+        4.into(),
+        "mimic should copy Beast's toughness"
+    );
+    // Activate the retained copy ability a second time targeting Melek (2/2) to prove HasThisAbility!
+    // CopyExceptions::keep_abilities renumbers kept abilities sequentially from ActivatedAbilityId(0).
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateAbility {
+            source: mimic_id,
+            ability: spellwake_engine::activated::ActivatedAbilityId(0),
+            target: TargetRef::Object(melek_id),
+            payment: pay_mana(&[(ManaType::Blue, 1)]),
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let projected2 = game
+        .execution()
+        .current_characteristics(mimic_id)
+        .unwrap()
+        .unwrap();
+    let pt2 = projected2.power_toughness.as_ref().unwrap();
+    assert_eq!(
+        pt2.derived.power,
+        2.into(),
+        "mimic must retain its copy ability via HasThisAbility and re-copy into a 2/2"
     );
 }

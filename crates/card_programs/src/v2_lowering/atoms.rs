@@ -965,6 +965,44 @@ fn protection_from_color(color: Color) -> KeywordAbility {
     }
 }
 
+/// Lower a [`v2::KeywordSpec`] into one or more static engine [`KeywordAbility`] values.
+///
+/// Multi-color protection (e.g. `"Protection from red and from blue"`, CR 702.16a) expands into
+/// one `ProtectionFrom*` keyword per color bit.
+pub(crate) fn lower_keyword_abilities(
+    spec: &v2::KeywordSpec,
+    ctx: &LowerCtx<'_>,
+) -> LowerResult<Vec<KeywordAbility>> {
+    if spec.kind == v2::KeywordKind::Protection
+        && let Some(param) = &spec.param
+    {
+        match param {
+            v2::KeywordParam::Color(mask) if !mask.is_empty() => {
+                let colors = lower_color_set(*mask);
+                if !colors.is_empty() {
+                    return Ok(colors.into_iter().map(protection_from_color).collect());
+                }
+            }
+            v2::KeywordParam::Filter(f)
+                if has_only_basic_quality_fields(f)
+                    && !f.any_colors.is_empty()
+                    && f.all_types.is_empty()
+                    && f.any_types.is_empty()
+                    && f.subtypes.is_empty()
+                    && f.forbidden_subtypes.is_empty()
+                    && f.color_arity.is_none() =>
+            {
+                let colors = lower_color_set(f.any_colors);
+                if !colors.is_empty() {
+                    return Ok(colors.into_iter().map(protection_from_color).collect());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(vec![lower_keyword_ability(spec, ctx)?])
+}
+
 /// Lower a [`v2::KeywordSpec`] into a static engine [`KeywordAbility`].
 pub(crate) fn lower_keyword_ability(
     spec: &v2::KeywordSpec,

@@ -406,6 +406,24 @@ fn apply_exclude_self(clause: &mut ObjectClause, in_trigger: bool) -> LowerResul
     Ok(())
 }
 
+fn resolve_subtype_or_batch(
+    raw: &str,
+    type_hint: ast::CardTypeMask,
+    ctx: &LowerCtx<'_>,
+) -> LowerResult<Vec<SingleSubtype>> {
+    if raw.eq_ignore_ascii_case("outlaw") {
+        let mut out = Vec::with_capacity(5);
+        for member in ["Assassin", "Mercenary", "Pirate", "Rogue", "Warlock"] {
+            let ct = ctx
+                .lookup_creature_type(member)
+                .ok_or(LoweringError::Unsupported("v2:filter:unknown-subtype"))?;
+            out.push(SingleSubtype::Creature(ct));
+        }
+        return Ok(out);
+    }
+    Ok(vec![resolve_single_subtype(raw, type_hint, ctx)?])
+}
+
 fn apply_subtypes_to_clause(
     clause: &mut ObjectClause,
     filter: &v2::ObjectFilter,
@@ -413,26 +431,37 @@ fn apply_subtypes_to_clause(
 ) -> LowerResult<()> {
     let type_hint = filter.all_types.union(filter.any_types);
     let mut req_subs: Vec<SingleSubtype> = Vec::with_capacity(filter.subtypes.len());
+    let mut effective_match_any = filter.subtypes_match_any;
     for raw in &filter.subtypes {
-        let sub = resolve_single_subtype(raw, type_hint, ctx)?;
-        if !req_subs.contains(&sub) {
-            req_subs.push(sub);
+        let expanded = resolve_subtype_or_batch(raw, type_hint, ctx)?;
+        if expanded.len() > 1 {
+            if filter.subtypes.len() == 1 || filter.subtypes_match_any {
+                effective_match_any = true;
+            } else {
+                return Err(LoweringError::Unsupported("v2:filter:unknown-subtype"));
+            }
+        }
+        for sub in expanded {
+            if !req_subs.contains(&sub) {
+                req_subs.push(sub);
+            }
         }
     }
 
     let mut forb_subs: Vec<SingleSubtype> = Vec::new();
     for raw in &filter.forbidden_subtypes {
-        let sub = resolve_single_subtype(raw, type_hint, ctx)?;
-        match sub {
-            SingleSubtype::Aura => {
-                clause.flags = clause.flags.union(ObjectFilterFlags::NON_AURA);
-            }
-            SingleSubtype::Enchantment(spellwake_engine::program::EnchantmentSubtype::Saga) => {
-                clause.flags = clause.flags.union(ObjectFilterFlags::NON_SAGA);
-            }
-            other => {
-                if !forb_subs.contains(&other) {
-                    forb_subs.push(other);
+        for sub in resolve_subtype_or_batch(raw, type_hint, ctx)? {
+            match sub {
+                SingleSubtype::Aura => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::NON_AURA);
+                }
+                SingleSubtype::Enchantment(spellwake_engine::program::EnchantmentSubtype::Saga) => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::NON_SAGA);
+                }
+                other => {
+                    if !forb_subs.contains(&other) {
+                        forb_subs.push(other);
+                    }
                 }
             }
         }
@@ -445,7 +474,7 @@ fn apply_subtypes_to_clause(
     }
 
     if !req_subs.is_empty() {
-        clause.subtypes = build_positive_subtype_filter(&req_subs, filter.subtypes_match_any)?;
+        clause.subtypes = build_positive_subtype_filter(&req_subs, effective_match_any)?;
     } else if !forb_subs.is_empty() {
         clause.subtypes = build_negative_subtype_filter(&forb_subs)?;
     }
@@ -2189,24 +2218,35 @@ fn lower_filter_to_permanent_selector(
     sel.required_supertypes = lower_supertype_set(filter.required_supertypes);
     sel.forbidden_supertypes = lower_supertype_set(filter.forbidden_supertypes);
 
-    // Subtypes (full conjunctive, disjunctive, and forbidden support).
+    // Subtypes (full conjunctive, disjunctive, and forbidden support, plus CR 700.12 Outlaw batching).
     let type_hint = filter.all_types.union(filter.any_types);
+    let mut effective_match_any = filter.subtypes_match_any;
     for raw in &filter.subtypes {
-        let sub = resolve_single_subtype(raw, type_hint, ctx)?;
-        let sel_sub = single_subtype_to_selector(sub)?;
-        if filter.subtypes_match_any {
-            sel.any_subtypes.insert(sel_sub);
-        } else {
-            sel.required_subtypes.insert(sel_sub);
+        let expanded = resolve_subtype_or_batch(raw, type_hint, ctx)?;
+        if expanded.len() > 1 {
+            if filter.subtypes.len() == 1 || filter.subtypes_match_any {
+                effective_match_any = true;
+            } else {
+                return Err(LoweringError::Unsupported("v2:filter:unknown-subtype"));
+            }
+        }
+        for sub in expanded {
+            let sel_sub = single_subtype_to_selector(sub)?;
+            if effective_match_any {
+                sel.any_subtypes.insert(sel_sub);
+            } else {
+                sel.required_subtypes.insert(sel_sub);
+            }
         }
     }
     for raw in &filter.forbidden_subtypes {
-        let sub = resolve_single_subtype(raw, type_hint, ctx)?;
-        let sel_sub = single_subtype_to_selector(sub)?;
-        if sel_sub == SelectorSubtype::Aura {
-            sel.exclude_auras = true;
-        } else {
-            sel.forbidden_subtypes.insert(sel_sub);
+        for sub in resolve_subtype_or_batch(raw, type_hint, ctx)? {
+            let sel_sub = single_subtype_to_selector(sub)?;
+            if sel_sub == SelectorSubtype::Aura {
+                sel.exclude_auras = true;
+            } else {
+                sel.forbidden_subtypes.insert(sel_sub);
+            }
         }
     }
 

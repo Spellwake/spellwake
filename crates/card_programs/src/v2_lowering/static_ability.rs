@@ -42,7 +42,7 @@ use spellwake_oracle_compiler::{
 use crate::v2_lowering::{
     atoms::{
         lower_affected_players, lower_card_type_set, lower_color_mask, lower_color_set,
-        lower_counter_kind, lower_keyword_ability, lower_resolving_player,
+        lower_counter_kind, lower_keyword_abilities, lower_keyword_ability, lower_resolving_player,
         lower_source_zone_filter, lower_step, lower_subject_to_query,
     },
     card::lower_granted_face_with_restrictions,
@@ -683,9 +683,9 @@ pub(crate) fn lower_static_into_program(
         v2::StaticAbility::BindVariable { var, expr, inner } => {
             lower_bind_variable_into_program(*var, expr, inner, program, ctx)
         }
-        v2::StaticAbility::NextSpellModifier { .. } => Err(LoweringError::Unsupported(
-            "v2:static-next-spell-modifier-permanent",
-        )),
+        v2::StaticAbility::NextSpellModifier { filter, effect } => {
+            lower_permanent_next_spell_modifier(filter, effect, program, ctx)
+        }
         v2::StaticAbility::VisibilityRule { player, kind } => {
             lower_visibility_rule_into_program(*player, *kind, program, ctx)
         }
@@ -836,7 +836,7 @@ pub(crate) fn lower_temporary_static(
             if let v2::SubjectRef::Player(player) = subject {
                 let mut kws = BTreeSet::new();
                 for kw in keywords {
-                    kws.insert(lower_keyword_ability(kw, ctx)?);
+                    kws.extend(crate::v2_lowering::atoms::lower_keyword_abilities(kw, ctx)?);
                 }
                 let players = lower_affected_players(*player, acc, ctx)?;
                 acc.push(Instruction::ApplyContinuous(Box::new(
@@ -1302,28 +1302,35 @@ fn lower_grant_keywords_into_program(
         let matching = lower_spell_filter(f, ctx)?;
         let cond = lower_opt_static_cond(condition, ctx)?;
         for kw in keywords {
-            let permission = if kw.kind == v2::KeywordKind::Cascade && kw.param.is_none() {
-                CastPermissionRule::GrantSpellCascade {
-                    any_player,
-                    matching,
-                    count: NonZeroU8::MIN,
-                }
+            if kw.kind == v2::KeywordKind::Cascade && kw.param.is_none() {
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ctx.alloc_static_id(),
+                        permission: CastPermissionRule::GrantSpellCascade {
+                            any_player,
+                            matching,
+                            count: NonZeroU8::MIN,
+                        },
+                    },
+                    cond.clone(),
+                )?;
             } else {
-                let engine_kw = lower_keyword_ability(kw, ctx)?;
-                CastPermissionRule::GrantSpellKeyword {
-                    any_player,
-                    matching,
-                    keyword: engine_kw,
+                for engine_kw in lower_keyword_abilities(kw, ctx)? {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::CastPermission {
+                            id: ctx.alloc_static_id(),
+                            permission: CastPermissionRule::GrantSpellKeyword {
+                                any_player,
+                                matching,
+                                keyword: engine_kw,
+                            },
+                        },
+                        cond.clone(),
+                    )?;
                 }
-            };
-            push_static_ability(
-                program,
-                StaticContinuousAbility::CastPermission {
-                    id: ctx.alloc_static_id(),
-                    permission,
-                },
-                cond.clone(),
-            )?;
+            }
         }
         return Ok(());
     }
@@ -4397,6 +4404,122 @@ fn is_bare_any_spell(f: &v2::ObjectFilter) -> bool {
         && !f.any_permanent
         && !f.any_card
         && !f.is_ability
+}
+
+/// Lower a permanent static `"The first <filter> spell you cast each turn ..."` into a
+/// conditional static spell cost modifier or spell keyword grant gated by
+/// `SpellsCastMatchingThisTurn { players: One(Controller), filter } == 0`.
+fn lower_permanent_next_spell_modifier(
+    filter: &v2::ObjectFilter,
+    effect: &v2::StaticAbility,
+    program: &mut Program,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    let any_player = match filter.controller {
+        None | Some(ControllerRelation::You) => false,
+        _ => {
+            return Err(LoweringError::Unsupported(
+                "v2:static-next-spell-modifier-permanent",
+            ));
+        }
+    };
+    let mut clean_for_obj = filter.clone();
+    clean_for_obj.controller = None;
+    let obj_filter = lower_object_filter(&clean_for_obj, ctx)?;
+    let first_spell_cond =
+        StaticSourceCondition::Eval(Box::new(spellwake_engine::program::ResolutionCondition {
+            left: EngineValueExpr::PlayerStat(
+                spellwake_engine::program::PlayerStatExpr::SpellsCastMatchingThisTurn {
+                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                    filter: Box::new(obj_filter),
+                    from_zone: None,
+                },
+            ),
+            comparison: spellwake_engine::program::Comparison::Equal,
+            right: EngineValueExpr::literal(0),
+        }));
+    let matching = lower_spell_filter(filter, ctx)?;
+
+    match effect {
+        v2::StaticAbility::CostModifier {
+            delta,
+            less: true,
+            scale,
+            min_mana: None,
+            condition: None,
+            ..
+        } => {
+            let generic_u8 = lower_pure_generic_mana_u8(delta, "v2:static-cost-modifier-colored")?;
+            let amount = match scale {
+                None => {
+                    let nz = NonZeroU8::new(generic_u8)
+                        .ok_or(LoweringError::Unsupported("v2:static-cost-discount-zero"))?;
+                    SpellDiscount::Fixed(nz)
+                }
+                Some(scale_expr) => {
+                    let mut ve = lower_value_expr(scale_expr, ctx)?;
+                    if !ve.is_world_evaluable() {
+                        return Err(LoweringError::Unsupported(
+                            "v2:static-cost-discount-scale-nonworld",
+                        ));
+                    }
+                    if generic_u8 > 1 {
+                        ve = EngineValueExpr::Scale {
+                            expr: Box::new(ve),
+                            factor: RulesInteger::from(i64::from(generic_u8)),
+                        };
+                    }
+                    SpellDiscount::Dynamic(Box::new(ve))
+                }
+            };
+            push_static_ability(
+                program,
+                StaticContinuousAbility::CostModifier {
+                    id: ctx.alloc_static_id(),
+                    modifier: SpellCostModifier::Discount {
+                        any_player,
+                        matching,
+                        amount,
+                    },
+                },
+                Some(first_spell_cond),
+            )
+        }
+        v2::StaticAbility::GrantKeywords {
+            keywords,
+            condition: None,
+            ..
+        } if !keywords.is_empty() => {
+            for kw in keywords {
+                let permission = if kw.kind == v2::KeywordKind::Cascade && kw.param.is_none() {
+                    CastPermissionRule::GrantSpellCascade {
+                        any_player,
+                        matching,
+                        count: NonZeroU8::MIN,
+                    }
+                } else {
+                    let engine_kw = lower_keyword_ability(kw, ctx)?;
+                    CastPermissionRule::GrantSpellKeyword {
+                        any_player,
+                        matching,
+                        keyword: engine_kw,
+                    }
+                };
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ctx.alloc_static_id(),
+                        permission,
+                    },
+                    Some(first_spell_cond.clone()),
+                )?;
+            }
+            Ok(())
+        }
+        _ => Err(LoweringError::Unsupported(
+            "v2:static-next-spell-modifier-permanent",
+        )),
+    }
 }
 
 fn is_controller_only_filter(f: &v2::ObjectFilter, expected: ControllerRelation) -> bool {

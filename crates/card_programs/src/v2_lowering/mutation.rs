@@ -719,6 +719,30 @@ pub(crate) fn lower_player_mutation(
         v2::PlayerMutation::AddMana(spec) => {
             require_instant_duration(duration, "v2:add-mana-unexpected-duration")?;
             let rp = atoms::lower_resolving_player(player, acc, ctx)?;
+            if let Some(count_expr) = extract_any_combination_mana_count(spec, ctx)? {
+                let single_choice =
+                    Instruction::MutatePlayer(Box::new(MutatePlayerSpec::add_mana(
+                        rp,
+                        spellwake_engine::program::EffectManaYield::Choice {
+                            colors: all_five_mana_colors_set(),
+                            amount: EngineValueExpr::literal(1),
+                        },
+                    )));
+                if let EngineValueExpr::Literal(ref n) = count_expr
+                    && let Some(k) = n.to_usize()
+                    && (1..=10).contains(&k)
+                {
+                    for _ in 0..k {
+                        acc.push(single_choice.clone());
+                    }
+                    return Ok(());
+                }
+                acc.push(Instruction::RepeatLoop {
+                    count: count_expr,
+                    body: Box::new(ExecutableBody::new(BodyTarget::None, vec![single_choice])),
+                });
+                return Ok(());
+            }
             let yield_kind = atoms::lower_mana_spec(spec, ctx)?;
             acc.push(Instruction::MutatePlayer(Box::new(
                 MutatePlayerSpec::add_mana(rp, yield_kind),
@@ -1014,11 +1038,12 @@ fn try_lower_player_keyword_grant(
             }
             let mut kw_set = BTreeSet::new();
             for kw in kws {
-                let engine_kw = atoms::lower_keyword_ability(kw, ctx)?;
-                if !is_player_applicable_keyword(&engine_kw) {
-                    return Ok(false);
+                for engine_kw in atoms::lower_keyword_abilities(kw, ctx)? {
+                    if !is_player_applicable_keyword(&engine_kw) {
+                        return Ok(false);
+                    }
+                    kw_set.insert(engine_kw);
                 }
-                kw_set.insert(engine_kw);
             }
             let Some(players) = lower_player_grant_subject_part(subject, acc, ctx)? else {
                 return Ok(false);
@@ -1040,11 +1065,12 @@ fn try_lower_player_keyword_grant(
             };
             let mut kw_set = BTreeSet::new();
             for kw in kws {
-                let engine_kw = atoms::lower_keyword_ability(kw, ctx)?;
-                if !is_player_applicable_keyword(&engine_kw) {
-                    return Err(LoweringError::Unsupported("v2:subject:player-as-object"));
+                for engine_kw in atoms::lower_keyword_abilities(kw, ctx)? {
+                    if !is_player_applicable_keyword(&engine_kw) {
+                        return Err(LoweringError::Unsupported("v2:subject:player-as-object"));
+                    }
+                    kw_set.insert(engine_kw);
                 }
-                kw_set.insert(engine_kw);
             }
             acc.push(Instruction::ApplyContinuous(Box::new(
                 ApplyContinuousSpec::temporary_rule(
@@ -3004,4 +3030,50 @@ fn is_pure_color_filter(f: &v2::ObjectFilter) -> bool {
         && !f.any_permanent
         && !f.any_card
         && !f.is_ability
+}
+
+fn all_five_mana_colors_set() -> BTreeSet<spellwake_engine::mana::ManaType> {
+    use spellwake_engine::mana::ManaType;
+    BTreeSet::from([
+        ManaType::White,
+        ManaType::Blue,
+        ManaType::Black,
+        ManaType::Red,
+        ManaType::Green,
+    ])
+}
+
+fn extract_any_combination_mana_count(
+    spec: &v2::ManaSpec,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<Option<EngineValueExpr>> {
+    match spec {
+        v2::ManaSpec::AnyColor {
+            amount,
+            single_color: false,
+        } => Ok(Some(value::lower_value_expr(amount, ctx)?)),
+        v2::ManaSpec::Scaled { base, scale } => {
+            if let v2::ManaSpec::AnyColor {
+                amount,
+                single_color: false,
+            } = base.as_ref()
+            {
+                let base_factor = value::lower_value_const(amount).filter(|&k| k > 0).ok_or(
+                    LoweringError::Unsupported("v2:mana-spec:scaled-nonconst-base"),
+                )?;
+                let lowered_scale = value::lower_value_expr(scale, ctx)?;
+                let total = if base_factor == 1 {
+                    lowered_scale
+                } else {
+                    EngineValueExpr::Scale {
+                        expr: Box::new(lowered_scale),
+                        factor: spellwake_contracts::RulesInteger::from(i64::from(base_factor)),
+                    }
+                };
+                return Ok(Some(total));
+            }
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
 }

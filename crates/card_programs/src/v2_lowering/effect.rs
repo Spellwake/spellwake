@@ -264,7 +264,18 @@ pub(crate) fn register_value_expr_player_targets(
         | v2::ValueExpr::ColorCount(subject)
         | v2::ValueExpr::ObjectStat { subject, .. }
         | v2::ValueExpr::StatDifference(subject) => {
-            register_subject_filter_player_targets(subject, acc, ctx)
+            if matches!(subject.as_ref(), v2::SubjectRef::TargetObject { .. }) && !acc.target_set {
+                let (bt, tc) = atoms::lower_subject_to_target(subject, ctx)?;
+                acc.register_target(bt, tc)?;
+                ctx.has_object_target = acc.target_set
+                    && matches!(
+                        acc.target,
+                        BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
+                    );
+                Ok(())
+            } else {
+                register_subject_filter_player_targets(subject, acc, ctx)
+            }
         }
         v2::ValueExpr::Add(a, b) | v2::ValueExpr::Sub(a, b) | v2::ValueExpr::Mul(a, b) => {
             register_value_expr_player_targets(a, acc, ctx)?;

@@ -129,6 +129,9 @@ pub(crate) fn lower_value_object_ref(
 ) -> LowerResult<ValueObjectRef> {
     match subject {
         v2::SubjectRef::SelfObject => Ok(ValueObjectRef::AbilitySource),
+        v2::SubjectRef::TargetObject { .. } if ctx.has_object_target => {
+            Ok(ValueObjectRef::TargetObject)
+        }
         v2::SubjectRef::Anaphora(anaph) => match anaph {
             v2::AnaphoraRef::EquippedCreature
             | v2::AnaphoraRef::EnchantedCreature

@@ -213,7 +213,7 @@ pub(crate) fn lower_copy_exceptions(
                         ));
                     } else {
                         out.extra_keywords
-                            .insert(atoms::lower_keyword_ability(kw, ctx)?);
+                            .extend(atoms::lower_keyword_abilities(kw, ctx)?);
                     }
                 }
             }
@@ -288,9 +288,13 @@ pub(crate) fn lower_copy_exceptions(
                 }
             }
             v2::CopyException::HasThisAbility => {
-                return Err(LoweringError::Unsupported(
-                    "v2:copy-exception-has-this-ability",
-                ));
+                if ctx.face_ability_count == 1 {
+                    out.keep_abilities = true;
+                } else {
+                    return Err(LoweringError::Unsupported(
+                        "v2:copy-exception-has-this-ability",
+                    ));
+                }
             }
             v2::CopyException::EntersWithCounters { .. } => {
                 return Err(LoweringError::Unsupported(
@@ -505,8 +509,8 @@ fn lower_custom_token_creation(
 
     for kw in keywords {
         if let Err(err) = kw_lowering::apply_face_keyword(kw, &mut program, ctx) {
-            if let Ok(ka) = atoms::lower_keyword_ability(kw, ctx) {
-                program.printed_keywords.insert(ka);
+            if let Ok(kas) = atoms::lower_keyword_abilities(kw, ctx) {
+                program.printed_keywords.extend(kas);
             } else {
                 return Err(err);
             }
@@ -809,11 +813,12 @@ fn apply_copy_exceptions_to_token_copy(
                             CombatTriggerKeyword::Decayed,
                         ));
                     } else {
-                        let engine_kw = atoms::lower_keyword_ability(kw, ctx)?;
-                        if engine_kw == KeywordAbility::Haste {
-                            spec.haste = true;
+                        for engine_kw in atoms::lower_keyword_abilities(kw, ctx)? {
+                            if engine_kw == KeywordAbility::Haste {
+                                spec.haste = true;
+                            }
+                            spec.extra_keywords.insert(engine_kw);
                         }
-                        spec.extra_keywords.insert(engine_kw);
                     }
                 }
             }
