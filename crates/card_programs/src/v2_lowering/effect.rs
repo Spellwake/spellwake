@@ -1782,20 +1782,31 @@ fn try_fuse_search_library_sequence(
         found_shuffle: false,
     };
 
-    // Absorb any reveal/move already nested inside `Optional { body }` after `SearchLibrary`.
-    // If `inner_tail` already contains `Shuffle` or any unrelated effect, let `lower_optional`
-    // handle `body` internally via its own `lower_effects_into` pass.
-    for inner_eff in inner_tail {
-        if !state.absorb_step(inner_eff) || state.found_shuffle {
+    // Absorb any reveal/move/shuffle already nested inside `Optional` / `BindVariable`.
+    let mut inner_idx = 0;
+    while inner_idx < inner_tail.len() {
+        if !state.absorb_step(&inner_tail[inner_idx]) {
             return None;
+        }
+        inner_idx += 1;
+        if state.found_shuffle {
+            if state.try_absorb_post_shuffle_top(inner_tail.get(inner_idx)) {
+                inner_idx += 1;
+            }
+            if inner_idx != inner_tail.len() {
+                return None;
+            }
+            break;
         }
     }
 
     let mut j = i + 1;
 
-    // Also handle `Optional { [SearchLibrary, ...] }` followed by `IfPrevious { succeeded: true, body }`
-    // where the entire `IfPrevious` body completes the search-reveal-move-shuffle sequence.
-    if opt_actor.is_some()
+    if state.found_shuffle {
+        if state.try_absorb_post_shuffle_top(effects.get(j)) {
+            j += 1;
+        }
+    } else if opt_actor.is_some()
         && let Some(v2::Effect::IfPrevious {
             succeeded: true,
             body: if_body,
@@ -3452,8 +3463,9 @@ fn lower_prompt_choice(
                 }
                 v2::SubjectRef::TargetObject { .. } | v2::SubjectRef::AnyTarget => {
                     // "Choose [up to N / any number of] target <objects>" selects targets on cast;
-                    // register the target on `acc` so subsequent anaphora (`it`/`them`) resolve to
-                    // `ObjectQuery::Targets` without emitting a duplicate resolution prompt.
+                    // register the target on `acc` and bind `ObjectQuery::Targets` into a local slot
+                    // so `Program::validate()` sees the target consumed and intermediate zone ops
+                    // cannot clobber the chosen reference.
                     let (bt, tc) = atoms::lower_subject_to_target(subj, ctx)?;
                     acc.register_target(bt, tc)?;
                     ctx.has_object_target = acc.target_set
@@ -3461,6 +3473,11 @@ fn lower_prompt_choice(
                             acc.target,
                             BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
                         );
+                    let chosen_slot = ctx.alloc_binding()?;
+                    let mut snap = ZoneOpSpec::move_all(ObjectQuery::Targets, EngineZoneDest::None);
+                    snap.bind_moved = Some(chosen_slot);
+                    acc.push(Instruction::ZoneOp(Box::new(snap)));
+                    ctx.last_moved_binding = Some(chosen_slot);
                     return Ok(());
                 }
                 _ => {}
@@ -4019,6 +4036,7 @@ fn lower_branch_condition(
         ctx.self_antecedent = true;
     }
 
+    let prev_zone_put = ctx.last_zone_put;
     let res: LowerResult<()> = (|| {
         if then_body.is_empty() {
             let negated = EngineConditionExpr::Not(Box::new(lowered_cond));
@@ -4050,6 +4068,21 @@ fn lower_branch_condition(
                 acc.instructions.get_mut(branch_idx)
             {
                 *destination = after_then;
+            }
+            if let Some((_, crate::v2_lowering::ctx::ZonePutTracker::BoundBool(slot))) =
+                ctx.last_zone_put
+                && ctx.last_zone_put != prev_zone_put
+            {
+                for ins in &mut acc.instructions {
+                    ins.shift_jumps(1, branch_idx);
+                }
+                acc.instructions.insert(
+                    branch_idx,
+                    Instruction::BindEnv {
+                        binding: slot,
+                        value: Box::new(ExecValue::Bool(false)),
+                    },
+                );
             }
             return Ok(());
         }

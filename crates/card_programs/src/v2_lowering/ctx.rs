@@ -65,6 +65,18 @@ pub(crate) struct LowerCtx<'a> {
     pub delayed_tag_key: Option<TagKey>,
     pub is_spell_body: bool,
     pub last_damage_was_self: bool,
+    /// Binding holding the boolean result (`true` if a card was put into `zone`, `false` otherwise)
+    /// for downstream `"If you didn't put a card into <zone> this way"` checks.
+    pub last_zone_put: Option<(spellwake_oracle_compiler::v2::ir::ZoneKind, ZonePutTracker)>,
+}
+
+/// How `"If you didn't put a card into <zone> this way"` observes whether a prior zone move succeeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ZonePutTracker {
+    /// Read a dedicated `ExecEnv` bool binding pre-initialized to `false` before optional/branched moves.
+    BoundBool(BindingId),
+    /// Read `EventValueKind::LastActionSucceeded` set by `Instruction::SearchLibrary`.
+    LastActionSucceeded,
 }
 
 impl<'a> LowerCtx<'a> {
@@ -96,6 +108,7 @@ impl<'a> LowerCtx<'a> {
             delayed_tag_key: None,
             is_spell_body: false,
             last_damage_was_self: false,
+            last_zone_put: None,
         }
     }
 
@@ -107,6 +120,7 @@ impl<'a> LowerCtx<'a> {
         self.attached_host_antecedent = false;
         self.delayed_tag_key = None;
         self.last_damage_was_self = false;
+        self.last_zone_put = None;
     }
 
     pub fn alloc_mana_id(&mut self) -> ManaAbilityId {

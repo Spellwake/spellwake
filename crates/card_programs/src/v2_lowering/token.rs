@@ -514,9 +514,14 @@ fn lower_custom_token_creation(
     }
 
     for face in abilities {
-        let granted = card::lower_granted_face(face, ctx)?;
+        let (granted, restricted) = card::lower_granted_face_with_restrictions(face, ctx)?;
         program.printed_keywords.extend(granted.keywords);
         program.activated.extend(granted.activated);
+        for (ab, restriction) in restricted {
+            let id = ab.id;
+            program.activated.push(ab);
+            program.activation_restrictions.insert(id, restriction);
+        }
         program.triggered.extend(granted.triggered);
         program.mana.extend(granted.mana);
         for stat in granted.statics {

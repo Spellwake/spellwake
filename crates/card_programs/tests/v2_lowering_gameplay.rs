@@ -42,9 +42,11 @@ fn test_vocab() -> Arc<CreatureTypeVocabulary> {
         "Goblin".to_string(),
         "Human".to_string(),
         "Knight".to_string(),
+        "Mercenary".to_string(),
         "Soldier".to_string(),
         "Spirit".to_string(),
         "Warrior".to_string(),
+        "Werewolf".to_string(),
         "Wizard".to_string(),
         "Zombie".to_string(),
     ];
@@ -2863,5 +2865,424 @@ fn wave7_search_any_number_optional_if_previous_and_prevent_damage_compound() {
         life(&game, ALICE),
         18.into(),
         "Safe Passage compound prevention shield must prevent Lightning Bolt to Alice"
+    );
+}
+
+#[test]
+fn wave8_overload_graveyard_trigger_and_token_sorcery_restriction() {
+    let vocab = test_vocab();
+    let weapon_surge = compile_card(
+        &vocab,
+        "Weapon Surge",
+        "Instant",
+        Some("{R}"),
+        None,
+        "Target creature you control gets +1/+0 and gains first strike until end of turn.\nOverload {1}{R}",
+    );
+    let punishing_fire = compile_card(
+        &vocab,
+        "Punishing Fire",
+        "Instant",
+        Some("{1}{R}"),
+        None,
+        "Punishing Fire deals 2 damage to any target.\nWhenever an opponent gains life, you may pay {R}. If you do, return this card from your graveyard to your hand.",
+    );
+    let life_spell = compile_card(
+        &vocab,
+        "Revitalize Test",
+        "Instant",
+        Some("{W}"),
+        None,
+        "You gain 3 life.",
+    );
+    let merc_maker = compile_card(
+        &vocab,
+        "Hire Mercenary Test",
+        "Sorcery",
+        Some("{1}{R}"),
+        None,
+        "Create a 1/1 red Mercenary creature token with \"{T}: Target creature you control gets +1/+0 until end of turn. Activate only as a sorcery.\"",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Target Bear",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: weapon_surge,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: bear.clone(),
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: bear,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Graveyard,
+                program: punishing_fire,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: BOB,
+                destination: ObjectDestination::Hand,
+                program: life_spell,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: merc_maker,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Red, 3),
+            (ALICE, ManaType::Colourless, 2),
+            (BOB, ManaType::White, 1),
+        ],
+    );
+
+    // 1. Cast Weapon Surge with Overload {1}{R} (use_alternative = true, no target) -> BOTH Bears become 3/2 First Strike!
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1), (ManaType::Colourless, 1)]),
+                use_alternative: true,
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    for card_num in [2u64, 3u64] {
+        let chars = game
+            .execution()
+            .current_characteristics(object(&game, card_num).id())
+            .unwrap()
+            .unwrap();
+        let pt = chars.power_toughness.as_ref().unwrap();
+        assert_eq!(pt.derived.power, 3.into());
+        assert_eq!(pt.derived.toughness, 2.into());
+        assert!(chars.has_keyword(spellwake_engine::characteristics::KeywordAbility::FirstStrike));
+    }
+
+    // 2. Cast Hire Mercenary Test -> creates a 1/1 red Mercenary token with its sorcery-restricted activated ability!
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 6).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let merc_token = game
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .find(|c| c.zone() == ObjectZone::Battlefield && c.is_token())
+        .expect("expected Mercenary token on battlefield");
+    let merc_chars = game
+        .execution()
+        .current_characteristics(merc_token.id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(merc_chars.printed_text.activated.len(), 1);
+    assert_eq!(
+        merc_chars.printed_text.activation_restrictions.len(),
+        1,
+        "Mercenary token must preserve its sorcery activation restriction"
+    );
+
+    // 3. Bob casts Revitalize Test (gains 3 life) -> Punishing Fire triggers from Alice's GRAVEYARD!
+    //    Alice pays {R} -> Punishing Fire returns from graveyard to Alice's hand!
+    game = pass(&game);
+    game = advance(
+        &game,
+        BOB,
+        GameCommand::CastWithResources {
+            spell: object(&game, 5).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::White, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(life(&game, BOB), 23.into());
+    assert_eq!(
+        game.execution().window().entries().len(),
+        1,
+        "Punishing Fire must trigger from graveyard when opponent gains life"
+    );
+    game = resolve_top(&game);
+    // Pay {R} when prompted for optional mana payment.
+    let pending = game
+        .pending_decision()
+        .expect("expected Punishing Fire {R} payment prompt");
+    match pending.frame() {
+        RuleFrame::ResolutionPayment(_) => {
+            game = reply(
+                &game,
+                DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(
+                    pay_mana(&[(ManaType::Red, 1)]).unwrap(),
+                )),
+            );
+        }
+        RuleFrame::OptionalEffect(_) => {
+            game = reply(
+                &game,
+                DecisionReply::OptionalEffect(OptionalEffectChoice::Take),
+            );
+            if matches!(
+                game.pending_decision().map(|d| d.frame()),
+                Some(RuleFrame::ResolutionPayment(_))
+            ) {
+                game = reply(
+                    &game,
+                    DecisionReply::ResolutionPayment(ResolutionPaymentReply::Pay(
+                        pay_mana(&[(ManaType::Red, 1)]).unwrap(),
+                    )),
+                );
+            }
+        }
+        other => panic!("unexpected decision frame for Punishing Fire: {other:?}"),
+    }
+    assert_eq!(
+        object(&game, 4).zone(),
+        ObjectZone::Hand(ALICE),
+        "Punishing Fire must return from graveyard to Alice's hand"
+    );
+}
+
+#[test]
+fn wave8_werewolf_spells_cast_last_turn_and_didnt_put_in_zone() {
+    let vocab = test_vocab();
+    let werewolf_watch = compile_card(
+        &vocab,
+        "Moon Watch",
+        "Creature \u{2014} Human Werewolf",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "At the beginning of each upkeep, if no spells were cast last turn, you gain 2 life.",
+    );
+    let courier = compile_card(
+        &vocab,
+        "Forest Courier Test",
+        "Sorcery",
+        Some("{G}"),
+        None,
+        "You may search your library for a Forest card, reveal it, put it into your hand, then shuffle. If you don't put a card into your hand this way, you gain 3 life.",
+    );
+    let forest = compile_card(
+        &vocab,
+        "Forest",
+        "Basic Land \u{2014} Forest",
+        None,
+        None,
+        "",
+    );
+
+    // Part A: Pass Turn 1 with ZERO spells cast -> at Turn 2 Upkeep, Moon Watch triggers (20 -> 22)!
+    let mut game = start_game_with_padding(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: werewolf_watch,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: courier.clone(),
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: courier,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryTop,
+                program: forest,
+            },
+        ],
+        &[(ALICE, ManaType::Green, 2)],
+        1,
+    );
+
+    // Advance from Turn 1 PrecombatMain through end of Turn 1 to Turn 2 Upkeep (no spells cast!).
+    for _ in 0..40 {
+        if game.turn().is_some_and(|t| t.position().number == 2)
+            && !game.execution().window().entries().is_empty()
+        {
+            break;
+        }
+        if matches!(
+            game.execution().window().phase(),
+            WindowPhase::Priority(PriorityPhase::Ready { .. })
+        ) {
+            game = pass(&game);
+        } else {
+            break;
+        }
+    }
+    assert_eq!(
+        game.turn().unwrap().position().number,
+        2,
+        "should have reached Turn 2"
+    );
+    assert_eq!(
+        game.execution().window().entries().len(),
+        1,
+        "Moon Watch must trigger on Turn 2 upkeep when no spells were cast on Turn 1"
+    );
+    game = resolve_top(&game);
+    assert_eq!(
+        life(&game, ALICE),
+        22.into(),
+        "Moon Watch trigger should gain 2 life (20 -> 22)"
+    );
+
+    // Part B: Test DidntPutInZone on a fresh Turn 1 PrecombatMain game:
+    //   1) Decline optional Forest search -> DidntPutInZone(Hand) is TRUE -> gain 3 life (20 -> 23).
+    //   2) Accept optional Forest search and find Forest -> DidntPutInZone(Hand) is FALSE -> stays 23!
+    let mut game2 = start_game_with_padding(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: compile_card(
+                    &vocab,
+                    "Forest Courier Test",
+                    "Sorcery",
+                    Some("{G}"),
+                    None,
+                    "You may search your library for a Forest card, reveal it, put it into your hand, then shuffle. If you don't put a card into your hand this way, you gain 3 life.",
+                ),
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: compile_card(
+                    &vocab,
+                    "Forest Courier Test 2",
+                    "Sorcery",
+                    Some("{G}"),
+                    None,
+                    "You may search your library for a Forest card, reveal it, put it into your hand, then shuffle. If you don't put a card into your hand this way, you gain 3 life.",
+                ),
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryTop,
+                program: compile_card(
+                    &vocab,
+                    "Forest",
+                    "Basic Land \u{2014} Forest",
+                    None,
+                    None,
+                    "",
+                ),
+            },
+        ],
+        &[(ALICE, ManaType::Green, 2)],
+        1,
+    );
+
+    // Cast Courier #1 and DECLINE search -> DidntPutInZone(Hand) fires -> 20 -> 23!
+    game2 = advance(
+        &game2,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game2, 2).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Green, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game2 = resolve_top(&game2);
+    game2 = reply(
+        &game2,
+        DecisionReply::OptionalEffect(OptionalEffectChoice::Decline),
+    );
+    assert_eq!(
+        life(&game2, ALICE),
+        23.into(),
+        "declining Forest search must trigger DidntPutInZone(Hand) -> +3 life"
+    );
+
+    // Cast Courier #2, ACCEPT search and pick Forest -> Forest in hand, life stays 23!
+    let forest_id = object(&game2, 4).id();
+    game2 = advance(
+        &game2,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game2, 3).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Green, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game2 = resolve_top(&game2);
+    game2 = reply(
+        &game2,
+        DecisionReply::OptionalEffect(OptionalEffectChoice::Take),
+    );
+    game2 = reply(
+        &game2,
+        DecisionReply::LibraryTop(LibraryTopReply::Search {
+            selected: Some(forest_id),
+        }),
+    );
+    assert_eq!(object(&game2, 4).zone(), ObjectZone::Hand(ALICE));
+    assert_eq!(
+        life(&game2, ALICE),
+        23.into(),
+        "finding Forest must NOT trigger DidntPutInZone(Hand)"
     );
 }

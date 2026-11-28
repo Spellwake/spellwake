@@ -153,8 +153,12 @@ pub(crate) fn lower_triggered_ability(
     ctx.attached_host_antecedent = prev_attached_host_antecedent;
     let exec_body = exec_body_res?;
 
+    let self_in_graveyard = effects_reference_self_in_graveyard(&exec_effects);
     let mut out = Vec::with_capacity(specs.len());
-    for cond_spec in specs {
+    for mut cond_spec in specs {
+        if self_in_graveyard && cond_spec.zone == TriggerZone::Battlefield {
+            cond_spec.zone = TriggerZone::Graveyard;
+        }
         out.push(TriggeredAbility {
             id: ctx.alloc_triggered_id(),
             condition: cond_spec,
@@ -163,6 +167,31 @@ pub(crate) fn lower_triggered_ability(
         });
     }
     Ok(out)
+}
+
+fn effects_reference_self_in_graveyard(effects: &[v2::Effect]) -> bool {
+    effects.iter().any(|eff| match eff {
+        v2::Effect::ZoneOp { subject, from, .. } => {
+            matches!(subject, v2::SubjectRef::SelfObject)
+                && from.iter().any(|z| z.zone == v2::ZoneKind::Graveyard)
+        }
+        v2::Effect::Optional { body, .. }
+        | v2::Effect::IfPrevious { body, .. }
+        | v2::Effect::ReflexiveTrigger(body)
+        | v2::Effect::Unless { body, .. }
+        | v2::Effect::ScopedDuration { body, .. }
+        | v2::Effect::BindVariable { body, .. }
+        | v2::Effect::ForEach { body, .. } => effects_reference_self_in_graveyard(body),
+        v2::Effect::BranchCondition {
+            then_body,
+            else_body,
+            ..
+        } => {
+            effects_reference_self_in_graveyard(then_body)
+                || effects_reference_self_in_graveyard(else_body)
+        }
+        _ => false,
+    })
 }
 
 /// Lower a triggered ability effect body (including modal triggered abilities into native

@@ -937,6 +937,7 @@ fn lower_search_library(
             ctx,
         )?;
         let group_sel = atoms::lower_player_ref(actor, acc, ctx)?;
+        let dest_zone = search_dest_zone_kind(destination);
         let search = LibrarySearch {
             searcher: ResolvingPlayer::LoopPlayer,
             source,
@@ -957,11 +958,18 @@ fn lower_search_library(
                 }],
             )),
         });
+        if let Some(zk) = dest_zone {
+            ctx.last_zone_put = Some((
+                zk,
+                crate::v2_lowering::ctx::ZonePutTracker::LastActionSucceeded,
+            ));
+        }
         return Ok(());
     }
 
     let searcher = atoms::lower_resolving_player(actor, acc, ctx)?;
     let search_count = lower_search_count(eff_count, exact, source, searcher, acc, ctx)?;
+    let dest_zone = search_dest_zone_kind(destination);
     acc.push(Instruction::SearchLibrary {
         filter: Box::new(LibrarySearch {
             searcher,
@@ -974,6 +982,12 @@ fn lower_search_library(
             reveal,
         }),
     });
+    if let Some(zk) = dest_zone {
+        ctx.last_zone_put = Some((
+            zk,
+            crate::v2_lowering::ctx::ZonePutTracker::LastActionSucceeded,
+        ));
+    }
     Ok(())
 }
 
@@ -1834,6 +1848,7 @@ fn emit_zone_op_with_prior(
                 option_branches: Vec::new(),
             })));
 
+            let dest_zone = engine_dest_zone_kind(&destination);
             let moved_id = ctx.alloc_binding()?;
             let ok_id = ctx.alloc_binding()?;
             let mut move_spec = ZoneOpSpec::move_all(ObjectQuery::Bound(chosen_slot), destination);
@@ -1856,6 +1871,12 @@ fn emit_zone_op_with_prior(
             ctx.last_moved_binding = Some(moved_id);
             ctx.last_succeeded_binding = Some(ok_id);
             ctx.last_unchosen_binding = Some(rest_slot);
+            if let Some(zk) = dest_zone {
+                ctx.last_zone_put = Some((
+                    zk,
+                    crate::v2_lowering::ctx::ZonePutTracker::BoundBool(ok_id),
+                ));
+            }
             Ok(())
         }
         ZoneSelection::All => {
@@ -2111,6 +2132,28 @@ fn scan_zones_with_filter(
     Ok(ObjectQuery::Union(parts))
 }
 
+fn engine_dest_zone_kind(dest: &EngineZoneDest) -> Option<v2::ZoneKind> {
+    match dest {
+        EngineZoneDest::Hand => Some(v2::ZoneKind::Hand),
+        EngineZoneDest::Battlefield { .. } => Some(v2::ZoneKind::Battlefield),
+        EngineZoneDest::Graveyard { .. } => Some(v2::ZoneKind::Graveyard),
+        EngineZoneDest::Exile { .. } => Some(v2::ZoneKind::Exile),
+        EngineZoneDest::Library { .. } => Some(v2::ZoneKind::Library),
+        _ => None,
+    }
+}
+
+fn search_dest_zone_kind(dest: SearchDestination) -> Option<v2::ZoneKind> {
+    match dest {
+        SearchDestination::Hand => Some(v2::ZoneKind::Hand),
+        SearchDestination::Battlefield { .. } => Some(v2::ZoneKind::Battlefield),
+        SearchDestination::Graveyard => Some(v2::ZoneKind::Graveyard),
+        SearchDestination::Exile { .. } => Some(v2::ZoneKind::Exile),
+        SearchDestination::LibraryTop => Some(v2::ZoneKind::Library),
+        _ => None,
+    }
+}
+
 fn emit_zone_op(
     source: ObjectQuery,
     selection: ZoneSelection,
@@ -2119,6 +2162,7 @@ fn emit_zone_op(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    let dest_zone = engine_dest_zone_kind(&destination);
     let moved_id = ctx.alloc_binding()?;
     let ok_id = ctx.alloc_binding()?;
     let unchosen_id = if matches!(
@@ -2137,6 +2181,12 @@ fn emit_zone_op(
     spec.shuffle_library = shuffle_library;
 
     ctx.last_moved_binding = Some(moved_id);
+    if let Some(zk) = dest_zone {
+        ctx.last_zone_put = Some((
+            zk,
+            crate::v2_lowering::ctx::ZonePutTracker::BoundBool(ok_id),
+        ));
+    }
     ctx.last_succeeded_binding = Some(ok_id);
     if let Some(uid) = unchosen_id {
         ctx.last_unchosen_binding = Some(uid);

@@ -2847,6 +2847,18 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
             PlayerStatExpr::CardsExiledThisTurn => {
                 i64::from(ctx.state.cards_exiled_this_turn).into()
             }
+            PlayerStatExpr::SpellsCastLastTurn => ctx
+                .state
+                .spells_cast_last_turn
+                .values()
+                .fold(RulesInteger::from(0), |acc, n| acc.plus(n)),
+            PlayerStatExpr::MaxPlayerSpellsCastLastTurn => ctx
+                .state
+                .spells_cast_last_turn
+                .values()
+                .max()
+                .cloned()
+                .unwrap_or_else(|| 0.into()),
             PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
                 filter,
                 from_battlefield_only,

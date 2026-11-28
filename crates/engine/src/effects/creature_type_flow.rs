@@ -2787,6 +2787,18 @@ impl EffectWindow {
                 PlayerStatExpr::CardsExiledThisTurn => {
                     Ok(i64::from(self.characteristics.cards_exiled_this_turn).into())
                 }
+                PlayerStatExpr::SpellsCastLastTurn => Ok(self
+                    .characteristics
+                    .spells_cast_last_turn
+                    .values()
+                    .fold(RulesInteger::from(0), |acc, n| acc.plus(n))),
+                PlayerStatExpr::MaxPlayerSpellsCastLastTurn => Ok(self
+                    .characteristics
+                    .spells_cast_last_turn
+                    .values()
+                    .max()
+                    .cloned()
+                    .unwrap_or_else(|| 0.into())),
                 PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
                     filter,
                     from_battlefield_only,

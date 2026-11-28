@@ -518,8 +518,18 @@ impl EffectWindow {
             } else {
                 BTreeMap::new()
             };
+            let prev_spells_cast: BTreeMap<SeatId, RulesInteger> = if previous.is_some() {
+                next.characteristics
+                    .cast_spells_this_turn
+                    .iter()
+                    .map(|(&seat, recs)| (seat, RulesInteger::from_usize(recs.len())))
+                    .collect()
+            } else {
+                BTreeMap::new()
+            };
             next = next.record_turn_start(next.revision())?;
             next.characteristics.life_lost_last_turn = prev_life_lost;
+            next.characteristics.spells_cast_last_turn = prev_spells_cast;
             next.characteristics.cast_spells_this_turn.clear();
             next.characteristics
                 .activated_graveyard_ability_this_turn

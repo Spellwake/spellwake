@@ -682,6 +682,31 @@ pub(crate) fn lower_condition_expr(
                 right: Box::new(rc.right),
             })
         }
+        v2::ConditionExpr::EventCheck(v2::EventCheckKind::DidntPutInZone(zone)) => {
+            match ctx.last_zone_put {
+                Some((z, crate::v2_lowering::ctx::ZonePutTracker::BoundBool(slot)))
+                    if z == *zone =>
+                {
+                    Ok(EngineConditionExpr::Not(Box::new(
+                        EngineConditionExpr::BoundBool(slot),
+                    )))
+                }
+                Some((z, crate::v2_lowering::ctx::ZonePutTracker::LastActionSucceeded))
+                    if z == *zone =>
+                {
+                    Ok(EngineConditionExpr::Compare {
+                        left: Box::new(EngineValueExpr::EventValue(
+                            EventValueKind::LastActionSucceeded,
+                        )),
+                        op: Comparison::Equal,
+                        right: Box::new(EngineValueExpr::literal(0)),
+                    })
+                }
+                _ => Err(LoweringError::Unsupported(
+                    "v2:cond:event:didnt-put-in-zone",
+                )),
+            }
+        }
         other => {
             let rc = lower_resolution_condition(other, ctx)?;
             Ok(EngineConditionExpr::Compare {
@@ -2589,9 +2614,21 @@ fn lower_event_check_condition(kind: &v2::EventCheckKind) -> LowerResult<Resolut
         v2::EventCheckKind::PlayersLostGame(_) => Err(LoweringError::Unsupported(
             "v2:cond:event:players-lost-game",
         )),
-        v2::EventCheckKind::SpellsCastLastTurn { .. } => Err(LoweringError::Unsupported(
-            "v2:cond:event:spells-cast-last-turn",
-        )),
+        v2::EventCheckKind::SpellsCastLastTurn { op, count } => {
+            if *op == ast::CompareOp::Eq && *count == 0 {
+                Ok(ResolutionCondition {
+                    left: EngineValueExpr::PlayerStat(PlayerStatExpr::SpellsCastLastTurn),
+                    comparison: Comparison::Equal,
+                    right: EngineValueExpr::literal(0),
+                })
+            } else {
+                Ok(ResolutionCondition {
+                    left: EngineValueExpr::PlayerStat(PlayerStatExpr::MaxPlayerSpellsCastLastTurn),
+                    comparison: lower_compare_op(*op),
+                    right: EngineValueExpr::literal(i64::from(*count)),
+                })
+            }
+        }
     }
 }
 

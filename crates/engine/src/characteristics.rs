@@ -202,6 +202,8 @@ pub(crate) struct CharacteristicState {
     pub(crate) activated_graveyard_ability_this_turn: BTreeSet<SeatId>,
     /// Life lost by each seat during the previous turn (rotated on turn start).
     pub(crate) life_lost_last_turn: BTreeMap<SeatId, RulesInteger>,
+    /// Number of spells cast by each seat during the previous turn (rotated on turn start).
+    pub(crate) spells_cast_last_turn: BTreeMap<SeatId, RulesInteger>,
     /// Total cards put into exile this turn.
     pub(crate) cards_exiled_this_turn: u32,
     /// Filtered graveyard-arrival records this turn.
@@ -375,6 +377,7 @@ impl Default for CharacteristicState {
             cast_spells_this_turn: BTreeMap::new(),
             activated_graveyard_ability_this_turn: BTreeSet::new(),
             life_lost_last_turn: BTreeMap::new(),
+            spells_cast_last_turn: BTreeMap::new(),
             cards_exiled_this_turn: 0,
             cards_put_into_graveyard_this_turn: Vec::new(),
             sacrificed_this_turn: BTreeMap::new(),

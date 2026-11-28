@@ -273,9 +273,9 @@ fn lower_face_v2_inner(
     }
 
     // 1. Lower spell effects for Instant/Sorcery faces (or reject spell effects on permanents).
+    let mut spell_exec_effects: Vec<v2::Effect> = Vec::new();
     if is_spell {
         let mut spell_restrictions: Vec<v2::ActivationRestriction> = Vec::new();
-        let mut exec_effects: Vec<v2::Effect> = Vec::with_capacity(compiled.spell_effects.len());
         for eff in &compiled.spell_effects {
             if let v2::Effect::Restriction(rs) = eff {
                 spell_restrictions.extend(rs.iter().cloned());
@@ -300,10 +300,10 @@ fn lower_face_v2_inner(
                     &mut ctx,
                 )?;
             } else {
-                exec_effects.push(eff.clone());
+                spell_exec_effects.push(eff.clone());
             }
         }
-        if exec_effects.is_empty() {
+        if spell_exec_effects.is_empty() {
             return Err(LoweringError::Unsupported("v2:spell:empty-effects"));
         }
         if !spell_restrictions.is_empty() {
@@ -311,7 +311,7 @@ fn lower_face_v2_inner(
         }
         let prev_is_spell = ctx.is_spell_body;
         ctx.is_spell_body = true;
-        let spell_res = lower_spell_effects_v2(&exec_effects, &mut ctx);
+        let spell_res = lower_spell_effects_v2(&spell_exec_effects, &mut ctx);
         ctx.is_spell_body = prev_is_spell;
         let (body, modes) = spell_res?;
         if let ProgramKind::Spell(spell) = &mut program.kind {
@@ -322,11 +322,45 @@ fn lower_face_v2_inner(
         return Err(LoweringError::Unsupported("v2:permanent:has-spell-effects"));
     }
 
-    // 2. Lower face keywords, preserving context-dependent hooks (`ReadAhead`, `Prototype`, `Backup`).
+    // 2. Lower face keywords, preserving context-dependent hooks (`ReadAhead`, `Prototype`, `Backup`, `Overload`).
     let mut has_read_ahead = false;
     let mut prototype_spec: Option<(ManaCost, u8, Vec<HybridSymbol>, PrintedPowerToughness)> = None;
 
     for (kw_idx, kw) in compiled.keywords.iter().enumerate() {
+        if kw.kind == v2::KeywordKind::Overload && is_spell {
+            let Some(v2::KeywordParam::Cost(costs)) = &kw.param else {
+                return Err(LoweringError::Unsupported("v2:kw:overload"));
+            };
+            let [v2::Cost::Mana(mc)] = costs.as_slice() else {
+                return Err(LoweringError::Unsupported("v2:kw:overload"));
+            };
+            let (overload_mana, overload_x, overload_hybrids, overload_snow) =
+                lower_v2_mana_cost(mc)?;
+            if overload_x != 0 || !overload_hybrids.is_empty() || overload_snow != 0 {
+                return Err(LoweringError::Unsupported("v2:kw:overload"));
+            }
+            if program.conditional_cost.is_some() {
+                return Err(LoweringError::Unsupported("v2:kw:overload"));
+            }
+            let (rewritten, changed) = rewrite_effects_for_overload(&spell_exec_effects)?;
+            if !changed {
+                return Err(LoweringError::Unsupported("v2:kw:overload"));
+            }
+            let prev_is_spell = ctx.is_spell_body;
+            ctx.is_spell_body = true;
+            let each_res = crate::v2_lowering::effect::lower_effect_body(&rewritten, &mut ctx);
+            ctx.is_spell_body = prev_is_spell;
+            let each_body = each_res?;
+            if each_body.target != BodyTarget::None {
+                return Err(LoweringError::Unsupported("v2:kw:overload"));
+            }
+            program.conditional_cost =
+                Some(spellwake_engine::program::ConditionalCastCost::Overload {
+                    mana: overload_mana,
+                    each: Box::new(each_body),
+                });
+            continue;
+        }
         if layout_flags.allow_aftermath
             && kw.kind == v2::KeywordKind::Aftermath
             && kw.param.is_none()
@@ -1776,4 +1810,117 @@ fn lookup_defense(
         .source_defense(oracle_id?, face_idx)?
         .parse::<u16>()
         .ok()
+}
+
+fn rewrite_player_for_overload(player: v2::PlayerRef, changed: &mut bool) -> v2::PlayerRef {
+    match player {
+        v2::PlayerRef::TargetPlayer => {
+            *changed = true;
+            v2::PlayerRef::EachPlayer
+        }
+        v2::PlayerRef::TargetOpponent => {
+            *changed = true;
+            v2::PlayerRef::EachOpponent
+        }
+        other => other,
+    }
+}
+
+fn rewrite_subject_for_overload(
+    subj: &v2::SubjectRef,
+    changed: &mut bool,
+) -> LowerResult<v2::SubjectRef> {
+    match subj {
+        v2::SubjectRef::TargetObject { filter, .. } => {
+            *changed = true;
+            Ok(v2::SubjectRef::All(filter.clone()))
+        }
+        v2::SubjectRef::TargetPlayer { opponent_only, .. } => {
+            *changed = true;
+            Ok(v2::SubjectRef::Player(if *opponent_only {
+                v2::PlayerRef::EachOpponent
+            } else {
+                v2::PlayerRef::EachPlayer
+            }))
+        }
+        v2::SubjectRef::Player(p) => Ok(v2::SubjectRef::Player(rewrite_player_for_overload(
+            *p, changed,
+        ))),
+        v2::SubjectRef::AnyTarget => Err(LoweringError::Unsupported("v2:kw:overload")),
+        v2::SubjectRef::Compound(parts) => {
+            let rewritten = parts
+                .iter()
+                .map(|p| rewrite_subject_for_overload(p, changed))
+                .collect::<LowerResult<Vec<_>>>()?;
+            Ok(v2::SubjectRef::Compound(rewritten))
+        }
+        other => Ok(other.clone()),
+    }
+}
+
+fn rewrite_effects_for_overload(effects: &[v2::Effect]) -> LowerResult<(Vec<v2::Effect>, bool)> {
+    let mut changed = false;
+    let mut out = Vec::with_capacity(effects.len());
+    for eff in effects {
+        out.push(rewrite_effect_for_overload(eff, &mut changed)?);
+    }
+    Ok((out, changed))
+}
+
+fn rewrite_effect_for_overload(eff: &v2::Effect, changed: &mut bool) -> LowerResult<v2::Effect> {
+    let mut cloned = eff.clone();
+    match &mut cloned {
+        v2::Effect::ZoneOp { actor, subject, .. } => {
+            *actor = rewrite_player_for_overload(*actor, changed);
+            *subject = rewrite_subject_for_overload(subject, changed)?;
+        }
+        v2::Effect::MutateObject { subject, .. } => {
+            *subject = rewrite_subject_for_overload(subject, changed)?;
+        }
+        v2::Effect::DealDamage { source, target, .. } => {
+            *source = rewrite_subject_for_overload(source, changed)?;
+            *target = rewrite_subject_for_overload(target, changed)?;
+        }
+        v2::Effect::AdjustLife { player, .. } | v2::Effect::MutatePlayer { player, .. } => {
+            *player = rewrite_player_for_overload(*player, changed);
+        }
+        v2::Effect::PreventDamage { source, target, .. } => {
+            if let Some(s) = source {
+                *s = rewrite_subject_for_overload(s, changed)?;
+            }
+            if let Some(t) = target {
+                *t = rewrite_subject_for_overload(t, changed)?;
+            }
+        }
+        v2::Effect::CreateToken { controller, .. } => {
+            *controller = rewrite_player_for_overload(*controller, changed);
+        }
+        v2::Effect::Optional { actor, body } => {
+            *actor = rewrite_player_for_overload(*actor, changed);
+            for inner in body.iter_mut() {
+                *inner = rewrite_effect_for_overload(inner, changed)?;
+            }
+        }
+        v2::Effect::BranchCondition {
+            then_body,
+            else_body,
+            ..
+        } => {
+            for inner in then_body.iter_mut() {
+                *inner = rewrite_effect_for_overload(inner, changed)?;
+            }
+            for inner in else_body.iter_mut() {
+                *inner = rewrite_effect_for_overload(inner, changed)?;
+            }
+        }
+        v2::Effect::ScopedDuration { body, .. }
+        | v2::Effect::IfPrevious { body, .. }
+        | v2::Effect::BindVariable { body, .. } => {
+            for inner in body.iter_mut() {
+                *inner = rewrite_effect_for_overload(inner, changed)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(cloned)
 }
