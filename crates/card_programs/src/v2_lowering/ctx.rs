@@ -61,6 +61,7 @@ pub(crate) struct LowerCtx<'a> {
     pub last_unchosen_binding: Option<BindingId>,
     pub last_succeeded_binding: Option<BindingId>,
     pub self_antecedent: bool,
+    pub attached_host_antecedent: bool,
     pub delayed_tag_key: Option<TagKey>,
     pub is_spell_body: bool,
     pub last_damage_was_self: bool,
@@ -91,6 +92,7 @@ impl<'a> LowerCtx<'a> {
             last_unchosen_binding: None,
             last_succeeded_binding: None,
             self_antecedent: false,
+            attached_host_antecedent: false,
             delayed_tag_key: None,
             is_spell_body: false,
             last_damage_was_self: false,
@@ -102,6 +104,7 @@ impl<'a> LowerCtx<'a> {
         self.last_player_target = None;
         self.trigger_damage_event = None;
         self.self_antecedent = false;
+        self.attached_host_antecedent = false;
         self.delayed_tag_key = None;
         self.last_damage_was_self = false;
     }

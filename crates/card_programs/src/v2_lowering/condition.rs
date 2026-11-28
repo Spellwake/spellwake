@@ -1017,6 +1017,15 @@ pub(crate) fn lower_resolution_condition(
                     Box::new(obj_filter),
                 )))
             }
+            v2::PriorActionKind::DealtDamageThisWay if ctx.last_damage_was_self => {
+                let obj_filter = lower_object_filter(filter, ctx)?
+                    .with_flags(ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN);
+                Ok(rc_ge_one(EngineValueExpr::Count {
+                    zone: ValueZone::Battlefield,
+                    filter: Box::new(obj_filter),
+                    controller_scope: None,
+                }))
+            }
             _ => Err(LoweringError::Unsupported("v2:cond:prior-action-matched")),
         },
         v2::ConditionExpr::ColoredManaSpent { color, min_count } => {

@@ -2916,7 +2916,7 @@ pub(crate) fn lower_anaphora_to_query(
                 Err(LoweringError::Unsupported("v2:subject:unbound-same-target"))
             }
         }
-        v2::AnaphoraRef::TheRest => ctx
+        v2::AnaphoraRef::TheRest | v2::AnaphoraRef::OtherPile => ctx
             .last_unchosen_binding
             .map(ObjectQuery::Bound)
             .ok_or(LoweringError::Unsupported("v2:subject:unbound-the-rest")),
@@ -2950,7 +2950,6 @@ pub(crate) fn lower_anaphora_to_query(
         | v2::AnaphoraRef::EnchantedPermanent => Ok(ObjectQuery::AttachedHost),
         v2::AnaphoraRef::ThatSource => Ok(ObjectQuery::Source),
         v2::AnaphoraRef::OnePile => Err(LoweringError::Unsupported("v2:subject:one-pile")),
-        v2::AnaphoraRef::OtherPile => Err(LoweringError::Unsupported("v2:subject:other-pile")),
         v2::AnaphoraRef::BlightedCreature => {
             Err(LoweringError::Unsupported("v2:subject:blighted-creature"))
         }

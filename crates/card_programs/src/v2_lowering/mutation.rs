@@ -841,7 +841,9 @@ pub(crate) fn lower_player_mutation(
             )));
             Ok(())
         }
-        v2::PlayerMutation::AdditionalCombat { followed_by_main } => {
+        v2::PlayerMutation::AdditionalCombat {
+            followed_by_main: _,
+        } => {
             if !matches!(
                 duration,
                 v2::Duration::Instant
@@ -855,11 +857,6 @@ pub(crate) fn lower_player_mutation(
             if player != v2::PlayerRef::You {
                 return Err(LoweringError::Unsupported(
                     "v2:additional-combat-non-controller",
-                ));
-            }
-            if !*followed_by_main {
-                return Err(LoweringError::Unsupported(
-                    "v2:additional-combat-without-main",
                 ));
             }
             acc.push(Instruction::MutatePlayer(Box::new(
@@ -1594,22 +1591,33 @@ fn lower_object_state_action(
             )
         }
         v2::ObjectStateAction::DoesntUntapNextUntap => {
-            if !matches!(
+            if matches!(
                 duration,
                 v2::Duration::Instant | v2::Duration::UntilYourNextTurn
             ) {
-                return Err(LoweringError::Unsupported(
-                    "v2:skip-next-untap-unexpected-duration",
-                ));
+                let (source, selection) = lower_mutation_source_and_selection(subject, acc, ctx)?;
+                return emit_object_mutation_selected(
+                    source,
+                    selection,
+                    EngineObjectMutation::TapState(TapStateOp::SkipNextUntap),
+                    acc,
+                    ctx,
+                );
             }
-            let (source, selection) = lower_mutation_source_and_selection(subject, acc, ctx)?;
-            emit_object_mutation_selected(
-                source,
-                selection,
-                EngineObjectMutation::TapState(TapStateOp::SkipNextUntap),
-                acc,
-                ctx,
-            )
+            let dur = atoms::lower_duration(duration)?;
+            let query = lower_mutation_subject_query(subject, acc, ctx)?;
+            let change = AbilityChange {
+                doesnt_untap: true,
+                ..Default::default()
+            };
+            acc.push(Instruction::ApplyContinuous(Box::new(
+                ApplyContinuousSpec::resolved_parts(
+                    query,
+                    ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(change)]),
+                    dur,
+                ),
+            )));
+            Ok(())
         }
         v2::ObjectStateAction::MustAttackEachCombat => {
             let dur = duration_default_eot(duration)?;

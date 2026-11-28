@@ -1984,16 +1984,36 @@ fn try_lower_zone_replacement(
         _ => return Ok(None),
     };
 
-    // Extract destination replacement from first effect in `instead` (possibly wrapped in Optional).
-    let (choice, inner_effects): (ZoneReplacementChoice, &[v2::Effect]) = match instead {
+    // Extract destination replacement from first effect in `instead` (possibly wrapped in Optional
+    // or preceded by a pure reveal of the replaced card, e.g. Darksteel Colossus / Progenitus).
+    let (choice, raw_effects): (ZoneReplacementChoice, &[v2::Effect]) = match instead {
         [v2::Effect::Optional { body, .. }] if !body.is_empty() => (
             ZoneReplacementChoice::OptionalAffectedPlayer,
             body.as_slice(),
         ),
         slice => (ZoneReplacementChoice::Mandatory, slice),
     };
+    let inner_effects = if raw_effects.len() >= 2
+        && matches!(
+            &raw_effects[0],
+            v2::Effect::ZoneOp {
+                op: v2::ZoneOpKind::Reveal,
+                subject,
+                to: None,
+                except: None,
+                count: None,
+                ..
+            } if matches!(subject, v2::SubjectRef::SelfObject) || is_replaced_event_anaphora(subject)
+        ) {
+        &raw_effects[1..]
+    } else {
+        raw_effects
+    };
 
     let first = &inner_effects[0];
+    let matches_replaced = |s: &v2::SubjectRef| {
+        matches!(s, v2::SubjectRef::SelfObject) || is_replaced_event_anaphora(s)
+    };
     let (replace_with, exile_counters) = match first {
         v2::Effect::ZoneOp {
             op:
@@ -2003,7 +2023,7 @@ fn try_lower_zone_replacement(
                 },
             subject: dest_subj,
             ..
-        } if is_replaced_event_anaphora(dest_subj) => {
+        } if matches_replaced(dest_subj) => {
             let ctr = match counters {
                 None => None,
                 Some((k, v)) => {
@@ -2029,7 +2049,7 @@ fn try_lower_zone_replacement(
             subject: dest_subj,
             to: Some(dest),
             ..
-        } if is_replaced_event_anaphora(dest_subj) => {
+        } if matches_replaced(dest_subj) => {
             let pub_dest = match dest.zone {
                 v2::ZoneKind::Exile => PublicZoneDestination::Exile,
                 v2::ZoneKind::Hand => PublicZoneDestination::Hand,
@@ -2038,6 +2058,14 @@ fn try_lower_zone_replacement(
                 _ => return Ok(None),
             };
             (pub_dest, None)
+        }
+        v2::Effect::ZoneOp {
+            op: v2::ZoneOpKind::Shuffle,
+            subject: dest_subj,
+            to: Some(dest),
+            ..
+        } if matches_replaced(dest_subj) && dest.zone == v2::ZoneKind::Library => {
+            (PublicZoneDestination::Library, None)
         }
         _ => return Ok(None),
     };

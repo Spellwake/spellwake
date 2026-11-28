@@ -1220,7 +1220,7 @@ fn is_self_combat_ref(subj: &v2::SubjectRef, ctx: &LowerCtx<'_>) -> bool {
         subj,
         v2::SubjectRef::SelfObject | v2::SubjectRef::Anaphora(v2::AnaphoraRef::ThatSource)
     ) || (!ctx.has_object_target
-        && !ctx.in_trigger
+        && (ctx.self_antecedent || !ctx.in_trigger)
         && matches!(
             subj,
             v2::SubjectRef::Anaphora(
@@ -1272,7 +1272,18 @@ fn apply_combat_targets_subject(
                         | v2::AnaphoraRef::EquippedCreature
                         | v2::AnaphoraRef::EnchantedPermanent
                 )
-            ) {
+            ) || (ctx.attached_host_antecedent
+                && !ctx.has_object_target
+                && matches!(
+                    subj,
+                    v2::SubjectRef::Anaphora(
+                        v2::AnaphoraRef::It
+                            | v2::AnaphoraRef::ThatCreature
+                            | v2::AnaphoraRef::ThatPermanent
+                            | v2::AnaphoraRef::ThatObject
+                    )
+                ))
+            {
                 clause.combat = CombatFilter::BlockingAttachedHost;
                 return Ok(());
             }
@@ -1641,8 +1652,9 @@ fn apply_excluded_group_filter(
     ex: &v2::ObjectFilter,
     ctx: &LowerCtx<'_>,
 ) -> LowerResult<()> {
-    // Only fold simple pure exclusions (single forbidden card type, subtype, or color)
-    // so we never approximate complex negated conjunctions.
+    // Only fold simple single-axis exclusions (single forbidden card type, subtype, color,
+    // counter kind, keyword, token, tapped, or self exclusion) so we never approximate
+    // complex negated conjunctions.
     let no_extra = ex.forbidden_types.is_empty()
         && ex.required_supertypes.is_empty()
         && ex.forbidden_supertypes.is_empty()
@@ -1653,24 +1665,94 @@ fn apply_excluded_group_filter(
         && ex.owner.is_none()
         && ex.zones.is_empty()
         && ex.combat.is_none()
-        && ex.tapped.is_none()
-        && ex.token.is_none()
-        && ex.required_keywords.is_empty()
         && ex.forbidden_keywords.is_empty()
-        && ex.stat_bounds.is_empty()
-        && ex.flags.is_empty()
-        && ex.predicates.is_empty();
+        && ex.stat_bounds.is_empty();
     if !no_extra {
         return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
     }
     let has_types = !ex.all_types.is_empty() || !ex.any_types.is_empty();
     let has_subs = !ex.subtypes.is_empty();
     let has_colors = !ex.any_colors.is_empty();
-    let active_axes = u8::from(has_types) + u8::from(has_subs) + u8::from(has_colors);
+    let has_preds = !ex.predicates.is_empty();
+    let has_kws = !ex.required_keywords.is_empty();
+    let has_token = ex.token.is_some();
+    let has_tapped = ex.tapped.is_some();
+    let has_flags = !ex.flags.is_empty();
+    let active_axes = u8::from(has_types)
+        + u8::from(has_subs)
+        + u8::from(has_colors)
+        + u8::from(has_preds)
+        + u8::from(has_kws)
+        + u8::from(has_token)
+        + u8::from(has_tapped)
+        + u8::from(has_flags);
     if active_axes != 1 {
         return Err(LoweringError::Unsupported(
             "v2:filter:pred:multi-axis-exclude",
         ));
+    }
+    if has_preds {
+        if let [v2::FilterPredicate::HasCounterKind(ck)] = ex.predicates.as_slice() {
+            match ck {
+                v2::CounterKind::Any => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::WITHOUT_COUNTERS);
+                    return Ok(());
+                }
+                other => {
+                    let kind = lower_counter_kind(other)?;
+                    if let Some(existing) = clause.forbidden_counter_kind {
+                        if existing != kind {
+                            return Err(LoweringError::Unsupported(
+                                "v2:filter:pred:multiple-forbidden-counters",
+                            ));
+                        }
+                    } else {
+                        clause.forbidden_counter_kind = Some(kind);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
+    }
+    if has_kws {
+        if let [kw] = ex.required_keywords.as_slice() {
+            let ability = lower_keyword_kind_plain(*kw)?;
+            if let Some(existing) = clause.forbidden_keyword {
+                if existing != ability {
+                    return Err(LoweringError::Unsupported(
+                        "v2:filter:pred:multiple-forbidden-keywords",
+                    ));
+                }
+            } else {
+                clause.forbidden_keyword = Some(ability);
+            }
+            return Ok(());
+        }
+        return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
+    }
+    if let Some(tok) = ex.token {
+        let want = !tok;
+        if clause.token.is_some_and(|prev| prev != want) {
+            return Err(LoweringError::Unsupported("v2:filter:pred:token-conflict"));
+        }
+        clause.token = Some(want);
+        return Ok(());
+    }
+    if let Some(tap) = ex.tapped {
+        let want = !tap;
+        if clause.tapped.is_some_and(|prev| prev != want) {
+            return Err(LoweringError::Unsupported("v2:filter:pred:tapped-conflict"));
+        }
+        clause.tapped = Some(want);
+        return Ok(());
+    }
+    if has_flags {
+        if ex.flags == v2::FilterFlags::EXCLUDE_SELF {
+            apply_exclude_self(clause, ctx.in_trigger)?;
+            return Ok(());
+        }
+        return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
     }
     if has_types {
         if ex.all_types.0.count_ones() + ex.any_types.0.count_ones() > 1 && !ex.all_types.is_empty()

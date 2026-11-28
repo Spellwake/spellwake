@@ -4844,7 +4844,8 @@ fn lower_scoped_duration(
                 op:
                     op @ (v2::ZoneOpKind::Destroy { .. }
                     | v2::ZoneOpKind::Exile { counters: None, .. }
-                    | v2::ZoneOpKind::Sacrifice),
+                    | v2::ZoneOpKind::Sacrifice
+                    | v2::ZoneOpKind::Move),
                 subject,
                 from,
                 to,
@@ -5037,6 +5038,40 @@ fn lower_delayed_end_of_combat_zone_op(
                 link_to_source: false,
                 delayed_return: None,
                 link_group: None,
+            }
+        }
+        v2::ZoneOpKind::Move => {
+            if !is_empty_entry_modifiers(modifiers) {
+                return Err(LoweringError::Unsupported("v2:eoc-move-with-modifiers"));
+            }
+            let Some(dest) = to else {
+                return Err(LoweringError::Unsupported("v2:eoc-move-without-dest"));
+            };
+            match dest.zone {
+                v2::ZoneKind::Hand => EngineZoneDest::Hand,
+                v2::ZoneKind::Graveyard => EngineZoneDest::Graveyard {
+                    semantics: GraveyardSemantics::Move,
+                },
+                v2::ZoneKind::Exile => EngineZoneDest::exile(),
+                v2::ZoneKind::Library => {
+                    let pos = match dest.library_position {
+                        Some(v2::LibraryPosition::Top) | None => {
+                            spellwake_engine::toolbox::LibraryOrderPos::Top
+                        }
+                        Some(v2::LibraryPosition::Bottom) => {
+                            spellwake_engine::toolbox::LibraryOrderPos::Bottom
+                        }
+                        _ => {
+                            return Err(LoweringError::Unsupported("v2:eoc-move-library-pos"));
+                        }
+                    };
+                    EngineZoneDest::Library { position: pos }
+                }
+                _ => {
+                    return Err(LoweringError::Unsupported(
+                        "v2:scoped-duration-inner-unsupported",
+                    ));
+                }
             }
         }
         _ => {

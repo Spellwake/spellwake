@@ -2060,3 +2060,401 @@ fn wave5_shares_creature_type_trigger_attached_to_source_and_both_directions_pre
         "Soratami Cloud Chariot both_directions damage prevention should resolve cleanly"
     );
 }
+
+#[test]
+fn wave6_sleight_of_hand_wave_goodbye_and_sun_droplet() {
+    let vocab = test_vocab();
+    let sleight = compile_card(
+        &vocab,
+        "Sleight of Hand",
+        "Sorcery",
+        Some("{U}"),
+        None,
+        "Look at the top two cards of your library. Put one of them into your hand and the other on the bottom of your library.",
+    );
+    let wave_goodbye = compile_card(
+        &vocab,
+        "Wave Goodbye",
+        "Sorcery",
+        Some("{2}{U}{U}"),
+        None,
+        "Return each creature without a +1/+1 counter on it to its owner's hand.",
+    );
+    let sun_droplet = compile_card(
+        &vocab,
+        "Sun Droplet",
+        "Artifact",
+        Some("{2}"),
+        None,
+        "Whenever you're dealt damage, put that many charge counters on this artifact.",
+    );
+    let bear_plain = compile_card(
+        &vocab,
+        "Plain Beast",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+    let bear_counter = compile_card(
+        &vocab,
+        "Countered Beast",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "This creature enters with a +1/+1 counter on it.",
+    );
+    let bolt = compile_card(
+        &vocab,
+        "Lightning Bolt",
+        "Instant",
+        Some("{R}"),
+        None,
+        "Lightning Bolt deals 3 damage to any target.",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: sleight,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryTop,
+                program: bear_plain.clone(),
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::LibraryTop,
+                program: bear_plain.clone(),
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: wave_goodbye,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: bear_plain,
+            },
+            SeedCard {
+                card: CardId(6),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: bear_counter,
+            },
+            SeedCard {
+                card: CardId(7),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: sun_droplet,
+            },
+            SeedCard {
+                card: CardId(8),
+                owner: BOB,
+                destination: ObjectDestination::Hand,
+                program: bolt,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Blue, 3),
+            (ALICE, ManaType::Green, 1),
+            (ALICE, ManaType::Colourless, 3),
+            (BOB, ManaType::Red, 1),
+        ],
+    );
+
+    // 1. Sleight of Hand: look at top 2 (CardId(3), CardId(2)), choose CardId(3) for hand, CardId(2) goes to bottom.
+    let card3_id = object(&game, 3).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    let pending = game
+        .pending_decision()
+        .expect("expected Sleight of Hand object choice");
+    assert!(matches!(pending.frame(), RuleFrame::PromptChoice(_)));
+    game = reply(
+        &game,
+        DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![card3_id])),
+    );
+    assert_eq!(
+        object(&game, 3).zone(),
+        ObjectZone::Hand(ALICE),
+        "chosen card from Sleight of Hand must enter hand"
+    );
+    assert_eq!(
+        object(&game, 2).zone(),
+        ObjectZone::Library(ALICE),
+        "OtherPile card from Sleight of Hand must remain in library (bottom)"
+    );
+
+    // 2. Cast Countered Beast (enters with a +1/+1 counter), then Wave Goodbye:
+    //    Plain Beast (CardId(5), no counters) bounces to Bob's hand; Countered Beast (CardId(6)) stays on battlefield!
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 6).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Green, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(object(&game, 6).zone(), ObjectZone::Battlefield);
+
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 2), (ManaType::Colourless, 2)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 5).zone(),
+        ObjectZone::Hand(BOB),
+        "Wave Goodbye must return creature without a +1/+1 counter to owner's hand"
+    );
+    assert_eq!(
+        object(&game, 6).zone(),
+        ObjectZone::Battlefield,
+        "Wave Goodbye must leave creature with a +1/+1 counter on the battlefield"
+    );
+
+    // 3. Bob bolts Alice for 3 -> Sun Droplet triggers on DealtDamage(Player(You)) and gets 3 charge counters.
+    game = pass(&game);
+    game = advance(
+        &game,
+        BOB,
+        GameCommand::CastWithResources {
+            spell: object(&game, 8).id(),
+            target: Some(TargetRef::Player(ALICE)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    // Resolve Lightning Bolt (triggers Sun Droplet), then resolve Sun Droplet trigger.
+    game = resolve_top(&game);
+    assert_eq!(life(&game, ALICE), 17.into());
+    assert_eq!(
+        game.execution().window().entries().len(),
+        1,
+        "Sun Droplet should trigger when its controller is dealt damage"
+    );
+    game = resolve_top(&game);
+    let charge_count = game
+        .execution()
+        .current_characteristics(object(&game, 7).id())
+        .unwrap()
+        .unwrap()
+        .charge_counters
+        .clone();
+    assert_eq!(
+        charge_count,
+        3.into(),
+        "Sun Droplet should gain 3 charge counters when controller is dealt 3 damage"
+    );
+}
+
+#[test]
+fn wave6_untap_lock_duration_and_colossus_library_replacement_and_cant_attack_unless() {
+    let vocab = test_vocab();
+    let frost_keeper = compile_card(
+        &vocab,
+        "Frost Keeper",
+        "Creature \u{2014} Wizard",
+        Some("{1}{U}"),
+        Some(("2", "2")),
+        "When this creature enters, tap target creature an opponent controls. That creature doesn't untap during its controller's untap step for as long as you control this creature.",
+    );
+    let shuffler = compile_card(
+        &vocab,
+        "Iron Colossus",
+        "Artifact Creature \u{2014} Warrior",
+        Some("{6}"),
+        Some(("6", "6")),
+        "If Iron Colossus would be put into a graveyard from anywhere, reveal Iron Colossus and shuffle it into its owner's library instead.",
+    );
+    let murder = compile_card(
+        &vocab,
+        "Doom Blade Test",
+        "Instant",
+        Some("{1}{B}"),
+        None,
+        "Destroy target creature.",
+    );
+    let castaway = compile_card(
+        &vocab,
+        "Desperate Castaways",
+        "Creature \u{2014} Human Soldier",
+        Some("{1}{B}"),
+        Some(("2", "3")),
+        "This creature can't attack unless you control an artifact.",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Target Bear",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+
+    let mut game = start_game_with_padding(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: frost_keeper,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: bear,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: shuffler,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: BOB,
+                destination: ObjectDestination::Hand,
+                program: murder,
+            },
+            SeedCard {
+                card: CardId(5),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: castaway,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Blue, 1),
+            (ALICE, ManaType::Colourless, 1),
+            (BOB, ManaType::Black, 1),
+            (BOB, ManaType::Colourless, 1),
+        ],
+        0,
+    );
+
+    // 1. While Alice controls Iron Colossus (an artifact), Desperate Castaways does NOT have CannotAttack.
+    let castaway_chars_with_art = game
+        .execution()
+        .current_characteristics(object(&game, 5).id())
+        .unwrap()
+        .unwrap();
+    assert!(
+        !castaway_chars_with_art
+            .blocking_restrictions
+            .contains(&spellwake_engine::characteristics::BlockingRestriction::CannotAttack),
+        "Desperate Castaways should be able to attack while controller controls an artifact"
+    );
+
+    // 2. Cast Frost Keeper -> ETB targets Bob's Bear -> taps it AND sets doesnt_untap_during_untap_step!
+    let bear_id = object(&game, 2).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Blue, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    if let Some(pending) = game.pending_decision() {
+        assert!(matches!(pending.frame(), RuleFrame::TriggerTarget(_)));
+        game = reply(
+            &game,
+            DecisionReply::TriggerTarget(TargetRef::Object(bear_id)),
+        );
+    }
+    game = resolve_top(&game);
+    assert_eq!(object(&game, 2).tapped(), Some(true));
+    let bear_chars = game
+        .execution()
+        .current_characteristics(object(&game, 2).id())
+        .unwrap()
+        .unwrap();
+    assert!(
+        bear_chars.doesnt_untap_during_untap_step,
+        "Frost Keeper must apply doesnt_untap_during_untap_step while controller controls it"
+    );
+
+    // 3. Bob destroys Iron Colossus: instead of graveyard, Iron Colossus is shuffled into Alice's library!
+    //    AND now Alice controls no artifact -> Desperate Castaways gains CannotAttack!
+    game = pass(&game);
+    game = advance(
+        &game,
+        BOB,
+        GameCommand::CastWithResources {
+            spell: object(&game, 4).id(),
+            target: Some(TargetRef::Object(object(&game, 3).id())),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 1), (ManaType::Colourless, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(
+        object(&game, 3).zone(),
+        ObjectZone::Library(ALICE),
+        "Iron Colossus replacement must shuffle it into owner's library instead of graveyard"
+    );
+    let castaway_chars_no_art = game
+        .execution()
+        .current_characteristics(object(&game, 5).id())
+        .unwrap()
+        .unwrap();
+    assert!(
+        castaway_chars_no_art
+            .blocking_restrictions
+            .contains(&spellwake_engine::characteristics::BlockingRestriction::CannotAttack),
+        "Desperate Castaways must gain CannotAttack once Alice no longer controls an artifact"
+    );
+}

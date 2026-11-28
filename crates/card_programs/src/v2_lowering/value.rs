@@ -486,8 +486,16 @@ fn lower_prior_action_count(
     ctx: &LowerCtx<'_>,
 ) -> LowerResult<EngineValueExpr> {
     match kind {
-        v2::PriorActionKind::ThatMany
-        | v2::PriorActionKind::ExiledThisWay
+        v2::PriorActionKind::ThatMany => {
+            if ctx.last_moved_binding.is_none()
+                && let Some(ev) = ctx.trigger_damage_event
+            {
+                Ok(EngineValueExpr::EventValue(ev))
+            } else {
+                Ok(EngineValueExpr::EventValue(EventValueKind::LastActionCount))
+            }
+        }
+        v2::PriorActionKind::ExiledThisWay
         | v2::PriorActionKind::SacrificedThisWay
         | v2::PriorActionKind::DiscardedThisWay
         | v2::PriorActionKind::RevealedThisWay

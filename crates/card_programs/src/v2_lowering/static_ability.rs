@@ -60,6 +60,20 @@ use crate::v2_lowering::{
     value::{lower_pt_delta, lower_value_const, lower_value_expr},
 };
 
+fn compound_subject_has_ambiguous_trailing_controller(parts: &[v2::SubjectRef]) -> bool {
+    let mut seen_unscoped_group = false;
+    for part in parts {
+        if let v2::SubjectRef::Group(f) | v2::SubjectRef::All(f) | v2::SubjectRef::Each(f) = part {
+            if f.controller.is_none() && f.owner.is_none() {
+                seen_unscoped_group = true;
+            } else if seen_unscoped_group {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Lower a `v2::StaticAbility` directly onto a permanent or spell [`Program`].
 ///
 /// # Errors
@@ -70,6 +84,162 @@ pub(crate) fn lower_static_into_program(
     program: &mut Program,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    // Fan out `SubjectRef::Compound(parts)` onto one static ability per conjunct whenever no
+    // earlier unscoped group could be missing a shared trailing controller/owner modifier.
+    match ability {
+        v2::StaticAbility::ContinuousModifyPT {
+            subject: v2::SubjectRef::Compound(parts),
+            power,
+            toughness,
+            grant_keywords,
+            scale,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::ContinuousModifyPT {
+                        subject: part.clone(),
+                        power: *power,
+                        toughness: *toughness,
+                        grant_keywords: grant_keywords.clone(),
+                        scale: scale.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::GrantKeywords {
+            subject: v2::SubjectRef::Compound(parts),
+            keywords,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::GrantKeywords {
+                        subject: part.clone(),
+                        keywords: keywords.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::GrantAbility {
+            subject: v2::SubjectRef::Compound(parts),
+            ability: face,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::GrantAbility {
+                        subject: part.clone(),
+                        ability: face.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::RuleRestriction {
+            subject: Some(v2::SubjectRef::Compound(parts)),
+            rule,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::RuleRestriction {
+                        subject: Some(part.clone()),
+                        rule: rule.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::SubjectRule {
+            subject: v2::SubjectRef::Compound(parts),
+            rule,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::SubjectRule {
+                        subject: part.clone(),
+                        rule: rule.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::RemoveAllAbilities {
+            subject: v2::SubjectRef::Compound(parts),
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::RemoveAllAbilities {
+                        subject: part.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::SetBasePT {
+            subject: v2::SubjectRef::Compound(parts),
+            power,
+            toughness,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::SetBasePT {
+                        subject: part.clone(),
+                        power: *power,
+                        toughness: *toughness,
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::EntersWithCountersStatic {
+            subject: v2::SubjectRef::Compound(parts),
+            kind,
+            count,
+            additional,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::EntersWithCountersStatic {
+                        subject: part.clone(),
+                        kind: kind.clone(),
+                        count: count.clone(),
+                        additional: *additional,
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+
     match ability {
         v2::StaticAbility::ContinuousModifyPT {
             subject,
@@ -1970,15 +2140,34 @@ fn lower_rule_restriction_into_program(
         v2::RuleRestrictionKind::CantBeCast => {
             Err(LoweringError::Unsupported("v2:static-rule-cant-be-cast"))
         }
-        v2::RuleRestrictionKind::CantAttackUnless(_) => Err(LoweringError::Unsupported(
-            "v2:static-rule-cant-attack-unless",
-        )),
-        v2::RuleRestrictionKind::CantBlockUnless(_) => Err(LoweringError::Unsupported(
-            "v2:static-rule-cant-block-unless",
-        )),
-        v2::RuleRestrictionKind::CantAttackOrBlockUnless(_) => Err(LoweringError::Unsupported(
-            "v2:static-rule-cant-attack-or-block-unless",
-        )),
+        v2::RuleRestrictionKind::CantAttackUnless(unless_cond)
+        | v2::RuleRestrictionKind::CantBlockUnless(unless_cond)
+        | v2::RuleRestrictionKind::CantAttackOrBlockUnless(unless_cond) => {
+            let restriction = match rule {
+                v2::RuleRestrictionKind::CantAttackUnless(_) => BlockingRestriction::CannotAttack,
+                v2::RuleRestrictionKind::CantBlockUnless(_) => BlockingRestriction::CannotBlock,
+                v2::RuleRestrictionKind::CantAttackOrBlockUnless(_) => {
+                    BlockingRestriction::CannotAttackOrBlock
+                }
+                _ => unreachable!(),
+            };
+            let sel = lower_opt_subject_to_permanent_selector(subject, ctx)?;
+            let negated = v2::ConditionExpr::Not(Box::new(unless_cond.as_ref().clone()));
+            let combined = match condition {
+                Some(outer) => v2::ConditionExpr::And(Box::new(outer.clone()), Box::new(negated)),
+                None => negated,
+            };
+            let cond = lower_static_source_condition(&combined, ctx)?;
+            push_static_ability(
+                program,
+                StaticContinuousAbility::Battlefield {
+                    id: ctx.alloc_static_id(),
+                    selector: sel,
+                    parts: StaticParts(vec![StaticPart::BlockingRestriction(restriction)]),
+                },
+                Some(cond),
+            )
+        }
         v2::RuleRestrictionKind::CantBeEnchantedBy(_) => Err(LoweringError::Unsupported(
             "v2:static-rule-cant-be-enchanted-by",
         )),

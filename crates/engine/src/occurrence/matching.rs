@@ -2994,10 +2994,21 @@ pub(super) fn match_trigger_event(
                         ObjectFilter::Either(_, _) => false,
                     };
                     if subtype_ok {
+                        let related = match damage.source.id() {
+                            crate::damage::DamageSourceId::Object(dealer) => {
+                                TriggerRelated::CombatDamageToPlayer {
+                                    source: dealer,
+                                    amount: damage.amount.clone(),
+                                    player: controller,
+                                    attempt: damage.attempt,
+                                }
+                            }
+                            other => TriggerRelated::DamageSource(other),
+                        };
                         members.push(TriggerCauseMember {
                             occurrence: occurrence.id,
                             related_player: Some(controller),
-                            related: TriggerRelated::DamageSource(damage.source.id()),
+                            related,
                         });
                     }
                 }
@@ -3194,10 +3205,21 @@ pub(super) fn match_trigger_event(
                 },
                 DamageTriggerRecipient::ControllerOrPlaneswalker => match damage.target {
                     DamageRecipient::Player(player) if player == controller => {
+                        let related = match damage.source.id() {
+                            crate::damage::DamageSourceId::Object(dealer) => {
+                                TriggerRelated::CombatDamageToPlayer {
+                                    source: dealer,
+                                    amount: damage.amount.clone(),
+                                    player: controller,
+                                    attempt: damage.attempt,
+                                }
+                            }
+                            other => TriggerRelated::DamageSource(other),
+                        };
                         members.push(TriggerCauseMember {
                             occurrence: occurrence.id,
                             related_player: Some(controller),
-                            related: TriggerRelated::DamageSource(damage.source.id()),
+                            related,
                         });
                     }
                     DamageRecipient::Planeswalker(id)
