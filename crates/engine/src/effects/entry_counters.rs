@@ -838,6 +838,16 @@ impl EffectWindow {
                         false
                     }
                     EntryTap::Always => true,
+                    EntryTap::AlwaysChooseColor => {
+                        let chosen = self
+                            .entry_color_choices
+                            .get(&object)
+                            .ok_or(EffectError::EntryColorChoiceRequired)?;
+                        if *chosen == ManaType::Colourless {
+                            return Err(EffectError::IllegalEntryColor);
+                        }
+                        true
+                    }
                     EntryTap::AlwaysChooseColorExcept(excluded) => {
                         let chosen = self
                             .entry_color_choices

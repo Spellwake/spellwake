@@ -69,9 +69,9 @@ pub(crate) fn lower_token_creation(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
     match spec {
-        v2::TokenSpec::CopyOf { source, exceptions } => {
-            lower_copy_object(controller, source, count, modifiers, exceptions, acc, ctx)
-        }
+        v2::TokenSpec::CopyOf { source, exceptions } => lower_copy_object_inner(
+            controller, source, count, modifiers, exceptions, false, acc, ctx,
+        ),
         v2::TokenSpec::Predefined(kind) => {
             lower_predefined_token_creation(controller, count, *kind, modifiers, acc, ctx)
         }
@@ -111,8 +111,24 @@ pub(crate) fn lower_copy_object(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
-    if let Some(stack_op) =
-        try_lower_stack_copy(actor, subject, count, modifiers, exceptions, acc, ctx)?
+    lower_copy_object_inner(actor, subject, count, modifiers, exceptions, true, acc, ctx)
+}
+
+// Parameters mirror `lower_copy_object` plus the explicit stack-copy admission flag.
+#[allow(clippy::too_many_arguments)]
+fn lower_copy_object_inner(
+    actor: v2::PlayerRef,
+    subject: &v2::SubjectRef,
+    count: &v2::ValueExpr,
+    modifiers: &v2::EntryModifiers,
+    exceptions: &[v2::CopyException],
+    allow_stack_copy: bool,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    if allow_stack_copy
+        && let Some(stack_op) =
+            try_lower_stack_copy(actor, subject, count, modifiers, exceptions, acc, ctx)?
     {
         acc.push(Instruction::StackOp(Box::new(stack_op)));
         return Ok(());
@@ -213,7 +229,7 @@ pub(crate) fn lower_copy_exceptions(
                         ));
                     } else {
                         out.extra_keywords
-                            .insert(atoms::lower_keyword_ability(kw, ctx)?);
+                            .extend(atoms::lower_keyword_abilities(kw, ctx)?);
                     }
                 }
             }
@@ -288,9 +304,13 @@ pub(crate) fn lower_copy_exceptions(
                 }
             }
             v2::CopyException::HasThisAbility => {
-                return Err(LoweringError::Unsupported(
-                    "v2:copy-exception-has-this-ability",
-                ));
+                if ctx.has_only_single_ability {
+                    out.keep_abilities = true;
+                } else {
+                    return Err(LoweringError::Unsupported(
+                        "v2:copy-exception-has-this-ability",
+                    ));
+                }
             }
             v2::CopyException::EntersWithCounters { .. } => {
                 return Err(LoweringError::Unsupported(
@@ -433,6 +453,23 @@ fn lower_custom_token_creation(
                     (Some(PowerToughness::zero().into()), Some(size))
                 }
             }
+            (None, None)
+                if abilities.iter().any(|face| {
+                    face.statics.iter().any(|st| {
+                        matches!(
+                            st,
+                            v2::StaticAbility::DynamicBasePT {
+                                power: Some(_),
+                                toughness: Some(_),
+                            }
+                        )
+                    })
+                }) =>
+            {
+                // CR 208.2a: `*/*` creature tokens carry a characteristic-defining ability
+                // (`DynamicBasePT`) that sets both power and toughness in Layer 7a.
+                (Some(PowerToughness::zero().into()), None)
+            }
             _ => {
                 return Err(LoweringError::Unsupported("v2:token-creature-missing-pt"));
             }
@@ -505,8 +542,8 @@ fn lower_custom_token_creation(
 
     for kw in keywords {
         if let Err(err) = kw_lowering::apply_face_keyword(kw, &mut program, ctx) {
-            if let Ok(ka) = atoms::lower_keyword_ability(kw, ctx) {
-                program.printed_keywords.insert(ka);
+            if let Ok(kas) = atoms::lower_keyword_abilities(kw, ctx) {
+                program.printed_keywords.extend(kas);
             } else {
                 return Err(err);
             }
@@ -514,9 +551,14 @@ fn lower_custom_token_creation(
     }
 
     for face in abilities {
-        let granted = card::lower_granted_face(face, ctx)?;
+        let (granted, restricted) = card::lower_granted_face_with_restrictions(face, ctx)?;
         program.printed_keywords.extend(granted.keywords);
         program.activated.extend(granted.activated);
+        for (ab, restriction) in restricted {
+            let id = ab.id;
+            program.activated.push(ab);
+            program.activation_restrictions.insert(id, restriction);
+        }
         program.triggered.extend(granted.triggered);
         program.mana.extend(granted.mana);
         for stat in granted.statics {
@@ -678,6 +720,12 @@ fn try_lower_stack_copy(
     let is_stack_subject = match subject {
         v2::SubjectRef::TargetObject { filter, .. } => is_stack_only_filter(filter),
         v2::SubjectRef::Anaphora(v2::AnaphoraRef::ThatSpell) => true,
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It)
+            if ctx.in_trigger && ctx.trigger_is_spell_cast =>
+        {
+            true
+        }
+        v2::SubjectRef::SelfObject if !ctx.in_trigger && ctx.is_spell_body => true,
         _ => false,
     };
     if !is_stack_subject {
@@ -745,6 +793,18 @@ fn try_lower_stack_copy(
                 true,
             )))
         }
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It)
+            if ctx.in_trigger && ctx.trigger_is_spell_cast =>
+        {
+            Ok(Some(StackOpSpec::copy_stack(
+                StackCopyTarget::TriggeringSpell,
+                amount,
+                true,
+            )))
+        }
+        v2::SubjectRef::SelfObject if !ctx.in_trigger && ctx.is_spell_body => Ok(Some(
+            StackOpSpec::copy_stack(StackCopyTarget::ResolvingSpell, amount, true),
+        )),
         _ => Ok(None),
     }
 }
@@ -785,11 +845,12 @@ fn apply_copy_exceptions_to_token_copy(
                             CombatTriggerKeyword::Decayed,
                         ));
                     } else {
-                        let engine_kw = atoms::lower_keyword_ability(kw, ctx)?;
-                        if engine_kw == KeywordAbility::Haste {
-                            spec.haste = true;
+                        for engine_kw in atoms::lower_keyword_abilities(kw, ctx)? {
+                            if engine_kw == KeywordAbility::Haste {
+                                spec.haste = true;
+                            }
+                            spec.extra_keywords.insert(engine_kw);
                         }
-                        spec.extra_keywords.insert(engine_kw);
                     }
                 }
             }

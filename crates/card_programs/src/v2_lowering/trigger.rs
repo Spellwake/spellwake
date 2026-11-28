@@ -115,19 +115,50 @@ pub(crate) fn lower_triggered_ability(
     };
 
     let prev_has_participant = ctx.trigger_has_participant;
+    let prev_is_spell_cast = ctx.trigger_is_spell_cast;
     let prev_damage_event = ctx.trigger_damage_event;
+    let prev_self_antecedent = ctx.self_antecedent;
+    let prev_attached_host_antecedent = ctx.attached_host_antecedent;
     ctx.trigger_has_participant = !specs.is_empty()
         && specs
             .iter()
             .all(|s| trigger_spec_has_participant(s, grouping));
+    ctx.trigger_is_spell_cast = !effective_spec.events.is_empty()
+        && effective_spec
+            .events
+            .iter()
+            .all(|ev| matches!(ev, v2::TriggerEvent::SpellCast { .. }));
     ctx.trigger_damage_event = infer_trigger_damage_event(&specs);
+    if !effective_spec.events.is_empty()
+        && effective_spec
+            .events
+            .iter()
+            .all(trigger_event_establishes_self_antecedent)
+    {
+        ctx.self_antecedent = true;
+    }
+    if !effective_spec.events.is_empty()
+        && effective_spec
+            .events
+            .iter()
+            .all(trigger_event_establishes_attached_host_antecedent)
+    {
+        ctx.attached_host_antecedent = true;
+    }
     let exec_body_res = lower_triggered_body(&exec_effects, remaining_cond, ctx);
     ctx.trigger_has_participant = prev_has_participant;
+    ctx.trigger_is_spell_cast = prev_is_spell_cast;
     ctx.trigger_damage_event = prev_damage_event;
+    ctx.self_antecedent = prev_self_antecedent;
+    ctx.attached_host_antecedent = prev_attached_host_antecedent;
     let exec_body = exec_body_res?;
 
+    let self_in_graveyard = effects_reference_self_in_graveyard(&exec_effects);
     let mut out = Vec::with_capacity(specs.len());
-    for cond_spec in specs {
+    for mut cond_spec in specs {
+        if self_in_graveyard && cond_spec.zone == TriggerZone::Battlefield {
+            cond_spec.zone = TriggerZone::Graveyard;
+        }
         out.push(TriggeredAbility {
             id: ctx.alloc_triggered_id(),
             condition: cond_spec,
@@ -136,6 +167,31 @@ pub(crate) fn lower_triggered_ability(
         });
     }
     Ok(out)
+}
+
+fn effects_reference_self_in_graveyard(effects: &[v2::Effect]) -> bool {
+    effects.iter().any(|eff| match eff {
+        v2::Effect::ZoneOp { subject, from, .. } => {
+            matches!(subject, v2::SubjectRef::SelfObject)
+                && from.iter().any(|z| z.zone == v2::ZoneKind::Graveyard)
+        }
+        v2::Effect::Optional { body, .. }
+        | v2::Effect::IfPrevious { body, .. }
+        | v2::Effect::ReflexiveTrigger(body)
+        | v2::Effect::Unless { body, .. }
+        | v2::Effect::ScopedDuration { body, .. }
+        | v2::Effect::BindVariable { body, .. }
+        | v2::Effect::ForEach { body, .. } => effects_reference_self_in_graveyard(body),
+        v2::Effect::BranchCondition {
+            then_body,
+            else_body,
+            ..
+        } => {
+            effects_reference_self_in_graveyard(then_body)
+                || effects_reference_self_in_graveyard(else_body)
+        }
+        _ => false,
+    })
 }
 
 /// Lower a triggered ability effect body (including modal triggered abilities into native
@@ -360,6 +416,55 @@ pub(crate) fn lower_trigger_events(
         ctx.trigger_damage_event = Some(ev);
     }
     Ok((merged, grouping, world_res_cond))
+}
+
+fn trigger_event_establishes_self_antecedent(ev: &v2::TriggerEvent) -> bool {
+    match ev {
+        v2::TriggerEvent::Attacks {
+            subject: Some(subj),
+            ..
+        }
+        | v2::TriggerEvent::DealsDamage {
+            source: Some(subj), ..
+        } => matches!(subj, v2::SubjectRef::SelfObject),
+        v2::TriggerEvent::Blocks { subject, .. }
+        | v2::TriggerEvent::BecomesBlocked { subject, .. }
+        | v2::TriggerEvent::DealtDamage { subject, .. }
+        | v2::TriggerEvent::CounterPlaced { subject, .. }
+        | v2::TriggerEvent::CounterEvent { subject, .. }
+        | v2::TriggerEvent::LastCounterRemoved { subject, .. }
+        | v2::TriggerEvent::BecomesTarget { subject, .. } => {
+            matches!(subject, v2::SubjectRef::SelfObject)
+        }
+        _ => false,
+    }
+}
+
+fn trigger_event_establishes_attached_host_antecedent(ev: &v2::TriggerEvent) -> bool {
+    let is_host = |s: &v2::SubjectRef| {
+        matches!(
+            s,
+            v2::SubjectRef::Anaphora(
+                v2::AnaphoraRef::EquippedCreature
+                    | v2::AnaphoraRef::EnchantedCreature
+                    | v2::AnaphoraRef::EnchantedPermanent
+            )
+        )
+    };
+    match ev {
+        v2::TriggerEvent::Attacks {
+            subject: Some(subj),
+            ..
+        }
+        | v2::TriggerEvent::DealsDamage {
+            source: Some(subj), ..
+        } => is_host(subj),
+        v2::TriggerEvent::Blocks { subject, .. }
+        | v2::TriggerEvent::BecomesBlocked { subject, .. }
+        | v2::TriggerEvent::DealtDamage { subject, .. }
+        | v2::TriggerEvent::BecomesTarget { subject, .. } => is_host(subject),
+        _ => false,
+    }
 }
 
 fn is_player_damage_recipient(recipient: DamageTriggerRecipient) -> bool {
@@ -769,6 +874,29 @@ fn lower_single_trigger_event(
             subject,
             combat_only,
         } => {
+            if let v2::SubjectRef::Player(player) = subject {
+                let recipient = match player {
+                    v2::PlayerRef::You => DamageTriggerRecipient::Controller,
+                    v2::PlayerRef::AnyOpponent | v2::PlayerRef::EachOpponent => {
+                        DamageTriggerRecipient::Opponent
+                    }
+                    v2::PlayerRef::AnyPlayer | v2::PlayerRef::EachPlayer => {
+                        DamageTriggerRecipient::AnyPlayer
+                    }
+                    v2::PlayerRef::EnchantedPlayer => DamageTriggerRecipient::EnchantedPlayer,
+                    _ => {
+                        return Err(LoweringError::Unsupported("v2:trigger-subject-kind"));
+                    }
+                };
+                return Ok((
+                    vec![EngineTriggerSpec::deals_damage(
+                        ObjectFilter::any(),
+                        recipient,
+                        *combat_only,
+                    )],
+                    TriggerGrouping::EachOccurrence,
+                ));
+            }
             if *combat_only {
                 if matches!(subject, v2::SubjectRef::SelfObject) {
                     return Ok((

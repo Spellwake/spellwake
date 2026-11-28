@@ -965,6 +965,44 @@ fn protection_from_color(color: Color) -> KeywordAbility {
     }
 }
 
+/// Lower a [`v2::KeywordSpec`] into one or more static engine [`KeywordAbility`] values.
+///
+/// Multi-color protection (e.g. `"Protection from red and from blue"`, CR 702.16a) expands into
+/// one `ProtectionFrom*` keyword per color bit.
+pub(crate) fn lower_keyword_abilities(
+    spec: &v2::KeywordSpec,
+    ctx: &LowerCtx<'_>,
+) -> LowerResult<Vec<KeywordAbility>> {
+    if spec.kind == v2::KeywordKind::Protection
+        && let Some(param) = &spec.param
+    {
+        match param {
+            v2::KeywordParam::Color(mask) if !mask.is_empty() => {
+                let colors = lower_color_set(*mask);
+                if !colors.is_empty() {
+                    return Ok(colors.into_iter().map(protection_from_color).collect());
+                }
+            }
+            v2::KeywordParam::Filter(f)
+                if has_only_basic_quality_fields(f)
+                    && !f.any_colors.is_empty()
+                    && f.all_types.is_empty()
+                    && f.any_types.is_empty()
+                    && f.subtypes.is_empty()
+                    && f.forbidden_subtypes.is_empty()
+                    && f.color_arity.is_none() =>
+            {
+                let colors = lower_color_set(f.any_colors);
+                if !colors.is_empty() {
+                    return Ok(colors.into_iter().map(protection_from_color).collect());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(vec![lower_keyword_ability(spec, ctx)?])
+}
+
 /// Lower a [`v2::KeywordSpec`] into a static engine [`KeywordAbility`].
 pub(crate) fn lower_keyword_ability(
     spec: &v2::KeywordSpec,
@@ -1651,14 +1689,14 @@ pub(crate) fn lower_world_resolving_player(
         v2::PlayerRef::ThatPlayer => {
             if ctx.in_loop_player {
                 Ok(ResolvingPlayer::LoopPlayer)
+            } else if let Some(rp) = ctx.last_player_target {
+                Ok(rp)
             } else if ctx.in_trigger {
                 Ok(if ctx.trigger_has_participant {
                     ResolvingPlayer::UniqueRelatedPlayer
                 } else {
                     ResolvingPlayer::TriggerSubjectController
                 })
-            } else if let Some(rp) = ctx.last_player_target {
-                Ok(rp)
             } else {
                 Ok(ResolvingPlayer::TargetPlayer)
             }
@@ -2338,7 +2376,7 @@ fn subject_is_targeting(subj: &v2::SubjectRef) -> bool {
     }
 }
 
-fn target_is_object_like(target: BodyTarget) -> bool {
+pub(crate) fn target_is_object_like(target: BodyTarget) -> bool {
     matches!(
         target,
         BodyTarget::Object { .. }
@@ -2605,6 +2643,49 @@ fn lower_compound_target(
             ));
         }
 
+        // Merge `target creature or planeswalker` + `target player` into `SINGLE_ANY_TARGET`.
+        let cpw_mask = ast::CardTypeMask::CREATURE.union(ast::CardTypeMask::PLANESWALKER);
+        let is_cpw_target = |s: &v2::SubjectRef| -> Option<v2::TargetCount> {
+            match s {
+                v2::SubjectRef::TargetObject {
+                    filter,
+                    count,
+                    another: false,
+                } if filter.all_types.is_empty()
+                    && filter.any_types == cpw_mask
+                    && filter.forbidden_types.is_empty()
+                    && filter.required_supertypes.is_empty()
+                    && filter.forbidden_supertypes.is_empty()
+                    && filter.subtypes.is_empty()
+                    && filter.forbidden_subtypes.is_empty()
+                    && filter.any_colors.is_empty()
+                    && filter.forbidden_colors.is_empty()
+                    && filter.color_arity.is_none()
+                    && filter.controller.is_none()
+                    && filter.owner.is_none()
+                    && filter.zones.is_empty()
+                    && filter.combat.is_none()
+                    && filter.tapped.is_none()
+                    && filter.token.is_none()
+                    && filter.required_keywords.is_empty()
+                    && filter.forbidden_keywords.is_empty()
+                    && filter.stat_bounds.is_empty()
+                    && filter.flags.is_empty()
+                    && filter.predicates.is_empty() =>
+                {
+                    Some(*count)
+                }
+                _ => None,
+            }
+        };
+        if let Some((c1, c2)) = is_cpw_target(a)
+            .zip(player_single_target_count(b, false))
+            .or_else(|| player_single_target_count(a, false).zip(is_cpw_target(b)))
+            && c1 == c2
+        {
+            return Ok((BodyTarget::SINGLE_ANY_TARGET, c1));
+        }
+
         // Merge two single-clause object targets in the same zone into `ObjectFilter::Either`.
         if let (
             Ok((
@@ -2718,7 +2799,27 @@ pub(crate) fn lower_subject_to_query(
             if parts.is_empty() {
                 return Err(LoweringError::Unsupported("v2:subject:empty-compound"));
             }
-            if parts.iter().any(subject_is_targeting) {
+            let targeting_count = parts.iter().filter(|p| subject_is_targeting(p)).count();
+            if targeting_count == parts.len() {
+                let (target, count) = lower_compound_target(parts, ctx)?;
+                acc.register_target(target, count)?;
+                ctx.has_object_target = acc.target_set && target_is_object_like(acc.target);
+                return Ok(ObjectQuery::Targets);
+            }
+            if targeting_count == 1 {
+                // Lower the single targeting part first so subsequent non-targeting parts
+                // (e.g. `all other creatures with the same name as that creature`,
+                // `all Auras attached to it`, or `this creature`) see `acc.target_set`.
+                let mut queries = Vec::with_capacity(parts.len());
+                for part in parts.iter().filter(|p| subject_is_targeting(p)) {
+                    queries.push(lower_subject_to_query(part, acc, ctx)?);
+                }
+                for part in parts.iter().filter(|p| !subject_is_targeting(p)) {
+                    queries.push(lower_subject_to_query(part, acc, ctx)?);
+                }
+                return Ok(ObjectQuery::Union(queries));
+            }
+            if targeting_count > 1 {
                 let (target, count) = lower_compound_target(parts, ctx)?;
                 acc.register_target(target, count)?;
                 ctx.has_object_target = acc.target_set && target_is_object_like(acc.target);
@@ -2744,7 +2845,7 @@ pub(crate) fn lower_subject_to_query(
     }
 }
 
-fn lower_anaphora_to_query(
+pub(crate) fn lower_anaphora_to_query(
     anaph: v2::AnaphoraRef,
     acc: &BodyAcc,
     ctx: &LowerCtx<'_>,
@@ -2771,6 +2872,14 @@ fn lower_anaphora_to_query(
             }
             if has_obj_target {
                 return Ok(ObjectQuery::Targets);
+            }
+            if let Some((tag_key, tag_zone)) = &ctx.delayed_tag_key {
+                return Ok(ObjectQuery::Tagged {
+                    key: tag_key.clone(),
+                    value: Some(spellwake_engine::toolbox::TagValue::Unit),
+                    zone: tag_zone.clone(),
+                    filter: None,
+                });
             }
             if ctx.in_trigger {
                 return Ok(ObjectQuery::TriggerSubject);
@@ -2811,8 +2920,21 @@ fn lower_anaphora_to_query(
                         }
                         return Ok(ObjectQuery::LastMoved);
                     }
+                    Instruction::SearchLibrary { .. } => {
+                        return Ok(ObjectQuery::LastMoved);
+                    }
+                    Instruction::ApplyContinuous(spec) => {
+                        if let Some(sel) = &spec.selector
+                            && !matches!(sel, ObjectQuery::Empty)
+                        {
+                            return Ok(sel.clone());
+                        }
+                    }
                     _ => {}
                 }
+            }
+            if ctx.self_antecedent && matches!(anaph, v2::AnaphoraRef::It) {
+                return Ok(ObjectQuery::Source);
             }
             Err(LoweringError::Unsupported("v2:subject:unbound-anaphora"))
         }
@@ -2821,11 +2943,18 @@ fn lower_anaphora_to_query(
                 Ok(ObjectQuery::Targets)
             } else if let Some(binding) = ctx.last_moved_binding {
                 Ok(ObjectQuery::Bound(binding))
+            } else if let Some((tag_key, tag_zone)) = &ctx.delayed_tag_key {
+                Ok(ObjectQuery::Tagged {
+                    key: tag_key.clone(),
+                    value: Some(spellwake_engine::toolbox::TagValue::Unit),
+                    zone: tag_zone.clone(),
+                    filter: None,
+                })
             } else {
                 Err(LoweringError::Unsupported("v2:subject:unbound-same-target"))
             }
         }
-        v2::AnaphoraRef::TheRest => ctx
+        v2::AnaphoraRef::TheRest | v2::AnaphoraRef::OtherPile => ctx
             .last_unchosen_binding
             .map(ObjectQuery::Bound)
             .ok_or(LoweringError::Unsupported("v2:subject:unbound-the-rest")),
@@ -2859,7 +2988,6 @@ fn lower_anaphora_to_query(
         | v2::AnaphoraRef::EnchantedPermanent => Ok(ObjectQuery::AttachedHost),
         v2::AnaphoraRef::ThatSource => Ok(ObjectQuery::Source),
         v2::AnaphoraRef::OnePile => Err(LoweringError::Unsupported("v2:subject:one-pile")),
-        v2::AnaphoraRef::OtherPile => Err(LoweringError::Unsupported("v2:subject:other-pile")),
         v2::AnaphoraRef::BlightedCreature => {
             Err(LoweringError::Unsupported("v2:subject:blighted-creature"))
         }
@@ -2901,7 +3029,11 @@ fn lower_group_filter_to_query(
 
     if filter.zones.is_empty()
         && let Some(prior_kind) = filter.predicates.iter().find_map(|p| match p {
-            v2::FilterPredicate::AffectedByPriorAction(k) => Some(*k),
+            v2::FilterPredicate::AffectedByPriorAction(k)
+                if *k != v2::PriorActionKind::DealtDamageThisWay =>
+            {
+                Some(*k)
+            }
             _ => None,
         })
     {

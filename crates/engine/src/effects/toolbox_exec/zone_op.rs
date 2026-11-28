@@ -594,6 +594,120 @@ impl EffectWindow {
                     }
                     to_move.push((id, ObjectDestination::Graveyard));
                 }
+                let mut replacement_batch = None;
+                if !to_move.is_empty() {
+                    let action = match semantics {
+                        GraveyardSemantics::Move => ZoneActionKind::EffectRevealedToGraveyard,
+                        GraveyardSemantics::Destroy { .. } => ZoneActionKind::EffectDestroy,
+                        GraveyardSemantics::Sacrifice => ZoneActionKind::EffectSacrifice,
+                        GraveyardSemantics::Discard => ZoneActionKind::EffectDiscard,
+                        GraveyardSemantics::Mill => ZoneActionKind::EffectMill,
+                    };
+                    let mut intents = Vec::with_capacity(to_move.len());
+                    for &(obj_id, _) in &to_move {
+                        if let Some(obj) = self.window.cards().get(obj_id) {
+                            let reason = match semantics {
+                                GraveyardSemantics::Move => {
+                                    ZoneReason::PutLibraryCohortIntoGraveyard
+                                }
+                                GraveyardSemantics::Destroy { .. } => ZoneReason::Destroyed,
+                                GraveyardSemantics::Sacrifice => ZoneReason::Sacrifice {
+                                    player: obj.controller().unwrap_or_else(|| obj.owner()),
+                                },
+                                GraveyardSemantics::Discard => ZoneReason::Discard {
+                                    player: obj.owner(),
+                                },
+                                GraveyardSemantics::Mill => ZoneReason::Mill {
+                                    player: obj.owner(),
+                                },
+                            };
+                            intents.push(zone_replacement::ZoneMoveIntent {
+                                before: obj_id,
+                                reason,
+                            });
+                        }
+                    }
+                    if !intents.is_empty() {
+                        let mut batch = self.begin_zone_replacements_with_entry(
+                            zone_replacement::AuthorizedZoneBatch {
+                                cause: EventCause::Instruction {
+                                    entry: entry.id(),
+                                    instruction: index,
+                                },
+                                action,
+                                intents,
+                            },
+                            None,
+                        )?;
+                        if batch.progress(self.revision)?.is_none() {
+                            to_move.retain(|(obj_id, _)| !batch.saved_from_destruction(*obj_id));
+                            for (obj_id, dest) in &mut to_move {
+                                if let Ok(replaced) = batch.destination(*obj_id) {
+                                    match replaced {
+                                        PublicZoneDestination::Graveyard => {}
+                                        PublicZoneDestination::Command => {
+                                            *dest = ObjectDestination::Command;
+                                        }
+                                        PublicZoneDestination::Exile => {
+                                            *dest = ObjectDestination::Exile;
+                                        }
+                                        PublicZoneDestination::Hand => {
+                                            *dest = ObjectDestination::Hand;
+                                        }
+                                        PublicZoneDestination::Battlefield => {
+                                            if let Some(owner) = self
+                                                .window
+                                                .cards()
+                                                .get(*obj_id)
+                                                .map(GameObject::owner)
+                                            {
+                                                *dest = ObjectDestination::Battlefield {
+                                                    controller: owner,
+                                                };
+                                            }
+                                        }
+                                        PublicZoneDestination::Library => {
+                                            match self.library_placement_for(&batch, *obj_id) {
+                                                Some(
+                                                    crate::program::LibraryPlacement::Bottom
+                                                    | crate::program::LibraryPlacement::BottomRandom,
+                                                ) => {
+                                                    *dest = ObjectDestination::LibraryBottom;
+                                                }
+                                                Some(crate::program::LibraryPlacement::Top) => {
+                                                    *dest = ObjectDestination::LibraryTop;
+                                                }
+                                                Some(crate::program::LibraryPlacement::FromTop(
+                                                    offset,
+                                                )) => {
+                                                    *dest =
+                                                        ObjectDestination::LibraryFromTop(offset);
+                                                }
+                                                None
+                                                | Some(
+                                                    crate::program::LibraryPlacement::ChoiceTopOrBottom {
+                                                        ..
+                                                    },
+                                                ) => {
+                                                    *dest = ObjectDestination::LibraryTop;
+                                                    if let Some(owner) = self
+                                                        .window
+                                                        .cards()
+                                                        .get(*obj_id)
+                                                        .map(GameObject::owner)
+                                                    {
+                                                        shuffle_owners.insert(owner);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            replacement_batch = Some(batch);
+                        }
+                    }
+                }
                 self.apply_exile_if_leaves_replacement(&mut to_move);
                 if !to_move.is_empty() {
                     let before = self.rules_snapshot(None)?;
@@ -664,6 +778,17 @@ impl EffectWindow {
                             Ok(occs)
                         },
                     )?;
+                    if let Some(batch) = replacement_batch.as_ref() {
+                        self.apply_zone_replacement_extras_from_movements(
+                            Some(batch),
+                            &movements,
+                            EventCause::Instruction {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            ctx.append,
+                        )?;
+                    }
                 }
             }
             ZoneDest::Exile {
@@ -1099,7 +1224,20 @@ impl EffectWindow {
                                             *dest = ObjectDestination::Hand;
                                         }
                                         PublicZoneDestination::Library => {
-                                            *dest = ObjectDestination::LibraryTop;
+                                            *dest = match self
+                                                .library_placement_for(&batch, *obj_id)
+                                            {
+                                                Some(
+                                                    crate::program::LibraryPlacement::Bottom
+                                                    | crate::program::LibraryPlacement::BottomRandom,
+                                                ) => ObjectDestination::LibraryBottom,
+                                                Some(
+                                                    crate::program::LibraryPlacement::FromTop(
+                                                        offset,
+                                                    ),
+                                                ) => ObjectDestination::LibraryFromTop(offset),
+                                                _ => ObjectDestination::LibraryTop,
+                                            };
                                         }
                                     }
                                 }

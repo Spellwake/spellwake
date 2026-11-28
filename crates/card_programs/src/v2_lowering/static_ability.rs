@@ -42,7 +42,7 @@ use spellwake_oracle_compiler::{
 use crate::v2_lowering::{
     atoms::{
         lower_affected_players, lower_card_type_set, lower_color_mask, lower_color_set,
-        lower_counter_kind, lower_keyword_ability, lower_resolving_player,
+        lower_counter_kind, lower_keyword_abilities, lower_keyword_ability, lower_resolving_player,
         lower_source_zone_filter, lower_step, lower_subject_to_query,
     },
     card::lower_granted_face_with_restrictions,
@@ -60,6 +60,20 @@ use crate::v2_lowering::{
     value::{lower_pt_delta, lower_value_const, lower_value_expr},
 };
 
+fn compound_subject_has_ambiguous_trailing_controller(parts: &[v2::SubjectRef]) -> bool {
+    let mut seen_unscoped_group = false;
+    for part in parts {
+        if let v2::SubjectRef::Group(f) | v2::SubjectRef::All(f) | v2::SubjectRef::Each(f) = part {
+            if f.controller.is_none() && f.owner.is_none() {
+                seen_unscoped_group = true;
+            } else if seen_unscoped_group {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Lower a `v2::StaticAbility` directly onto a permanent or spell [`Program`].
 ///
 /// # Errors
@@ -70,6 +84,162 @@ pub(crate) fn lower_static_into_program(
     program: &mut Program,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    // Fan out `SubjectRef::Compound(parts)` onto one static ability per conjunct whenever no
+    // earlier unscoped group could be missing a shared trailing controller/owner modifier.
+    match ability {
+        v2::StaticAbility::ContinuousModifyPT {
+            subject: v2::SubjectRef::Compound(parts),
+            power,
+            toughness,
+            grant_keywords,
+            scale,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::ContinuousModifyPT {
+                        subject: part.clone(),
+                        power: *power,
+                        toughness: *toughness,
+                        grant_keywords: grant_keywords.clone(),
+                        scale: scale.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::GrantKeywords {
+            subject: v2::SubjectRef::Compound(parts),
+            keywords,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::GrantKeywords {
+                        subject: part.clone(),
+                        keywords: keywords.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::GrantAbility {
+            subject: v2::SubjectRef::Compound(parts),
+            ability: face,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::GrantAbility {
+                        subject: part.clone(),
+                        ability: face.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::RuleRestriction {
+            subject: Some(v2::SubjectRef::Compound(parts)),
+            rule,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::RuleRestriction {
+                        subject: Some(part.clone()),
+                        rule: rule.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::SubjectRule {
+            subject: v2::SubjectRef::Compound(parts),
+            rule,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::SubjectRule {
+                        subject: part.clone(),
+                        rule: rule.clone(),
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::RemoveAllAbilities {
+            subject: v2::SubjectRef::Compound(parts),
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::RemoveAllAbilities {
+                        subject: part.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::SetBasePT {
+            subject: v2::SubjectRef::Compound(parts),
+            power,
+            toughness,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::SetBasePT {
+                        subject: part.clone(),
+                        power: *power,
+                        toughness: *toughness,
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        v2::StaticAbility::EntersWithCountersStatic {
+            subject: v2::SubjectRef::Compound(parts),
+            kind,
+            count,
+            additional,
+            condition,
+        } if !parts.is_empty() && !compound_subject_has_ambiguous_trailing_controller(parts) => {
+            for part in parts {
+                lower_static_into_program(
+                    &v2::StaticAbility::EntersWithCountersStatic {
+                        subject: part.clone(),
+                        kind: kind.clone(),
+                        count: count.clone(),
+                        additional: *additional,
+                        condition: condition.clone(),
+                    },
+                    program,
+                    ctx,
+                )?;
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+
     match ability {
         v2::StaticAbility::ContinuousModifyPT {
             subject,
@@ -513,9 +683,9 @@ pub(crate) fn lower_static_into_program(
         v2::StaticAbility::BindVariable { var, expr, inner } => {
             lower_bind_variable_into_program(*var, expr, inner, program, ctx)
         }
-        v2::StaticAbility::NextSpellModifier { .. } => Err(LoweringError::Unsupported(
-            "v2:static-next-spell-modifier-permanent",
-        )),
+        v2::StaticAbility::NextSpellModifier { filter, effect } => {
+            lower_permanent_next_spell_modifier(filter, effect, program, ctx)
+        }
         v2::StaticAbility::VisibilityRule { player, kind } => {
             lower_visibility_rule_into_program(*player, *kind, program, ctx)
         }
@@ -666,7 +836,7 @@ pub(crate) fn lower_temporary_static(
             if let v2::SubjectRef::Player(player) = subject {
                 let mut kws = BTreeSet::new();
                 for kw in keywords {
-                    kws.insert(lower_keyword_ability(kw, ctx)?);
+                    kws.extend(crate::v2_lowering::atoms::lower_keyword_abilities(kw, ctx)?);
                 }
                 let players = lower_affected_players(*player, acc, ctx)?;
                 acc.push(Instruction::ApplyContinuous(Box::new(
@@ -1132,28 +1302,35 @@ fn lower_grant_keywords_into_program(
         let matching = lower_spell_filter(f, ctx)?;
         let cond = lower_opt_static_cond(condition, ctx)?;
         for kw in keywords {
-            let permission = if kw.kind == v2::KeywordKind::Cascade && kw.param.is_none() {
-                CastPermissionRule::GrantSpellCascade {
-                    any_player,
-                    matching,
-                    count: NonZeroU8::MIN,
-                }
+            if kw.kind == v2::KeywordKind::Cascade && kw.param.is_none() {
+                push_static_ability(
+                    program,
+                    StaticContinuousAbility::CastPermission {
+                        id: ctx.alloc_static_id(),
+                        permission: CastPermissionRule::GrantSpellCascade {
+                            any_player,
+                            matching,
+                            count: NonZeroU8::MIN,
+                        },
+                    },
+                    cond.clone(),
+                )?;
             } else {
-                let engine_kw = lower_keyword_ability(kw, ctx)?;
-                CastPermissionRule::GrantSpellKeyword {
-                    any_player,
-                    matching,
-                    keyword: engine_kw,
+                for engine_kw in lower_keyword_abilities(kw, ctx)? {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::CastPermission {
+                            id: ctx.alloc_static_id(),
+                            permission: CastPermissionRule::GrantSpellKeyword {
+                                any_player,
+                                matching,
+                                keyword: engine_kw,
+                            },
+                        },
+                        cond.clone(),
+                    )?;
                 }
-            };
-            push_static_ability(
-                program,
-                StaticContinuousAbility::CastPermission {
-                    id: ctx.alloc_static_id(),
-                    permission,
-                },
-                cond.clone(),
-            )?;
+            }
         }
         return Ok(());
     }
@@ -1970,15 +2147,34 @@ fn lower_rule_restriction_into_program(
         v2::RuleRestrictionKind::CantBeCast => {
             Err(LoweringError::Unsupported("v2:static-rule-cant-be-cast"))
         }
-        v2::RuleRestrictionKind::CantAttackUnless(_) => Err(LoweringError::Unsupported(
-            "v2:static-rule-cant-attack-unless",
-        )),
-        v2::RuleRestrictionKind::CantBlockUnless(_) => Err(LoweringError::Unsupported(
-            "v2:static-rule-cant-block-unless",
-        )),
-        v2::RuleRestrictionKind::CantAttackOrBlockUnless(_) => Err(LoweringError::Unsupported(
-            "v2:static-rule-cant-attack-or-block-unless",
-        )),
+        v2::RuleRestrictionKind::CantAttackUnless(unless_cond)
+        | v2::RuleRestrictionKind::CantBlockUnless(unless_cond)
+        | v2::RuleRestrictionKind::CantAttackOrBlockUnless(unless_cond) => {
+            let restriction = match rule {
+                v2::RuleRestrictionKind::CantAttackUnless(_) => BlockingRestriction::CannotAttack,
+                v2::RuleRestrictionKind::CantBlockUnless(_) => BlockingRestriction::CannotBlock,
+                v2::RuleRestrictionKind::CantAttackOrBlockUnless(_) => {
+                    BlockingRestriction::CannotAttackOrBlock
+                }
+                _ => unreachable!(),
+            };
+            let sel = lower_opt_subject_to_permanent_selector(subject, ctx)?;
+            let negated = v2::ConditionExpr::Not(Box::new(unless_cond.as_ref().clone()));
+            let combined = match condition {
+                Some(outer) => v2::ConditionExpr::And(Box::new(outer.clone()), Box::new(negated)),
+                None => negated,
+            };
+            let cond = lower_static_source_condition(&combined, ctx)?;
+            push_static_ability(
+                program,
+                StaticContinuousAbility::Battlefield {
+                    id: ctx.alloc_static_id(),
+                    selector: sel,
+                    parts: StaticParts(vec![StaticPart::BlockingRestriction(restriction)]),
+                },
+                Some(cond),
+            )
+        }
         v2::RuleRestrictionKind::CantBeEnchantedBy(_) => Err(LoweringError::Unsupported(
             "v2:static-rule-cant-be-enchanted-by",
         )),
@@ -4208,6 +4404,166 @@ fn is_bare_any_spell(f: &v2::ObjectFilter) -> bool {
         && !f.any_permanent
         && !f.any_card
         && !f.is_ability
+}
+
+/// Lower a permanent static `"The first <filter> spell you cast each turn ..."` into a
+/// conditional static spell cost modifier or spell keyword grant gated by
+/// `SpellsCastMatchingThisTurn { players: One(Controller), filter } == 0`.
+fn lower_permanent_next_spell_modifier(
+    filter: &v2::ObjectFilter,
+    effect: &v2::StaticAbility,
+    program: &mut Program,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    if !filter.zones.is_empty() {
+        return Err(LoweringError::Unsupported(
+            "v2:static-next-spell-modifier-permanent",
+        ));
+    }
+    let any_player = match filter.controller {
+        None | Some(ControllerRelation::You) => false,
+        _ => {
+            return Err(LoweringError::Unsupported(
+                "v2:static-next-spell-modifier-permanent",
+            ));
+        }
+    };
+    let mut clean_for_obj = filter.clone();
+    clean_for_obj.controller = None;
+    let obj_filter = lower_object_filter(&clean_for_obj, ctx)?;
+    let first_spell_cond =
+        StaticSourceCondition::Eval(Box::new(spellwake_engine::program::ResolutionCondition {
+            left: EngineValueExpr::PlayerStat(
+                spellwake_engine::program::PlayerStatExpr::SpellsCastMatchingThisTurn {
+                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                    filter: Box::new(obj_filter),
+                    from_zone: None,
+                },
+            ),
+            comparison: spellwake_engine::program::Comparison::Equal,
+            right: EngineValueExpr::literal(0),
+        }));
+    let matching = lower_spell_filter(filter, ctx)?;
+
+    let is_plain_spell_placeholder = |f: &v2::ObjectFilter| {
+        f.all_types.is_empty()
+            && f.any_types.is_empty()
+            && f.forbidden_types.is_empty()
+            && f.required_supertypes.is_empty()
+            && f.forbidden_supertypes.is_empty()
+            && f.subtypes.is_empty()
+            && f.forbidden_subtypes.is_empty()
+            && f.any_colors.is_empty()
+            && f.forbidden_colors.is_empty()
+            && f.color_arity.is_none()
+            && f.controller.is_none()
+            && f.owner.is_none()
+            && f.zones.is_empty()
+            && f.combat.is_none()
+            && f.tapped.is_none()
+            && f.token.is_none()
+            && f.required_keywords.is_empty()
+            && f.forbidden_keywords.is_empty()
+            && f.stat_bounds.is_empty()
+            && f.flags.is_empty()
+            && f.predicates.is_empty()
+    };
+
+    match effect {
+        v2::StaticAbility::CostModifier {
+            subject,
+            delta,
+            less: true,
+            scale,
+            min_mana: None,
+            condition: None,
+        } if subject == filter || is_plain_spell_placeholder(subject) => {
+            let generic_u8 = lower_pure_generic_mana_u8(delta, "v2:static-cost-modifier-colored")?;
+            let amount = match scale {
+                None => {
+                    let nz = NonZeroU8::new(generic_u8)
+                        .ok_or(LoweringError::Unsupported("v2:static-cost-discount-zero"))?;
+                    SpellDiscount::Fixed(nz)
+                }
+                Some(scale_expr) => {
+                    let mut ve = lower_value_expr(scale_expr, ctx)?;
+                    if !ve.is_world_evaluable() {
+                        return Err(LoweringError::Unsupported(
+                            "v2:static-cost-discount-scale-nonworld",
+                        ));
+                    }
+                    if generic_u8 > 1 {
+                        ve = EngineValueExpr::Scale {
+                            expr: Box::new(ve),
+                            factor: RulesInteger::from(i64::from(generic_u8)),
+                        };
+                    }
+                    SpellDiscount::Dynamic(Box::new(ve))
+                }
+            };
+            push_static_ability(
+                program,
+                StaticContinuousAbility::CostModifier {
+                    id: ctx.alloc_static_id(),
+                    modifier: SpellCostModifier::Discount {
+                        any_player,
+                        matching,
+                        amount,
+                    },
+                },
+                Some(first_spell_cond),
+            )
+        }
+        v2::StaticAbility::GrantKeywords {
+            subject,
+            keywords,
+            condition: None,
+        } if !keywords.is_empty()
+            && match subject {
+                v2::SubjectRef::Anaphora(v2::AnaphoraRef::It | v2::AnaphoraRef::ThatSpell) => true,
+                v2::SubjectRef::Group(f) | v2::SubjectRef::Each(f) | v2::SubjectRef::All(f) => {
+                    f.as_ref() == filter || is_plain_spell_placeholder(f)
+                }
+                _ => false,
+            } =>
+        {
+            for kw in keywords {
+                if kw.kind == v2::KeywordKind::Cascade && kw.param.is_none() {
+                    push_static_ability(
+                        program,
+                        StaticContinuousAbility::CastPermission {
+                            id: ctx.alloc_static_id(),
+                            permission: CastPermissionRule::GrantSpellCascade {
+                                any_player,
+                                matching,
+                                count: NonZeroU8::MIN,
+                            },
+                        },
+                        Some(first_spell_cond.clone()),
+                    )?;
+                } else {
+                    for engine_kw in lower_keyword_abilities(kw, ctx)? {
+                        push_static_ability(
+                            program,
+                            StaticContinuousAbility::CastPermission {
+                                id: ctx.alloc_static_id(),
+                                permission: CastPermissionRule::GrantSpellKeyword {
+                                    any_player,
+                                    matching,
+                                    keyword: engine_kw,
+                                },
+                            },
+                            Some(first_spell_cond.clone()),
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        _ => Err(LoweringError::Unsupported(
+            "v2:static-next-spell-modifier-permanent",
+        )),
+    }
 }
 
 fn is_controller_only_filter(f: &v2::ObjectFilter, expected: ControllerRelation) -> bool {

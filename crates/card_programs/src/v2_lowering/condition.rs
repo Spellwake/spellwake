@@ -682,6 +682,31 @@ pub(crate) fn lower_condition_expr(
                 right: Box::new(rc.right),
             })
         }
+        v2::ConditionExpr::EventCheck(v2::EventCheckKind::DidntPutInZone(zone)) => {
+            match ctx.last_zone_put {
+                Some((z, crate::v2_lowering::ctx::ZonePutTracker::BoundBool(slot)))
+                    if z == *zone =>
+                {
+                    Ok(EngineConditionExpr::Not(Box::new(
+                        EngineConditionExpr::BoundBool(slot),
+                    )))
+                }
+                Some((z, crate::v2_lowering::ctx::ZonePutTracker::LastActionSucceeded))
+                    if z == *zone =>
+                {
+                    Ok(EngineConditionExpr::Compare {
+                        left: Box::new(EngineValueExpr::EventValue(
+                            EventValueKind::LastActionSucceeded,
+                        )),
+                        op: Comparison::Equal,
+                        right: Box::new(EngineValueExpr::literal(0)),
+                    })
+                }
+                _ => Err(LoweringError::Unsupported(
+                    "v2:cond:event:didnt-put-in-zone",
+                )),
+            }
+        }
         other => {
             let rc = lower_resolution_condition(other, ctx)?;
             Ok(EngineConditionExpr::Compare {
@@ -1017,6 +1042,15 @@ pub(crate) fn lower_resolution_condition(
                     Box::new(obj_filter),
                 )))
             }
+            v2::PriorActionKind::DealtDamageThisWay if ctx.last_damage_was_self => {
+                let obj_filter = lower_object_filter(filter, ctx)?
+                    .with_flags(ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN);
+                Ok(rc_ge_one(EngineValueExpr::Count {
+                    zone: ValueZone::Battlefield,
+                    filter: Box::new(obj_filter),
+                    controller_scope: None,
+                }))
+            }
             _ => Err(LoweringError::Unsupported("v2:cond:prior-action-matched")),
         },
         v2::ConditionExpr::ColoredManaSpent { color, min_count } => {
@@ -1056,6 +1090,39 @@ fn lower_controls_condition(
     min_count: u16,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<ResolutionCondition> {
+    if min_count == 1
+        && let Some(pos) = filter
+            .predicates
+            .iter()
+            .position(|p| matches!(p, v2::FilterPredicate::GreatestStat { .. }))
+    {
+        let mut cleaned = filter.clone();
+        cleaned.zones.clear();
+        let v2::FilterPredicate::GreatestStat { stat, scope } = cleaned.predicates.remove(pos)
+        else {
+            unreachable!()
+        };
+        let scope_default = scope.as_ref() == &v2::ObjectFilter::default();
+        let scope_matches_cleaned = {
+            let mut scope_no_zones = scope.as_ref().clone();
+            scope_no_zones.zones.clear();
+            scope_no_zones == cleaned
+        };
+        if scope_default || scope_matches_cleaned {
+            let obj_filter = lower_object_filter(&cleaned, ctx)?;
+            let rp = match player {
+                v2::PlayerRef::You => ResolvingPlayer::Controller,
+                other => lower_world_resolving_player(other, ctx)?,
+            };
+            return Ok(rc_ge_one(EngineValueExpr::PlayerStat(
+                PlayerStatExpr::ControlsGreatestStat {
+                    player: rp,
+                    filter: Box::new(obj_filter),
+                    stat: lower_stat_kind(stat),
+                },
+            )));
+        }
+    }
     let mut cleaned = filter.clone();
     cleaned.zones.clear();
     let obj_filter = lower_object_filter(&cleaned, ctx)?;
@@ -1467,9 +1534,105 @@ fn lower_shares_type_condition(
                 ObjectFilterFlags::SAME_NAME_AS_TARGET
             }
             (
-                v2::SubjectRef::Anaphora(v2::AnaphoraRef::SacrificedObject),
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatSpell
+                    | v2::AnaphoraRef::ThatLand
+                    | v2::AnaphoraRef::ThatToken
+                    | v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatObject,
+                ),
+                v2::SharedProperty::Color,
+            ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+                ObjectFilterFlags::SHARES_COLOR_WITH_TRIGGER
+            }
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatSpell
+                    | v2::AnaphoraRef::ThatLand
+                    | v2::AnaphoraRef::ThatToken
+                    | v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatObject,
+                ),
+                v2::SharedProperty::CreatureType,
+            ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+                ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TRIGGER
+            }
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatSpell
+                    | v2::AnaphoraRef::ThatLand
+                    | v2::AnaphoraRef::ThatToken
+                    | v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatObject,
+                ),
+                v2::SharedProperty::CardType,
+            ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+                ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TRIGGER
+            }
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatSpell
+                    | v2::AnaphoraRef::ThatLand
+                    | v2::AnaphoraRef::ThatToken
+                    | v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::ThatObject,
+                ),
+                v2::SharedProperty::Name,
+            ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+                ObjectFilterFlags::SAME_NAME_AS_TRIGGER
+            }
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::SacrificedObject
+                    | v2::AnaphoraRef::ExiledObject
+                    | v2::AnaphoraRef::TheExiledCard
+                    | v2::AnaphoraRef::DiscardedObject
+                    | v2::AnaphoraRef::RevealedCard,
+                ),
                 v2::SharedProperty::Color,
             ) => ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED,
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::SacrificedObject
+                    | v2::AnaphoraRef::ExiledObject
+                    | v2::AnaphoraRef::TheExiledCard
+                    | v2::AnaphoraRef::DiscardedObject
+                    | v2::AnaphoraRef::RevealedCard,
+                ),
+                v2::SharedProperty::CreatureType,
+            ) => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_LAST_MOVED,
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::SacrificedObject
+                    | v2::AnaphoraRef::ExiledObject
+                    | v2::AnaphoraRef::TheExiledCard
+                    | v2::AnaphoraRef::DiscardedObject
+                    | v2::AnaphoraRef::RevealedCard,
+                ),
+                v2::SharedProperty::CardType,
+            ) => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_LAST_MOVED,
+            (
+                v2::SubjectRef::Anaphora(
+                    v2::AnaphoraRef::SacrificedObject
+                    | v2::AnaphoraRef::ExiledObject
+                    | v2::AnaphoraRef::TheExiledCard
+                    | v2::AnaphoraRef::DiscardedObject
+                    | v2::AnaphoraRef::RevealedCard,
+                ),
+                v2::SharedProperty::Name,
+            ) => ObjectFilterFlags::SAME_NAME_AS_LAST_MOVED,
             _ => return Err(LoweringError::Unsupported("v2:cond:shares-type-with")),
         }
     };
@@ -1661,6 +1824,42 @@ fn lower_permanent_entered_this_turn_condition(
     min_count: u16,
     ctx: &LowerCtx<'_>,
 ) -> LowerResult<ResolutionCondition> {
+    let is_nonland_only = filter.all_types.is_empty()
+        && filter.any_types.is_empty()
+        && filter.forbidden_types == ast::CardTypeMask::LAND
+        && filter.required_supertypes.is_empty()
+        && filter.forbidden_supertypes.is_empty()
+        && filter.subtypes.is_empty()
+        && filter.forbidden_subtypes.is_empty()
+        && filter.any_colors.is_empty()
+        && filter.forbidden_colors.is_empty()
+        && filter.color_arity.is_none()
+        && filter.controller.is_none()
+        && filter.owner.is_none()
+        && filter.zones.is_empty()
+        && filter.combat.is_none()
+        && filter.tapped.is_none()
+        && filter.token.is_none()
+        && filter.required_keywords.is_empty()
+        && filter.forbidden_keywords.is_empty()
+        && filter.stat_bounds.is_empty()
+        && filter.flags.is_empty()
+        && filter.predicates.is_empty();
+
+    if is_nonland_only && controller == v2::PlayerRef::You {
+        // Celebration (CR 700 / WOE): nonland permanents that entered under your control this turn
+        // equals total permanents entered minus lands entered (disjoint, exhaustive partition).
+        let nonland_entered = EngineValueExpr::Sub(
+            Box::new(EngineValueExpr::PlayerStat(
+                PlayerStatExpr::EnteredPermanentThisTurn,
+            )),
+            Box::new(EngineValueExpr::PlayerStat(
+                PlayerStatExpr::LandsEnteredThisTurn(ResolvingPlayer::Controller),
+            )),
+        );
+        return Ok(rc_ge_u16(nonland_entered, min_count));
+    }
+
     let plain_no_extras = filter.forbidden_types.is_empty()
         && filter.required_supertypes.is_empty()
         && filter.forbidden_supertypes.is_empty()
@@ -2451,9 +2650,21 @@ fn lower_event_check_condition(kind: &v2::EventCheckKind) -> LowerResult<Resolut
         v2::EventCheckKind::PlayersLostGame(_) => Err(LoweringError::Unsupported(
             "v2:cond:event:players-lost-game",
         )),
-        v2::EventCheckKind::SpellsCastLastTurn { .. } => Err(LoweringError::Unsupported(
-            "v2:cond:event:spells-cast-last-turn",
-        )),
+        v2::EventCheckKind::SpellsCastLastTurn { op, count } => {
+            if *op == ast::CompareOp::Eq && *count == 0 {
+                Ok(ResolutionCondition {
+                    left: EngineValueExpr::PlayerStat(PlayerStatExpr::SpellsCastLastTurn),
+                    comparison: Comparison::Equal,
+                    right: EngineValueExpr::literal(0),
+                })
+            } else {
+                Ok(ResolutionCondition {
+                    left: EngineValueExpr::PlayerStat(PlayerStatExpr::MaxPlayerSpellsCastLastTurn),
+                    comparison: lower_compare_op(*op),
+                    right: EngineValueExpr::literal(i64::from(*count)),
+                })
+            }
+        }
     }
 }
 

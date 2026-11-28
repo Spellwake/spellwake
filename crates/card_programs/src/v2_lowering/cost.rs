@@ -198,8 +198,9 @@ pub(crate) fn lower_activated_ability(
 
     // 2. Standard activated ability lowering.
     let restriction = lower_activation_restrictions(&all_restrictions, ctx)?;
+    let from_graveyard = is_graveyard_activated_ability(cost, &exec_effects, program);
     let (mana_cost, source_cost, hybrids, extra_costs) =
-        lower_activation_cost_parts(cost, false, ctx)?;
+        lower_activation_cost_parts(cost, from_graveyard, ctx)?;
 
     // 2a. Class level-up activation (`{cost}: Level N`, CR 716.2a).
     if let [
@@ -242,95 +243,103 @@ pub(crate) fn lower_activated_ability(
     }
 
     // Check for top-level modal activated ability (`Choose one - ...`).
+    let prev_self_antecedent = ctx.self_antecedent;
+    ctx.self_antecedent = cost_establishes_self_antecedent(cost, &source_cost, &extra_costs);
     if let Some((prefix_effs, choice_count, modes, suffix_effs)) =
         extract_modal_choice(&exec_effects)
     {
-        let (min_modes, max_modes) = lower_choice_count(choice_count, modes.len())?;
-        let prefix = if prefix_effs.is_empty() {
-            None
-        } else {
-            let pb = lower_effect_body(prefix_effs, ctx)?;
-            if pb.target != BodyTarget::None
-                || pb
-                    .instructions
-                    .iter()
-                    .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
-            {
-                return Err(LoweringError::Unsupported(
-                    "v2:activated:modal-prefix-target",
-                ));
-            }
-            Some(Box::new(pb))
-        };
-        let suffix = if suffix_effs.is_empty() {
-            None
-        } else {
-            let sb = lower_effect_body(suffix_effs, ctx)?;
-            if sb.target != BodyTarget::None
-                || sb
-                    .instructions
-                    .iter()
-                    .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
-            {
-                return Err(LoweringError::Unsupported(
-                    "v2:activated:modal-suffix-target",
-                ));
-            }
-            Some(Box::new(sb))
-        };
+        let modal_res: LowerResult<()> = (|| {
+            let (min_modes, max_modes) = lower_choice_count(choice_count, modes.len())?;
+            let prefix = if prefix_effs.is_empty() {
+                None
+            } else {
+                let pb = lower_effect_body(prefix_effs, ctx)?;
+                if pb.target != BodyTarget::None
+                    || pb
+                        .instructions
+                        .iter()
+                        .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+                {
+                    return Err(LoweringError::Unsupported(
+                        "v2:activated:modal-prefix-target",
+                    ));
+                }
+                Some(Box::new(pb))
+            };
+            let suffix = if suffix_effs.is_empty() {
+                None
+            } else {
+                let sb = lower_effect_body(suffix_effs, ctx)?;
+                if sb.target != BodyTarget::None
+                    || sb
+                        .instructions
+                        .iter()
+                        .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+                {
+                    return Err(LoweringError::Unsupported(
+                        "v2:activated:modal-suffix-target",
+                    ));
+                }
+                Some(Box::new(sb))
+            };
 
-        let mut lowered_modes: Vec<ExecutableBody> = Vec::with_capacity(modes.len());
-        for mode in modes {
-            let mb = lower_effect_body(&mode.body, ctx)?;
-            if mb.instructions.is_empty() {
-                return Err(LoweringError::Unsupported("v2:activated:modal-empty-mode"));
+            let mut lowered_modes: Vec<ExecutableBody> = Vec::with_capacity(modes.len());
+            for mode in modes {
+                let mb = lower_effect_body(&mode.body, ctx)?;
+                if mb.instructions.is_empty() {
+                    return Err(LoweringError::Unsupported("v2:activated:modal-empty-mode"));
+                }
+                lowered_modes.push(mb);
             }
-            lowered_modes.push(mb);
-        }
-        if lowered_modes.len() < 2 {
-            return Err(LoweringError::Unsupported("v2:activated:modal-too-few"));
-        }
+            if lowered_modes.len() < 2 {
+                return Err(LoweringError::Unsupported("v2:activated:modal-too-few"));
+            }
 
-        let first = lowered_modes.remove(0);
-        let id = ctx.alloc_activated_id();
-        if !hybrids.is_empty() {
-            program.activation_hybrid_symbols.insert(id, hybrids);
-        }
-        if !extra_costs.is_empty() {
-            program.extra_activation_costs.insert(id, extra_costs);
-        }
-        if let Some(red) = inline_cost_reduction {
-            program.activation_cost_reductions.insert(id, red);
-        }
-        if let Some(res) = restriction {
-            program.activation_restrictions.insert(id, res);
-        }
-        program.activation_modes.insert(
-            id,
-            SpellModes {
-                minimum: min_modes,
-                maximum: max_modes,
-                conditional_maximum: None,
-                allow_repeat: false,
-                distinct_targets: false,
-                uniqueness: ModalUniqueness::None,
-                mode_costs: Vec::new(),
-                escalate_mana: None,
-                prefix,
-                suffix,
-                additional: lowered_modes,
-            },
-        );
-        program.activated.push(ActivatedAbility {
-            id,
-            mana_cost,
-            source_cost,
-            body: first,
-        });
-        return Ok(());
+            let first = lowered_modes.remove(0);
+            let id = ctx.alloc_activated_id();
+            if !hybrids.is_empty() {
+                program.activation_hybrid_symbols.insert(id, hybrids);
+            }
+            if !extra_costs.is_empty() {
+                program.extra_activation_costs.insert(id, extra_costs);
+            }
+            if let Some(red) = inline_cost_reduction {
+                program.activation_cost_reductions.insert(id, red);
+            }
+            if let Some(res) = restriction {
+                program.activation_restrictions.insert(id, res);
+            }
+            program.activation_modes.insert(
+                id,
+                SpellModes {
+                    minimum: min_modes,
+                    maximum: max_modes,
+                    conditional_maximum: None,
+                    allow_repeat: false,
+                    distinct_targets: false,
+                    uniqueness: ModalUniqueness::None,
+                    mode_costs: Vec::new(),
+                    escalate_mana: None,
+                    prefix,
+                    suffix,
+                    additional: lowered_modes,
+                },
+            );
+            program.activated.push(ActivatedAbility {
+                id,
+                mana_cost,
+                source_cost,
+                body: first,
+            });
+            Ok(())
+        })();
+        ctx.self_antecedent = prev_self_antecedent;
+        return modal_res;
     }
 
-    let lowered_body = lower_effect_body(&exec_effects, ctx)?;
+    let lowered_body_res = lower_effect_body(&exec_effects, ctx);
+    ctx.self_antecedent = prev_self_antecedent;
+    let lowered_body = lowered_body_res?;
     let id = ctx.alloc_activated_id();
     if !hybrids.is_empty() {
         program.activation_hybrid_symbols.insert(id, hybrids);
@@ -351,6 +360,106 @@ pub(crate) fn lower_activated_ability(
         body: lowered_body,
     });
     Ok(())
+}
+
+/// Infer graveyard activation (`CR 113.6m`) when an activated ability explicitly moves or exiles
+/// `SelfObject` from `Graveyard` in its effect body, or when a Spell card (instant/sorcery, which
+/// cannot exist on the battlefield) has `Cost::ExileSelf`.
+fn is_graveyard_activated_ability(
+    cost: &[v2::Cost],
+    body: &[v2::Effect],
+    program: &Program,
+) -> bool {
+    if matches!(
+        program.kind,
+        spellwake_engine::program::ProgramKind::Spell(_)
+    ) && cost.iter().any(|c| matches!(c, v2::Cost::ExileSelf))
+    {
+        return true;
+    }
+    body_moves_self_from_graveyard(body)
+}
+
+fn body_moves_self_from_graveyard(effects: &[v2::Effect]) -> bool {
+    effects.iter().any(|eff| match eff {
+        v2::Effect::ZoneOp {
+            op: v2::ZoneOpKind::Move | v2::ZoneOpKind::Exile { .. },
+            subject: v2::SubjectRef::SelfObject,
+            from,
+            ..
+        } => from.iter().any(|z| z.zone == v2::ZoneKind::Graveyard),
+        v2::Effect::Optional { body, .. }
+        | v2::Effect::ScopedDuration { body, .. }
+        | v2::Effect::BindVariable { body, .. }
+        | v2::Effect::ForEach { body, .. } => body_moves_self_from_graveyard(body),
+        v2::Effect::BranchCondition {
+            then_body,
+            else_body,
+            ..
+        } => body_moves_self_from_graveyard(then_body) || body_moves_self_from_graveyard(else_body),
+        _ => false,
+    })
+}
+
+/// True when an activated ability's cost explicitly names its source object (e.g. "Sacrifice this
+/// creature:", "Discard this card:", "Exile this artifact:", "Remove a counter from this permanent:"),
+/// establishing `SelfObject` as a grammatical antecedent for `"it"` in the effect body.
+fn cost_establishes_self_antecedent(
+    cost: &[v2::Cost],
+    source_cost: &SourceCost,
+    extra_costs: &[ExtraActivationCost],
+) -> bool {
+    if matches!(
+        source_cost,
+        SourceCost::HandDiscardSelf(_)
+            | SourceCost::Sacrifice
+            | SourceCost::TapSacrifice
+            | SourceCost::Exile { .. }
+            | SourceCost::ReturnSelfToHand { .. }
+            | SourceCost::Counter { .. }
+            | SourceCost::Discard {
+                sacrifice_source: true,
+                ..
+            }
+    ) || extra_costs.iter().any(|c| {
+        matches!(
+            c,
+            ExtraActivationCost::SacrificeSource
+                | ExtraActivationCost::ExileSource { .. }
+                | ExtraActivationCost::ExertSource
+                | ExtraActivationCost::Unattach { self_source: true }
+        )
+    }) {
+        return true;
+    }
+    cost.iter().any(|c| {
+        matches!(
+            c,
+            v2::Cost::SacrificeSelf
+                | v2::Cost::ExileSelf
+                | v2::Cost::ExertSelf
+                | v2::Cost::UnattachSelf
+                | v2::Cost::ReturnToHand {
+                    subject: v2::SubjectRef::SelfObject,
+                }
+                | v2::Cost::PutCounters {
+                    subject: v2::SubjectRef::SelfObject,
+                    ..
+                }
+                | v2::Cost::RemoveCounters {
+                    subject: Some(v2::SubjectRef::SelfObject) | None,
+                    ..
+                }
+                | v2::Cost::RemoveEitherCounter {
+                    subject: Some(v2::SubjectRef::SelfObject) | None,
+                    ..
+                }
+                | v2::Cost::PutZone {
+                    subject: v2::SubjectRef::SelfObject,
+                    ..
+                }
+        )
+    })
 }
 
 fn lower_inline_activation_cost_reduction(
@@ -421,6 +530,11 @@ pub(crate) fn lower_extra_cost_atom(
         v2::Cost::ExertSelf => Ok(ExtraActivationCost::ExertSource),
         v2::Cost::UnattachSelf => Ok(ExtraActivationCost::Unattach { self_source: true }),
         v2::Cost::Forage => Ok(ExtraActivationCost::Forage),
+        v2::Cost::Mana(mc) if is_energy_only_mana_symbols(mc) => {
+            let amt = u16::try_from(mc.symbols.len())
+                .map_err(|_| LoweringError::Unsupported("v2:cost:energy-overflow"))?;
+            Ok(ExtraActivationCost::PayEnergy(amt))
+        }
         v2::Cost::Mana(mc) => {
             let (mana, x, hybrids, snow) = lower_v2_mana_cost(mc)?;
             if x != 0 || !hybrids.is_empty() {
@@ -679,13 +793,86 @@ pub(crate) fn lower_extra_cost_atom(
             let right = lower_extra_cost_atom(b, ctx)?;
             Ok(ExtraActivationCost::Either(Box::new(left), Box::new(right)))
         }
-        v2::Cost::ScaledMana { .. }
-        | v2::Cost::PayAnyAmountMana
+        v2::Cost::RemoveEitherCounter {
+            kind1,
+            kind2,
+            subject,
+        } => {
+            let left = lower_extra_cost_atom(
+                &v2::Cost::RemoveCounters {
+                    kind: kind1.clone(),
+                    count: v2::ValueExpr::Const(1),
+                    subject: subject.clone(),
+                },
+                ctx,
+            )?;
+            let right = lower_extra_cost_atom(
+                &v2::Cost::RemoveCounters {
+                    kind: kind2.clone(),
+                    count: v2::ValueExpr::Const(1),
+                    subject: subject.clone(),
+                },
+                ctx,
+            )?;
+            Ok(ExtraActivationCost::Either(Box::new(left), Box::new(right)))
+        }
+        v2::Cost::ScaledMana { base, scale } => {
+            let Some(amt) = extract_energy_cost_amount_scaled(base, scale, ctx)? else {
+                return Err(LoweringError::Unsupported("v2:cost:unsupported-atom"));
+            };
+            match amt {
+                EnergyCostAmt::Fixed(n) => Ok(ExtraActivationCost::PayEnergy(n)),
+                EnergyCostAmt::Dynamic(expr) => Ok(ExtraActivationCost::PayEnergyExpr(expr)),
+            }
+        }
+        v2::Cost::PayAnyAmountMana
         | v2::Cost::PutZone { .. }
         | v2::Cost::ChooseObject(_)
-        | v2::Cost::RemoveEitherCounter { .. }
         | v2::Cost::Behold(_) => Err(LoweringError::Unsupported("v2:cost:unsupported-atom")),
     }
+}
+
+pub(crate) enum EnergyCostAmt {
+    Fixed(u16),
+    Dynamic(EngineValueExpr),
+}
+
+pub(crate) fn is_energy_only_mana_symbols(mc: &v2::ManaCost) -> bool {
+    !mc.symbols.is_empty()
+        && mc
+            .symbols
+            .iter()
+            .all(|sym| matches!(sym, v2::ManaSymbol::Energy))
+}
+
+pub(crate) fn extract_energy_cost_amount_scaled(
+    base: &v2::ManaCost,
+    scale: &v2::ValueExpr,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<Option<EnergyCostAmt>> {
+    if !is_energy_only_mana_symbols(base) {
+        return Ok(None);
+    }
+    let unit = i64::try_from(base.symbols.len())
+        .map_err(|_| LoweringError::Unsupported("v2:cost:energy-overflow"))?;
+    if let v2::ValueExpr::Const(n) = scale {
+        if *n <= 0 {
+            return Err(LoweringError::Unsupported("v2:cost:energy-overflow"));
+        }
+        let total = i64::from(*n)
+            .checked_mul(unit)
+            .and_then(|v| u16::try_from(v).ok())
+            .ok_or(LoweringError::Unsupported("v2:cost:energy-overflow"))?;
+        return Ok(Some(EnergyCostAmt::Fixed(total)));
+    }
+    let mut expr = lower_value_expr(scale, ctx)?;
+    if unit > 1 {
+        expr = EngineValueExpr::Scale {
+            expr: Box::new(expr),
+            factor: RulesInteger::from(unit),
+        };
+    }
+    Ok(Some(EnergyCostAmt::Dynamic(expr)))
 }
 
 /// Lower mandatory additional casting costs (`As an additional cost to cast this spell, ...`)
@@ -716,6 +903,24 @@ pub(crate) fn lower_additional_cast_costs(
                 _ => {}
             }
         }
+        if let v2::Cost::Sacrifice {
+            count: v2::ValueExpr::Const(1),
+            filter,
+        } = atom
+            && matches!(program.kind, ProgramKind::Spell(_))
+            && !program.sacrifice_creature_cast_cost
+            && !program.tap_creatures_cast_cost
+            && !program.reveal_colorless_creature_cast_cost
+        {
+            let obj_filter = lower_object_filter(filter, ctx)?;
+            program.sacrifice_creature_cast_cost = true;
+            program.sacrifice_cast_cost_filter = if obj_filter == ObjectFilter::creature() {
+                None
+            } else {
+                Some(obj_filter)
+            };
+            continue;
+        }
         let extra = lower_extra_cost_atom(atom, ctx)?;
         if is_battlefield_only_source_cost(&extra) {
             return Err(LoweringError::Unsupported(
@@ -727,13 +932,10 @@ pub(crate) fn lower_additional_cast_costs(
     Ok(())
 }
 
-/// Lower unconditional alternative casting costs (`You may <costs> rather than pay ...`)
-/// into `program.conditional_cost`.
-pub(crate) fn lower_alternative_cast_costs(
+fn lower_alternative_cast_cost_parts(
     costs: &[v2::Cost],
-    program: &mut Program,
     ctx: &mut LowerCtx<'_>,
-) -> LowerResult<()> {
+) -> LowerResult<(ManaCost, Vec<ExtraActivationCost>)> {
     let mut mana = ManaCost::free();
     let mut extra = Vec::new();
     for atom in costs {
@@ -756,10 +958,50 @@ pub(crate) fn lower_alternative_cast_costs(
             extra.push(lowered);
         }
     }
+    Ok((mana, extra))
+}
+
+/// Lower unconditional alternative casting costs (`You may <costs> rather than pay ...`)
+/// into `program.conditional_cost`.
+pub(crate) fn lower_alternative_cast_costs(
+    costs: &[v2::Cost],
+    program: &mut Program,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    let (mana, extra) = lower_alternative_cast_cost_parts(costs, ctx)?;
     if program
         .conditional_cost
         .replace(ConditionalCastCost::Alternative {
             condition: None,
+            mana,
+            extra,
+        })
+        .is_some()
+    {
+        return Err(LoweringError::Unsupported(
+            "v2:cost:duplicate-conditional-cost",
+        ));
+    }
+    Ok(())
+}
+
+/// Lower conditional alternative casting costs (`If <cond>, you may <costs> rather than pay ...`)
+/// into `program.conditional_cost`.
+pub(crate) fn lower_conditional_alternative_cast_costs(
+    cond: &v2::ConditionExpr,
+    costs: &[v2::Cost],
+    program: &mut Program,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    let res_cond = lower_resolution_condition(cond, ctx)?;
+    if !res_cond.is_world_evaluable() {
+        return Err(LoweringError::Unsupported("v2:cost:alt-cast-nonworld-cond"));
+    }
+    let (mana, extra) = lower_alternative_cast_cost_parts(costs, ctx)?;
+    if program
+        .conditional_cost
+        .replace(ConditionalCastCost::Alternative {
+            condition: Some(Box::new(res_cond)),
             mana,
             extra,
         })
@@ -877,7 +1119,7 @@ pub(crate) fn lower_activation_cost_parts(
 
     for atom in cost {
         match atom {
-            v2::Cost::Mana(mc) => {
+            v2::Cost::Mana(mc) if !is_energy_only_mana_symbols(mc) => {
                 let (part, x, hybs, snow) = lower_v2_mana_cost(mc)?;
                 merge_mana_cost(&mut mana, &part);
                 x_symbols = x_symbols
@@ -1079,6 +1321,26 @@ fn try_lower_primary_source_cost(
                 amount: amt,
                 tap_source: tap_self,
             }))
+        }
+        v2::Cost::Mana(mc) if !sac_self && is_energy_only_mana_symbols(mc) => {
+            let amt = u16::try_from(mc.symbols.len())
+                .map_err(|_| LoweringError::Unsupported("v2:cost:energy-overflow"))?;
+            Ok(Some(SourceCost::PayEnergy {
+                amount: amt,
+                tap_source: tap_self,
+            }))
+        }
+        v2::Cost::ScaledMana { base, scale } if !sac_self && is_energy_only_mana_symbols(base) => {
+            if let Some(EnergyCostAmt::Fixed(amt)) =
+                extract_energy_cost_amount_scaled(base, scale, ctx)?
+            {
+                Ok(Some(SourceCost::PayEnergy {
+                    amount: amt,
+                    tap_source: tap_self,
+                }))
+            } else {
+                Ok(None)
+            }
         }
         v2::Cost::Mill(val) if !sac_self => {
             let nz = value_to_nonzero_u8(val, "v2:cost:mill-count")?;
@@ -1641,7 +1903,7 @@ fn extract_entry_chosen_color_pair(a: &v2::ManaSpec, b: &v2::ManaSpec) -> Option
     None
 }
 
-fn try_lower_mana_spend_rule(
+pub(crate) fn try_lower_mana_spend_rule(
     rule: &v2::ManaRuleKind,
     ctx: &mut LowerCtx<'_>,
 ) -> Option<ManaOutputRestriction> {

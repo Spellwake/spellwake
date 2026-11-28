@@ -35,7 +35,7 @@ use spellwake_oracle_compiler::{
 
 use crate::v2_lowering::{
     atoms::{
-        lower_card_type_set, lower_color_set, lower_counter_kind, lower_keyword_ability,
+        lower_card_type_set, lower_color_set, lower_counter_kind, lower_keyword_abilities,
         lower_step, lower_supertype_set, lower_world_affected_players,
     },
     card::lower_granted_face,
@@ -106,8 +106,35 @@ pub(crate) fn lower_temporary_replacement(
             Ok(())
         }
         v2::Replacement::DamageRule(v2::DamageReplacement::RedirectNext { amount, from, to }) => {
-            let from_rec = lower_damage_recipient(from, ctx)?;
-            let to_tgt = lower_damage_redirect_target(to)?;
+            let (from_rec, to_tgt) = if let (
+                v2::SubjectRef::TargetObject {
+                    filter: f1,
+                    count: v2::TargetCount::Exact(1),
+                    another: false,
+                },
+                v2::SubjectRef::TargetObject {
+                    filter: f2,
+                    count: v2::TargetCount::Exact(1),
+                    another: true,
+                },
+            ) = (from, to)
+                && f1 == f2
+            {
+                let (bt, _) = crate::v2_lowering::atoms::lower_subject_to_target(from, ctx)?;
+                acc.register_target(bt, v2::TargetCount::Exact(2))?;
+                ctx.has_object_target = true;
+                (
+                    StaticDamageRecipient::TargetObject,
+                    DamageRedirectTarget::SecondTargetObject,
+                )
+            } else {
+                register_damage_subject_target(from, acc, ctx)?;
+                register_damage_subject_target(to, acc, ctx)?;
+                (
+                    lower_damage_recipient(from, ctx)?,
+                    lower_damage_redirect_target(to)?,
+                )
+            };
             let amt = lower_value_expr(amount, ctx)?;
             acc.push(Instruction::ApplyContinuous(Box::new(
                 ApplyContinuousSpec::temporary_rule(
@@ -130,6 +157,9 @@ pub(crate) fn lower_temporary_replacement(
             target,
             amount,
         }) => {
+            if let Some(t) = target {
+                register_damage_subject_target(t, acc, ctx)?;
+            }
             let src_flt = match source {
                 Some(f) => Some(lower_object_filter(f, ctx)?),
                 None => None,
@@ -331,7 +361,15 @@ fn lower_enters_tapped(
         (None, None) => {
             match perm.entry_tap {
                 None => perm.entry_tap = Some(EntryTap::Always),
-                Some(EntryTap::Always) => {}
+                Some(EntryTap::Always)
+                | Some(EntryTap::AlwaysChooseColor)
+                | Some(EntryTap::AlwaysChooseColorExcept(_)) => {}
+                Some(EntryTap::ChooseColor) => {
+                    perm.entry_tap = Some(EntryTap::AlwaysChooseColor);
+                }
+                Some(EntryTap::ChooseColorExcept(excluded)) => {
+                    perm.entry_tap = Some(EntryTap::AlwaysChooseColorExcept(excluded));
+                }
                 Some(_) => {
                     return Err(LoweringError::Unsupported(
                         "v2:replacement-entry-tap-conflict",
@@ -977,13 +1015,28 @@ pub(super) fn set_entry_tap(program: &mut Program, tap: EntryTap) -> LowerResult
             "v2:replacement-entry-tap-nonpermanent",
         ));
     };
-    match perm.entry_tap {
-        None => {
+    match (perm.entry_tap, tap) {
+        (None, tap) => {
             perm.entry_tap = Some(tap);
             Ok(())
         }
-        Some(existing) if existing == tap => Ok(()),
-        Some(_) => Err(LoweringError::Unsupported(
+        (Some(existing), tap) if existing == tap => Ok(()),
+        (Some(EntryTap::Always), EntryTap::ChooseColor)
+        | (Some(EntryTap::ChooseColor), EntryTap::Always) => {
+            perm.entry_tap = Some(EntryTap::AlwaysChooseColor);
+            Ok(())
+        }
+        (Some(EntryTap::Always), EntryTap::ChooseColorExcept(excluded))
+        | (Some(EntryTap::ChooseColorExcept(excluded)), EntryTap::Always) => {
+            perm.entry_tap = Some(EntryTap::AlwaysChooseColorExcept(excluded));
+            Ok(())
+        }
+        (Some(EntryTap::AlwaysChooseColor), EntryTap::Always | EntryTap::ChooseColor) => Ok(()),
+        (Some(EntryTap::AlwaysChooseColorExcept(c)), EntryTap::Always) => {
+            let _ = c;
+            Ok(())
+        }
+        (Some(_), _) => Err(LoweringError::Unsupported(
             "v2:replacement-entry-tap-conflict",
         )),
     }
@@ -1048,7 +1101,8 @@ fn lower_enter_as_copy(
         match exc {
             v2::CopyException::AddKeywords(kws) => {
                 for kw in kws {
-                    spec.extra_keywords.insert(lower_keyword_ability(kw, ctx)?);
+                    spec.extra_keywords
+                        .extend(lower_keyword_abilities(kw, ctx)?);
                 }
             }
             v2::CopyException::NotLegendary => {
@@ -1850,12 +1904,25 @@ fn try_lower_temp_exile_replacement(
                     counters: None,
                 },
             subject: dest_subject,
+            from,
+            to,
+            modifiers,
+            except,
+            count,
             ..
         },
     ] = instead
     else {
         return Ok(None);
     };
+    if !from.is_empty()
+        || to.is_some()
+        || except.is_some()
+        || count.is_some()
+        || !crate::v2_lowering::effect::is_empty_entry_modifiers(modifiers)
+    {
+        return Ok(None);
+    }
     if !is_replaced_event_anaphora(dest_subject) {
         return Ok(None);
     }
@@ -1954,17 +2021,37 @@ fn try_lower_zone_replacement(
         _ => return Ok(None),
     };
 
-    // Extract destination replacement from first effect in `instead` (possibly wrapped in Optional).
-    let (choice, inner_effects): (ZoneReplacementChoice, &[v2::Effect]) = match instead {
+    // Extract destination replacement from first effect in `instead` (possibly wrapped in Optional
+    // or preceded by a pure reveal of the replaced card, e.g. Darksteel Colossus / Progenitus).
+    let (choice, raw_effects): (ZoneReplacementChoice, &[v2::Effect]) = match instead {
         [v2::Effect::Optional { body, .. }] if !body.is_empty() => (
             ZoneReplacementChoice::OptionalAffectedPlayer,
             body.as_slice(),
         ),
         slice => (ZoneReplacementChoice::Mandatory, slice),
     };
+    let inner_effects = if raw_effects.len() >= 2
+        && matches!(
+            &raw_effects[0],
+            v2::Effect::ZoneOp {
+                op: v2::ZoneOpKind::Reveal,
+                subject,
+                to: None,
+                except: None,
+                count: None,
+                ..
+            } if matches!(subject, v2::SubjectRef::SelfObject) || is_replaced_event_anaphora(subject)
+        ) {
+        &raw_effects[1..]
+    } else {
+        raw_effects
+    };
 
     let first = &inner_effects[0];
-    let (replace_with, exile_counters) = match first {
+    let matches_replaced = |s: &v2::SubjectRef| {
+        matches!(s, v2::SubjectRef::SelfObject) || is_replaced_event_anaphora(s)
+    };
+    let (replace_with, exile_counters, library_placement) = match first {
         v2::Effect::ZoneOp {
             op:
                 v2::ZoneOpKind::Exile {
@@ -1972,8 +2059,19 @@ fn try_lower_zone_replacement(
                     counters,
                 },
             subject: dest_subj,
+            from,
+            to,
+            modifiers,
+            except,
+            count,
             ..
-        } if is_replaced_event_anaphora(dest_subj) => {
+        } if matches_replaced(dest_subj)
+            && from.is_empty()
+            && to.is_none()
+            && except.is_none()
+            && count.is_none()
+            && crate::v2_lowering::effect::is_empty_entry_modifiers(modifiers) =>
+        {
             let ctr = match counters {
                 None => None,
                 Some((k, v)) => {
@@ -1992,22 +2090,46 @@ fn try_lower_zone_replacement(
                     Some((ek, n))
                 }
             };
-            (PublicZoneDestination::Exile, ctr)
+            (PublicZoneDestination::Exile, ctr, None)
         }
         v2::Effect::ZoneOp {
             op: v2::ZoneOpKind::Move,
             subject: dest_subj,
             to: Some(dest),
             ..
-        } if is_replaced_event_anaphora(dest_subj) => {
-            let pub_dest = match dest.zone {
-                v2::ZoneKind::Exile => PublicZoneDestination::Exile,
-                v2::ZoneKind::Hand => PublicZoneDestination::Hand,
-                v2::ZoneKind::Library => PublicZoneDestination::Library,
-                v2::ZoneKind::Battlefield => PublicZoneDestination::Battlefield,
-                _ => return Ok(None),
-            };
-            (pub_dest, None)
+        } if matches_replaced(dest_subj) => match dest.zone {
+            v2::ZoneKind::Exile => (PublicZoneDestination::Exile, None, None),
+            v2::ZoneKind::Hand => (PublicZoneDestination::Hand, None, None),
+            v2::ZoneKind::Library => {
+                if dest.library_order.is_some()
+                    || !matches!(
+                        dest.owner,
+                        v2::ZoneOwner::Default | v2::ZoneOwner::ItsOwner | v2::ZoneOwner::You
+                    )
+                {
+                    return Ok(None);
+                }
+                let placement = match dest.library_position {
+                    Some(v2::LibraryPosition::Bottom) => {
+                        Some(spellwake_engine::program::LibraryPlacement::Bottom)
+                    }
+                    Some(v2::LibraryPosition::Top) => {
+                        Some(spellwake_engine::program::LibraryPlacement::Top)
+                    }
+                    _ => return Ok(None),
+                };
+                (PublicZoneDestination::Library, None, placement)
+            }
+            v2::ZoneKind::Battlefield => (PublicZoneDestination::Battlefield, None, None),
+            _ => return Ok(None),
+        },
+        v2::Effect::ZoneOp {
+            op: v2::ZoneOpKind::Shuffle,
+            subject: dest_subj,
+            to: Some(dest),
+            ..
+        } if matches_replaced(dest_subj) && dest.zone == v2::ZoneKind::Library => {
+            (PublicZoneDestination::Library, None, None)
         }
         _ => return Ok(None),
     };
@@ -2097,14 +2219,16 @@ fn try_lower_zone_replacement(
         None
     };
 
-    let extra = if exile_counters.is_some() || followup_body.is_some() {
-        Some(ZoneReplacementExtra {
-            exile_counters,
-            followup_body,
-        })
-    } else {
-        None
-    };
+    let extra =
+        if exile_counters.is_some() || library_placement.is_some() || followup_body.is_some() {
+            Some(ZoneReplacementExtra {
+                exile_counters,
+                library_placement,
+                followup_body,
+            })
+        } else {
+            None
+        };
 
     Ok(Some((
         ZoneReplacementAbility {
@@ -2396,6 +2520,39 @@ fn lower_compound_damage_recipient(
                 "v2:replacement-damage-compound-recipient",
             ))
         }
+    }
+}
+
+fn register_damage_subject_target(
+    subj: &v2::SubjectRef,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    match subj {
+        v2::SubjectRef::TargetObject { .. } => {
+            let (bt, tc) = crate::v2_lowering::atoms::lower_subject_to_target(subj, ctx)?;
+            acc.register_target(bt, tc)?;
+            ctx.has_object_target = true;
+            Ok(())
+        }
+        v2::SubjectRef::AnyTarget => {
+            acc.register_target(BodyTarget::SINGLE_ANY_TARGET, v2::TargetCount::Exact(1))?;
+            ctx.has_object_target = true;
+            Ok(())
+        }
+        v2::SubjectRef::TargetPlayer {
+            opponent_only,
+            count,
+        } => {
+            acc.register_target(
+                BodyTarget::Player {
+                    opponents_only: *opponent_only,
+                },
+                *count,
+            )?;
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 

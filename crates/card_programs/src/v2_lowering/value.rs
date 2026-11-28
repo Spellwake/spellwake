@@ -129,6 +129,9 @@ pub(crate) fn lower_value_object_ref(
 ) -> LowerResult<ValueObjectRef> {
     match subject {
         v2::SubjectRef::SelfObject => Ok(ValueObjectRef::AbilitySource),
+        v2::SubjectRef::TargetObject { .. } if ctx.has_object_target => {
+            Ok(ValueObjectRef::TargetObject)
+        }
         v2::SubjectRef::Anaphora(anaph) => match anaph {
             v2::AnaphoraRef::EquippedCreature
             | v2::AnaphoraRef::EnchantedCreature
@@ -351,8 +354,8 @@ pub(crate) fn lower_value_expr(
                 Err(LoweringError::Unsupported("v2:value:speed-other-player"))
             }
         }
-        v2::ValueExpr::SnowManaSpent => Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::SnowManaSpentToCast,
+        v2::ValueExpr::SnowManaSpent => Ok(EngineValueExpr::EventValue(
+            EventValueKind::SnowManaSpentToCast,
         )),
         v2::ValueExpr::DistinctManaValues(zone) => {
             if zone.zone != v2::ZoneKind::Graveyard {
@@ -377,11 +380,11 @@ pub(crate) fn lower_value_expr(
             };
             Ok(EngineValueExpr::DistinctManaValuesInGraveyard(player))
         }
-        v2::ValueExpr::ManaPaidThisWay => Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::ManaSpentToCast,
-        )),
-        v2::ValueExpr::ColorsOfManaSpent => Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::ColorsSpentToCast,
+        v2::ValueExpr::ManaPaidThisWay => {
+            Ok(EngineValueExpr::EventValue(EventValueKind::ManaSpentToCast))
+        }
+        v2::ValueExpr::ColorsOfManaSpent => Ok(EngineValueExpr::EventValue(
+            EventValueKind::ColorsSpentToCast,
         )),
         v2::ValueExpr::TargetsBeyondFirst => {
             Err(LoweringError::Unsupported("v2:value:targets-beyond-first"))
@@ -486,8 +489,16 @@ fn lower_prior_action_count(
     ctx: &LowerCtx<'_>,
 ) -> LowerResult<EngineValueExpr> {
     match kind {
-        v2::PriorActionKind::ThatMany
-        | v2::PriorActionKind::ExiledThisWay
+        v2::PriorActionKind::ThatMany => {
+            if ctx.last_moved_binding.is_none()
+                && let Some(ev) = ctx.trigger_damage_event
+            {
+                Ok(EngineValueExpr::EventValue(ev))
+            } else {
+                Ok(EngineValueExpr::EventValue(EventValueKind::LastActionCount))
+            }
+        }
+        v2::PriorActionKind::ExiledThisWay
         | v2::PriorActionKind::SacrificedThisWay
         | v2::PriorActionKind::DiscardedThisWay
         | v2::PriorActionKind::RevealedThisWay
@@ -925,8 +936,8 @@ fn lower_mana_spent_from_filter(filter: &v2::ObjectFilter) -> LowerResult<Engine
         && filter.subtypes[0].eq_ignore_ascii_case("treasure")
         && filter.required_supertypes.is_empty()
     {
-        return Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::TreasureManaSpentToCast,
+        return Ok(EngineValueExpr::EventValue(
+            EventValueKind::TreasureManaSpentToCast,
         ));
     }
     if filter.subtypes.is_empty()
@@ -934,8 +945,8 @@ fn lower_mana_spent_from_filter(filter: &v2::ObjectFilter) -> LowerResult<Engine
         && filter.all_types.is_empty()
         && filter.any_types.is_empty()
     {
-        return Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::SnowManaSpentToCast,
+        return Ok(EngineValueExpr::EventValue(
+            EventValueKind::SnowManaSpentToCast,
         ));
     }
     if filter.subtypes.is_empty()
@@ -943,8 +954,8 @@ fn lower_mana_spent_from_filter(filter: &v2::ObjectFilter) -> LowerResult<Engine
         && ((filter.all_types == ast::CardTypeMask::CREATURE && filter.any_types.is_empty())
             || (filter.any_types == ast::CardTypeMask::CREATURE && filter.all_types.is_empty()))
     {
-        return Ok(EngineValueExpr::SourceState(
-            SourceStateExpr::CreatureManaSpentToCast,
+        return Ok(EngineValueExpr::EventValue(
+            EventValueKind::CreatureManaSpentToCast,
         ));
     }
 

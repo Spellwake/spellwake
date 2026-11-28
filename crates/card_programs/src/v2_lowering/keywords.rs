@@ -51,7 +51,7 @@ use spellwake_oracle_compiler::ast::{CardTypeMask as AstCardTypeMask, ColorArity
 use spellwake_oracle_compiler::v2::ir as v2;
 
 use crate::v2_lowering::{
-    atoms::lower_keyword_ability,
+    atoms::{lower_keyword_abilities, lower_keyword_ability},
     cost::{
         is_battlefield_only_source_cost, lower_activation_cost_parts, lower_extra_cost_atom,
         lower_v2_fixed_mana_cost, lower_v2_mana_cost, merge_mana_cost,
@@ -244,12 +244,14 @@ pub(crate) fn lower_granted_keywords(
 ) -> LowerResult<GrantedKeywordParts> {
     let mut out = GrantedKeywordParts::default();
     for kw in keywords {
-        if let Ok(ka) = lower_keyword_ability(kw, ctx) {
-            out.ability_change.granted_keywords.insert(ka);
-            if ka == KeywordAbility::Decayed {
-                out.ability_change
-                    .granted_combat_keywords
-                    .push(CombatTriggerKeyword::Decayed);
+        if let Ok(kas) = lower_keyword_abilities(kw, ctx) {
+            for ka in kas {
+                out.ability_change.granted_keywords.insert(ka);
+                if ka == KeywordAbility::Decayed {
+                    out.ability_change
+                        .granted_combat_keywords
+                        .push(CombatTriggerKeyword::Decayed);
+                }
             }
             continue;
         }

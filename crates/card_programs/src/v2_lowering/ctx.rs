@@ -14,7 +14,7 @@ use spellwake_engine::{
         Instruction, PlaneswalkerSubtype, ResolvingPlayer, SpellSubtype, TriggeredAbilityId,
         ZoneReplacementAbilityId,
     },
-    toolbox::BindingId,
+    toolbox::{BindingId, TagKey},
 };
 use spellwake_oracle_compiler::{Vocabulary as OracleVocabulary, v2::ir::TargetCount};
 
@@ -50,6 +50,7 @@ pub(crate) struct LowerCtx<'a> {
     pub next_binding_slot: u16,
     pub in_trigger: bool,
     pub trigger_has_participant: bool,
+    pub trigger_is_spell_cast: bool,
     pub trigger_damage_event: Option<EventValueKind>,
     pub has_object_target: bool,
     pub last_player_target: Option<ResolvingPlayer>,
@@ -59,6 +60,30 @@ pub(crate) struct LowerCtx<'a> {
     pub last_moved_binding: Option<BindingId>,
     pub last_unchosen_binding: Option<BindingId>,
     pub last_succeeded_binding: Option<BindingId>,
+    pub self_antecedent: bool,
+    pub attached_host_antecedent: bool,
+    pub delayed_tag_key: Option<(TagKey, Option<spellwake_engine::toolbox::QueryZone>)>,
+    pub is_spell_body: bool,
+    pub last_damage_was_self: bool,
+    /// True only when the current face has strictly one top-level ability and zero printed
+    /// keywords, static abilities, or replacements, so `CopyException::HasThisAbility` is
+    /// exact with `CopyExceptions::keep_abilities`.
+    pub has_only_single_ability: bool,
+    /// Binding holding the boolean result (`true` if a card was put into `zone`, `false` otherwise)
+    /// for downstream `"If you didn't put a card into <zone> this way"` checks.
+    pub last_zone_put: Option<(spellwake_oracle_compiler::v2::ir::ZoneKind, ZonePutTracker)>,
+    /// Nesting depth inside structured control flow (`BranchCondition`, etc.) where
+    /// `lower_step_with_target_dispatch` must NOT promote `acc` into `FixedTargetClause`.
+    pub inside_control_flow_depth: usize,
+}
+
+/// How `"If you didn't put a card into <zone> this way"` observes whether a prior zone move succeeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ZonePutTracker {
+    /// Read a dedicated `ExecEnv` bool binding pre-initialized to `false` before optional/branched moves.
+    BoundBool(BindingId),
+    /// Read `EventValueKind::LastActionSucceeded` set by `Instruction::SearchLibrary`.
+    LastActionSucceeded,
 }
 
 impl<'a> LowerCtx<'a> {
@@ -75,6 +100,7 @@ impl<'a> LowerCtx<'a> {
             next_binding_slot: 1,
             in_trigger: false,
             trigger_has_participant: true,
+            trigger_is_spell_cast: false,
             trigger_damage_event: None,
             has_object_target: false,
             last_player_target: None,
@@ -84,6 +110,14 @@ impl<'a> LowerCtx<'a> {
             last_moved_binding: None,
             last_unchosen_binding: None,
             last_succeeded_binding: None,
+            self_antecedent: false,
+            attached_host_antecedent: false,
+            delayed_tag_key: None,
+            is_spell_body: false,
+            last_damage_was_self: false,
+            has_only_single_ability: false,
+            last_zone_put: None,
+            inside_control_flow_depth: 0,
         }
     }
 
@@ -91,6 +125,12 @@ impl<'a> LowerCtx<'a> {
         self.has_object_target = false;
         self.last_player_target = None;
         self.trigger_damage_event = None;
+        self.self_antecedent = false;
+        self.attached_host_antecedent = false;
+        self.delayed_tag_key = None;
+        self.last_damage_was_self = false;
+        self.last_zone_put = None;
+        self.inside_control_flow_depth = 0;
     }
 
     pub fn alloc_mana_id(&mut self) -> ManaAbilityId {
@@ -303,7 +343,21 @@ impl BodyAcc {
                 self.target_bounds = Some((n, n));
             }
             TargetCount::UpTo(1) => {
-                self.up_to_one = true;
+                if matches!(
+                    target,
+                    BodyTarget::Object {
+                        zone: spellwake_engine::program::TargetZone::OwnGraveyard
+                            | spellwake_engine::program::TargetZone::AnyGraveyard { .. }
+                            | spellwake_engine::program::TargetZone::Exile {
+                                owned_flashback_only: false
+                            },
+                        ..
+                    }
+                ) {
+                    self.target_bounds = Some((0, 1));
+                } else {
+                    self.up_to_one = true;
+                }
             }
             TargetCount::UpTo(n) if n > 1 => {
                 self.target_bounds = Some((0, n));

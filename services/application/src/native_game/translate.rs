@@ -2371,7 +2371,8 @@ impl NativeScope<'_> {
             (RuleFrame::EntryChoice(frame), PlayerChoice::Option { option })
                 if matches!(
                     frame.rule(),
-                    spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(_)
+                    spellwake_engine::land::EntryTap::AlwaysChooseColor
+                        | spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(_)
                         | spellwake_engine::land::EntryTap::ChooseColor
                         | spellwake_engine::land::EntryTap::ChooseColorExcept(_)
                 ) =>
@@ -2482,7 +2483,8 @@ impl NativeScope<'_> {
             (RuleFrame::TokenEntryChoice(frame), PlayerChoice::Option { option })
                 if matches!(
                     frame.rule(),
-                    spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(_)
+                    spellwake_engine::land::EntryTap::AlwaysChooseColor
+                        | spellwake_engine::land::EntryTap::AlwaysChooseColorExcept(_)
                         | spellwake_engine::land::EntryTap::ChooseColor
                         | spellwake_engine::land::EntryTap::ChooseColorExcept(_)
                 ) =>

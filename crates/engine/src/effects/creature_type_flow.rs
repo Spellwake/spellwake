@@ -450,7 +450,7 @@ impl EffectWindow {
                 let ability_source = if bound_filter.excludes_ability_source() {
                     Some(resolve_ability_source().ok_or(EffectError::InconsistentProgram)?)
                 } else {
-                    None
+                    resolve_ability_source()
                 };
                 let opponents = self
                     .combat_rules
@@ -654,7 +654,7 @@ impl EffectWindow {
                 let ability_source = if filter.excludes_ability_source() {
                     Some(resolve_ability_source().ok_or(EffectError::InconsistentProgram)?)
                 } else {
-                    None
+                    resolve_ability_source()
                 };
                 let evaluated = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
@@ -682,7 +682,7 @@ impl EffectWindow {
                 let ability_source = if filter.excludes_ability_source() {
                     Some(resolve_ability_source().ok_or(EffectError::InconsistentProgram)?)
                 } else {
-                    None
+                    resolve_ability_source()
                 };
                 let evaluated = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
@@ -1038,7 +1038,7 @@ impl EffectWindow {
                         resolve_ability_source().ok_or(EffectError::InconsistentProgram)?;
                     Some(source)
                 } else {
-                    None
+                    resolve_ability_source()
                 };
                 let excluded = BTreeSet::new();
                 match *zone {
@@ -1337,7 +1337,7 @@ impl EffectWindow {
                         resolve_ability_source().ok_or(EffectError::InconsistentProgram)?;
                     Some(source)
                 } else {
-                    None
+                    resolve_ability_source()
                 };
                 let evaluated = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
@@ -2787,6 +2787,18 @@ impl EffectWindow {
                 PlayerStatExpr::CardsExiledThisTurn => {
                     Ok(i64::from(self.characteristics.cards_exiled_this_turn).into())
                 }
+                PlayerStatExpr::SpellsCastLastTurn => Ok(self
+                    .characteristics
+                    .spells_cast_last_turn
+                    .values()
+                    .fold(RulesInteger::from(0), |acc, n| acc.plus(n))),
+                PlayerStatExpr::MaxPlayerSpellsCastLastTurn => Ok(self
+                    .characteristics
+                    .spells_cast_last_turn
+                    .values()
+                    .max()
+                    .cloned()
+                    .unwrap_or_else(|| 0.into())),
                 PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
                     filter,
                     from_battlefield_only,

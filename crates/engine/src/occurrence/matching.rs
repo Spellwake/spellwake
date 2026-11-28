@@ -2994,10 +2994,21 @@ pub(super) fn match_trigger_event(
                         ObjectFilter::Either(_, _) => false,
                     };
                     if subtype_ok {
+                        let related = match damage.source.id() {
+                            crate::damage::DamageSourceId::Object(dealer) => {
+                                TriggerRelated::CombatDamageToPlayer {
+                                    source: dealer,
+                                    amount: damage.amount.clone(),
+                                    player: controller,
+                                    attempt: damage.attempt,
+                                }
+                            }
+                            other => TriggerRelated::DamageSource(other),
+                        };
                         members.push(TriggerCauseMember {
                             occurrence: occurrence.id,
                             related_player: Some(controller),
-                            related: TriggerRelated::DamageSource(damage.source.id()),
+                            related,
                         });
                     }
                 }
@@ -3194,10 +3205,21 @@ pub(super) fn match_trigger_event(
                 },
                 DamageTriggerRecipient::ControllerOrPlaneswalker => match damage.target {
                     DamageRecipient::Player(player) if player == controller => {
+                        let related = match damage.source.id() {
+                            crate::damage::DamageSourceId::Object(dealer) => {
+                                TriggerRelated::CombatDamageToPlayer {
+                                    source: dealer,
+                                    amount: damage.amount.clone(),
+                                    player: controller,
+                                    attempt: damage.attempt,
+                                }
+                            }
+                            other => TriggerRelated::DamageSource(other),
+                        };
                         members.push(TriggerCauseMember {
                             occurrence: occurrence.id,
                             related_player: Some(controller),
-                            related: TriggerRelated::DamageSource(damage.source.id()),
+                            related,
                         });
                     }
                     DamageRecipient::Planeswalker(id)
@@ -4968,8 +4990,25 @@ fn matches_cast_spell_filter(
     if !zone_ok {
         return false;
     }
-    if filter.target_shape == SpellTargetShape::TargetingOnlySource {
-        let targeting_only = after
+    let target_shape_ok = match filter.target_shape {
+        SpellTargetShape::Any => true,
+        SpellTargetShape::SingleTarget => after
+            .window
+            .entries()
+            .iter()
+            .find(|entry| entry.id() == cast.entry())
+            .is_some_and(|entry| entry.targets().targets().len() == 1),
+        SpellTargetShape::TargetingPlayer => after
+            .window
+            .entries()
+            .iter()
+            .find(|entry| entry.id() == cast.entry())
+            .is_some_and(|entry| {
+                entry.targets().targets().iter().any(|target| {
+                    matches!(target.choice().target, crate::targets::TargetRef::Player(_))
+                })
+            }),
+        SpellTargetShape::TargetingOnlySource => after
             .window
             .entries()
             .iter()
@@ -4981,10 +5020,50 @@ fn matches_cast_spell_filter(
                         target.choice().target
                             == crate::targets::TargetRef::Object(source.object.id())
                     })
-            });
-        if !targeting_only {
-            return false;
+            }),
+        SpellTargetShape::TargetingObject(obj_filter) => {
+            let full_filter = obj_filter.to_object_filter();
+            let ctx = crate::characteristics::WorldEvalCtx {
+                active_player: after.window.active_player(),
+                step: after.step,
+                participants: after.window.participants(),
+                life: Some(after.life),
+                combat: after.combat,
+                cards: after.cards,
+                programs: after.programs,
+                state: after.characteristics,
+                objects: &after.evaluated.objects,
+                source: source.object.id(),
+                controller,
+                name_rules: after.name_rules,
+                trigger_subject: Some(cast.spell().object.id()),
+                related_player: Some(cast.controller()),
+                defending_player: None,
+            };
+            after
+                .window
+                .entries()
+                .iter()
+                .find(|entry| entry.id() == cast.entry())
+                .is_some_and(|entry| {
+                    entry.targets().targets().iter().any(|target| {
+                        matches!(
+                            target.choice().target,
+                            crate::targets::TargetRef::Object(obj_id)
+                                if after.evaluated.get(obj_id).is_some_and(|p| {
+                                    crate::characteristics::matches_world_object_filter(
+                                        &ctx,
+                                        full_filter,
+                                        p,
+                                    )
+                                })
+                        )
+                    })
+                })
         }
+    };
+    if !target_shape_ok {
+        return false;
     }
     if let Some(ordinal) = filter.ordinal_this_turn
         && !cast

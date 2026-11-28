@@ -349,6 +349,10 @@ pub enum PlayerStatExpr {
     ActivatedGraveyardAbilityThisTurn(ResolvingPlayer),
     /// Total life lost by `player` during the previous turn.
     PlayerLifeLostLastTurn(ResolvingPlayer),
+    /// Total spells cast by all players during the previous turn.
+    SpellsCastLastTurn,
+    /// Maximum spells cast by any single player during the previous turn.
+    MaxPlayerSpellsCastLastTurn,
     /// Total cards put into exile this turn.
     CardsExiledThisTurn,
     /// Number of cards matching `filter` put into a graveyard this turn.
@@ -2476,7 +2480,9 @@ impl ValueExpr {
                 | PlayerStatExpr::OtherSpellsCastManaValueThisTurn
                 | PlayerStatExpr::OtherSpellsCastThisTurn
                 | PlayerStatExpr::MaxPlayerLifeLostThisTurn
-                | PlayerStatExpr::CardsExiledThisTurn => Ok(()),
+                | PlayerStatExpr::CardsExiledThisTurn
+                | PlayerStatExpr::SpellsCastLastTurn
+                | PlayerStatExpr::MaxPlayerSpellsCastLastTurn => Ok(()),
                 PlayerStatExpr::SpellsCastMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::GraveyardArrivalsMatchingThisTurn { filter, .. }
                 | PlayerStatExpr::SacrificedMatchingThisTurn { filter, .. }

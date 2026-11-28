@@ -1645,6 +1645,7 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
         ZoneReplacementAbilityId(1),
         ZoneReplacementExtra {
             exile_counters: Some((CounterKind::Void, 1)),
+            library_placement: None,
             followup_body: None,
         },
     );

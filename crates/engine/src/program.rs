@@ -342,7 +342,9 @@ pub use object_filter::{
     ObjectFilterFlags, PowerFilter, SingleSubtype, SourceRelation, SubtypeFilter, SubtypeList,
     SupertypeMask, ToughnessFilter,
 };
-pub use spell_filter::{SpellCastZoneFilter, SpellFilter, SpellSpecialFilter, SpellTargetShape};
+pub use spell_filter::{
+    SpellCastZoneFilter, SpellFilter, SpellSpecialFilter, SpellTargetObjectFilter, SpellTargetShape,
+};
 pub use trigger_spec::{
     AttackTriggerMode, BlockTriggerKind, CastEntryKind, CounterTriggerKind, DamageTriggerRecipient,
     DiesTriggerMode, PlanarTriggerEvent, PlayerTriggerAction, StateThresholdKind,

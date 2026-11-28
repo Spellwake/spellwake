@@ -14,15 +14,16 @@ use spellwake_engine::{
     mana::ManaCost,
     program::{
         BodyTarget, CardType, DelayedReturnTiming, ExecutableBody, Instruction, LibrarySearch,
-        MoveSubjectRef, ObjectFilter as EngineObjectFilter, ResolvingPlayer,
+        MoveSubjectRef, ObjectFilter as EngineObjectFilter, PlayerStatExpr, ResolvingPlayer,
         SearchBattlefieldPostEntry, SearchCardMatcher, SearchCount, SearchDestination,
         SearchExileLink, SearchSource, TargetZone, ValueExpr as EngineValueExpr,
     },
     toolbox::{
-        BindingId, ChoiceCategory, CounterDestination, DrawCardsSpec, GraveyardSemantics,
-        LibraryOrderPos, ObjectQuery, PlayerSelector, PromptChoiceSpec, PromptDomain, QuerySlice,
-        QueryZone, SelectionConstraint, StackOpKind, StackOpSpec, StackTargetSelector, TagKey,
-        ZoneDest as EngineZoneDest, ZoneOpSpec, ZoneSelection,
+        BindingId, ChoiceCategory, CounterDestination, CounterOp, DrawCardsSpec,
+        GraveyardSemantics, LibraryOrderPos, MutateObjectSpec, ObjectMutation, ObjectQuery,
+        PlayerSelector, PromptChoiceSpec, PromptDomain, QuerySlice, QueryZone, SelectionConstraint,
+        StackOpKind, StackOpSpec, StackTargetSelector, TagKey, ZoneDest as EngineZoneDest,
+        ZoneOpSpec, ZoneSelection,
     },
 };
 use spellwake_oracle_compiler::{ast, v2::ir as v2};
@@ -50,6 +51,21 @@ pub(crate) fn lower_zone_op(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    if actor == v2::PlayerRef::AnyOpponent {
+        effect::emit_choose_any_opponent(acc, ctx)?;
+        return lower_zone_op(
+            v2::PlayerRef::ChosenPlayer,
+            op,
+            subject,
+            from,
+            to,
+            modifiers,
+            except,
+            count,
+            acc,
+            ctx,
+        );
+    }
     match actor {
         v2::PlayerRef::TargetPlayer => {
             acc.register_target(BodyTarget::SINGLE_PLAYER, v2::TargetCount::Exact(1))?;
@@ -251,8 +267,8 @@ fn lower_move(
     let Some(dest_ir) = to else {
         return Err(LoweringError::Unsupported("v2:zone-move-missing-dest"));
     };
-    let destination = atoms::lower_zone_dest(dest_ir, modifiers, acc, ctx)?;
     let built = build_source_and_selection(actor, subject, from, except, count, false, acc, ctx)?;
+    let destination = atoms::lower_zone_dest(dest_ir, modifiers, acc, ctx)?;
     emit_zone_op_with_prior(built, destination, None, acc, ctx)
 }
 
@@ -300,9 +316,14 @@ fn lower_exile(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
-    if counters.is_some() {
-        return Err(LoweringError::Unsupported("v2:exile-with-counters"));
-    }
+    let lowered_counters = if let Some((ck, val_expr)) = counters {
+        effect::register_value_expr_player_targets(val_expr, acc, ctx)?;
+        let kind = atoms::lower_counter_kind(ck)?;
+        let amount = value::lower_value_expr(val_expr, ctx)?;
+        Some((kind, amount))
+    } else {
+        None
+    };
     if modifiers.tapped
         || modifiers.attacking
         || modifiers.transformed
@@ -325,7 +346,17 @@ fn lower_exile(
         delayed_return: None,
         link_group: None,
     };
-    emit_zone_op_with_prior(built, destination, None, acc, ctx)
+    emit_zone_op_with_prior(built, destination, None, acc, ctx)?;
+    if let Some((kind, amount)) = lowered_counters {
+        let moved_slot = ctx
+            .last_moved_binding
+            .ok_or(LoweringError::Unsupported("v2:exile-with-counters"))?;
+        acc.push(Instruction::MutateObject(Box::new(MutateObjectSpec::all(
+            ObjectQuery::Bound(moved_slot),
+            ObjectMutation::Counters(CounterOp::Add { kind, amount }),
+        ))));
+    }
+    Ok(())
 }
 
 /// Lower `Effect::ZoneOp` (`Exile`) wrapped in `Duration::UntilSourceLeaves` (e.g. Banishing Light).
@@ -894,10 +925,117 @@ fn lower_search_library(
     let source = lower_search_source(from, acc)?;
     let (matcher, subj_count) = lower_search_matcher(subject, acc, ctx)?;
     let eff_count = count.or(subj_count);
-    let search_count = lower_search_count(eff_count, exact, acc, ctx)?;
     let destination = lower_search_destination(to, modifiers)?;
 
     if is_multi_player_ref(actor) {
+        let search_count = lower_search_count(
+            eff_count,
+            exact,
+            source,
+            ResolvingPlayer::LoopPlayer,
+            acc,
+            ctx,
+        )?;
+        let group_sel = atoms::lower_player_ref(actor, acc, ctx)?;
+        let dest_zone = search_dest_zone_kind(destination);
+        let search = LibrarySearch {
+            searcher: ResolvingPlayer::LoopPlayer,
+            source,
+            matcher,
+            mana_value: None,
+            count: search_count,
+            pair_constraint: None,
+            destination,
+            reveal,
+        };
+        acc.push(Instruction::ForEachPlayerQuery {
+            selector: Box::new(group_sel),
+            bind_player: BindingId::LOOP_PLAYER,
+            body: Box::new(ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::SearchLibrary {
+                    filter: Box::new(search),
+                }],
+            )),
+        });
+        if let Some(zk) = dest_zone {
+            ctx.last_zone_put = Some((
+                zk,
+                crate::v2_lowering::ctx::ZonePutTracker::LastActionSucceeded,
+            ));
+        }
+        return Ok(());
+    }
+
+    let searcher = atoms::lower_resolving_player(actor, acc, ctx)?;
+    let search_count = lower_search_count(eff_count, exact, source, searcher, acc, ctx)?;
+    let dest_zone = search_dest_zone_kind(destination);
+    acc.push(Instruction::SearchLibrary {
+        filter: Box::new(LibrarySearch {
+            searcher,
+            source,
+            matcher,
+            mana_value: None,
+            count: search_count,
+            pair_constraint: None,
+            destination,
+            reveal,
+        }),
+    });
+    if let Some(zk) = dest_zone {
+        ctx.last_zone_put = Some((
+            zk,
+            crate::v2_lowering::ctx::ZonePutTracker::LastActionSucceeded,
+        ));
+    }
+    Ok(())
+}
+
+/// Lower a fused split-destination library search (e.g. Kodama's Reach / Cultivate /
+/// Flare of Cultivation) using an explicit engine [`SearchDestination`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_split_search_library(
+    actor: v2::PlayerRef,
+    reveal: bool,
+    exact: bool,
+    subject: &v2::SubjectRef,
+    from: &[v2::ZoneRef],
+    except: Option<&v2::SubjectRef>,
+    count: Option<&v2::CountSpec>,
+    destination: SearchDestination,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    if actor == v2::PlayerRef::AnyOpponent {
+        effect::emit_choose_any_opponent(acc, ctx)?;
+        return lower_split_search_library(
+            v2::PlayerRef::ChosenPlayer,
+            reveal,
+            exact,
+            subject,
+            from,
+            except,
+            count,
+            destination,
+            acc,
+            ctx,
+        );
+    }
+    if except.is_some() {
+        return Err(LoweringError::Unsupported("v2:search-library-with-except"));
+    }
+    let source = lower_search_source(from, acc)?;
+    let (matcher, subj_count) = lower_search_matcher(subject, acc, ctx)?;
+    let eff_count = count.or(subj_count);
+    if is_multi_player_ref(actor) {
+        let search_count = lower_search_count(
+            eff_count,
+            exact,
+            source,
+            ResolvingPlayer::LoopPlayer,
+            acc,
+            ctx,
+        )?;
         let group_sel = atoms::lower_player_ref(actor, acc, ctx)?;
         let search = LibrarySearch {
             searcher: ResolvingPlayer::LoopPlayer,
@@ -921,8 +1059,8 @@ fn lower_search_library(
         });
         return Ok(());
     }
-
     let searcher = atoms::lower_resolving_player(actor, acc, ctx)?;
+    let search_count = lower_search_count(eff_count, exact, source, searcher, acc, ctx)?;
     acc.push(Instruction::SearchLibrary {
         filter: Box::new(LibrarySearch {
             searcher,
@@ -1115,7 +1253,17 @@ fn lower_reveal(
             ctx,
         );
     }
-    let built = build_source_and_selection(actor, subject, from, except, count, false, acc, ctx)?;
+    let hidden_prompt = from.iter().any(|z| z.zone == v2::ZoneKind::Hand)
+        || matches!(
+            subject,
+            v2::SubjectRef::Counted { filter, .. }
+                | v2::SubjectRef::Group(filter)
+                | v2::SubjectRef::Each(filter)
+                | v2::SubjectRef::All(filter)
+                if filter.zones.iter().any(|z| z.zone == v2::ZoneKind::Hand)
+        );
+    let built =
+        build_source_and_selection(actor, subject, from, except, count, hidden_prompt, acc, ctx)?;
     emit_zone_op_with_prior(built, EngineZoneDest::RevealOnly, None, acc, ctx)
 }
 
@@ -1484,10 +1632,13 @@ fn build_source_and_selection(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<BuiltZoneSource> {
     if let v2::SubjectRef::OneOfThem(val_expr) = subject {
-        let src_slot = ctx
-            .last_moved_binding
-            .ok_or(LoweringError::Unsupported("v2:subject:one-of-them"))?;
-        let mut source = ObjectQuery::Bound(src_slot);
+        let mut source = if let Some(src_slot) = ctx.last_moved_binding {
+            ObjectQuery::Bound(src_slot)
+        } else if acc.target_set && atoms::target_is_object_like(acc.target) {
+            ObjectQuery::Targets
+        } else {
+            return Err(LoweringError::Unsupported("v2:subject:one-of-them"));
+        };
         if let Some(exc) = except {
             let exc_q = atoms::lower_subject_to_query(exc, acc, ctx)?;
             source = ObjectQuery::difference(source, exc_q);
@@ -1535,7 +1686,11 @@ fn build_source_and_selection(
         let (f_clean, is_random) = strip_at_random(&f3);
         let from_prior = among_prior || prior_action_bound;
 
-        if chosen_player.is_some() || from_prior || is_random {
+        if chosen_player.is_some()
+            || from_prior
+            || is_random
+            || matches!(subject, v2::SubjectRef::Counted { .. })
+        {
             effect::register_filter_player_targets(&f_clean, acc, ctx)?;
             let ef = filter::lower_object_filter(&f_clean, ctx)?;
             let prior_source_binding = if from_prior {
@@ -1693,6 +1848,7 @@ fn emit_zone_op_with_prior(
                 option_branches: Vec::new(),
             })));
 
+            let dest_zone = engine_dest_zone_kind(&destination);
             let moved_id = ctx.alloc_binding()?;
             let ok_id = ctx.alloc_binding()?;
             let mut move_spec = ZoneOpSpec::move_all(ObjectQuery::Bound(chosen_slot), destination);
@@ -1715,6 +1871,12 @@ fn emit_zone_op_with_prior(
             ctx.last_moved_binding = Some(moved_id);
             ctx.last_succeeded_binding = Some(ok_id);
             ctx.last_unchosen_binding = Some(rest_slot);
+            if let Some(zk) = dest_zone {
+                ctx.last_zone_put = Some((
+                    zk,
+                    crate::v2_lowering::ctx::ZonePutTracker::BoundBool(ok_id),
+                ));
+            }
             Ok(())
         }
         ZoneSelection::All => {
@@ -1970,6 +2132,28 @@ fn scan_zones_with_filter(
     Ok(ObjectQuery::Union(parts))
 }
 
+fn engine_dest_zone_kind(dest: &EngineZoneDest) -> Option<v2::ZoneKind> {
+    match dest {
+        EngineZoneDest::Hand => Some(v2::ZoneKind::Hand),
+        EngineZoneDest::Battlefield { .. } => Some(v2::ZoneKind::Battlefield),
+        EngineZoneDest::Graveyard { .. } => Some(v2::ZoneKind::Graveyard),
+        EngineZoneDest::Exile { .. } => Some(v2::ZoneKind::Exile),
+        EngineZoneDest::Library { .. } => Some(v2::ZoneKind::Library),
+        _ => None,
+    }
+}
+
+fn search_dest_zone_kind(dest: SearchDestination) -> Option<v2::ZoneKind> {
+    match dest {
+        SearchDestination::Hand => Some(v2::ZoneKind::Hand),
+        SearchDestination::Battlefield { .. } => Some(v2::ZoneKind::Battlefield),
+        SearchDestination::Graveyard => Some(v2::ZoneKind::Graveyard),
+        SearchDestination::Exile { .. } => Some(v2::ZoneKind::Exile),
+        SearchDestination::LibraryTop => Some(v2::ZoneKind::Library),
+        _ => None,
+    }
+}
+
 fn emit_zone_op(
     source: ObjectQuery,
     selection: ZoneSelection,
@@ -1978,6 +2162,7 @@ fn emit_zone_op(
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<()> {
+    let dest_zone = engine_dest_zone_kind(&destination);
     let moved_id = ctx.alloc_binding()?;
     let ok_id = ctx.alloc_binding()?;
     let unchosen_id = if matches!(
@@ -1996,6 +2181,12 @@ fn emit_zone_op(
     spec.shuffle_library = shuffle_library;
 
     ctx.last_moved_binding = Some(moved_id);
+    if let Some(zk) = dest_zone {
+        ctx.last_zone_put = Some((
+            zk,
+            crate::v2_lowering::ctx::ZonePutTracker::BoundBool(ok_id),
+        ));
+    }
     ctx.last_succeeded_binding = Some(ok_id);
     if let Some(uid) = unchosen_id {
         ctx.last_unchosen_binding = Some(uid);
@@ -2528,6 +2719,8 @@ fn try_pure_land_subtypes_matcher(f: &v2::ObjectFilter) -> Option<SearchCardMatc
 fn lower_search_count(
     count: Option<&v2::CountSpec>,
     exact: bool,
+    source: SearchSource,
+    searcher: ResolvingPlayer,
     acc: &mut BodyAcc,
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<SearchCount> {
@@ -2539,7 +2732,18 @@ fn lower_search_count(
         });
     };
     if cs.any_number {
-        return Err(LoweringError::Unsupported("v2:search-library-any-number"));
+        let lib_owner = match source {
+            SearchSource::OwnLibrary => searcher,
+            SearchSource::TargetOpponentLibrary | SearchSource::TargetPlayerLibrary => {
+                ResolvingPlayer::TargetPlayer
+            }
+            _ => {
+                return Err(LoweringError::Unsupported("v2:search-library-any-number"));
+            }
+        };
+        return Ok(SearchCount::UpToExpr(Box::new(
+            EngineValueExpr::PlayerStat(PlayerStatExpr::PlayerLibrarySize(lib_owner)),
+        )));
     }
     if exact && !cs.up_to {
         let Some(val) = value::lower_value_const(&cs.count) else {

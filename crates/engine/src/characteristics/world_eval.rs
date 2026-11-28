@@ -937,6 +937,71 @@ fn matches_world_clause(
     {
         return false;
     }
+    if clause.flags.contains(ObjectFilterFlags::ATTACHED_TO_SOURCE)
+        && p.attached_to != Some(TargetRef::Object(ctx.source))
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::ATTACHED_TO_TRIGGER)
+        && !ctx
+            .trigger_subject
+            .is_some_and(|tid| p.attached_to == Some(TargetRef::Object(tid)))
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::SHARES_COLOR_WITH_TRIGGER)
+        && !ctx
+            .trigger_subject
+            .and_then(|tid| ctx.objects.get(&tid))
+            .is_some_and(|tv| {
+                p.current_colors
+                    .iter()
+                    .any(|c| tv.current_colors.contains(c))
+            })
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TRIGGER)
+        && !ctx
+            .trigger_subject
+            .and_then(|tid| ctx.objects.get(&tid))
+            .is_some_and(|tv| {
+                p.current_creature_subtypes
+                    .iter()
+                    .any(|st| tv.current_creature_subtypes.contains(st))
+            })
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TRIGGER)
+        && !ctx
+            .trigger_subject
+            .and_then(|tid| ctx.objects.get(&tid))
+            .is_some_and(|tv| p.current_types.iter().any(|t| tv.current_types.contains(t)))
+    {
+        return false;
+    }
+    if clause
+        .flags
+        .contains(ObjectFilterFlags::SAME_NAME_AS_TRIGGER)
+        && !ctx
+            .trigger_subject
+            .and_then(|tid| ctx.objects.get(&tid))
+            .is_some_and(|tv| {
+                ctx.name_rules
+                    .shares_name(&p.current_names, &tv.current_names)
+            })
+    {
+        return false;
+    }
     if clause
         .flags
         .contains(ObjectFilterFlags::SHARES_COLOR_WITH_TARGET)
@@ -954,6 +1019,15 @@ fn matches_world_clause(
         || clause
             .flags
             .contains(ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED)
+        || clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_LAST_MOVED)
+        || clause
+            .flags
+            .contains(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_LAST_MOVED)
+        || clause
+            .flags
+            .contains(ObjectFilterFlags::SAME_NAME_AS_LAST_MOVED)
     {
         return false;
     }
@@ -1140,7 +1214,7 @@ fn matches_world_clause(
     static_clause.matches_static_characteristics(p, &excluded, || object_mana_value(ctx, p))
 }
 
-pub(super) fn matches_world_object_filter(
+pub(crate) fn matches_world_object_filter(
     ctx: &WorldEvalCtx<'_>,
     filter: ObjectFilter,
     p: &ObjectCharacteristics,
@@ -2773,6 +2847,18 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
             PlayerStatExpr::CardsExiledThisTurn => {
                 i64::from(ctx.state.cards_exiled_this_turn).into()
             }
+            PlayerStatExpr::SpellsCastLastTurn => ctx
+                .state
+                .spells_cast_last_turn
+                .values()
+                .fold(RulesInteger::from(0), |acc, n| acc.plus(n)),
+            PlayerStatExpr::MaxPlayerSpellsCastLastTurn => ctx
+                .state
+                .spells_cast_last_turn
+                .values()
+                .max()
+                .cloned()
+                .unwrap_or_else(|| 0.into()),
             PlayerStatExpr::GraveyardArrivalsMatchingThisTurn {
                 filter,
                 from_battlefield_only,

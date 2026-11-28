@@ -397,7 +397,7 @@ pub struct ZoneReplacementBatch {
     copies: BTreeMap<ObjectId, entry_copy::EntryCopyResult>,
     entry_opponents: BTreeMap<SeatId, Vec<SeatId>>,
     entry_history: Vec<(ObjectId, ZoneReplacementReply)>,
-    ordered_library_placement: Option<crate::program::LibraryPlacement>,
+    pub(super) ordered_library_placement: Option<crate::program::LibraryPlacement>,
     cause: EventCause,
     intents: Vec<ZoneMoveIntent>,
     window_revision: u64,
@@ -2576,6 +2576,52 @@ impl EffectWindow {
             return Err(EffectError::InconsistentSelectionWork);
         }
         Ok(plan)
+    }
+
+    /// Resolve the explicit library placement (e.g. `Bottom` or `Top`, without shuffling) for an
+    /// object whose zone move was replaced into `PublicZoneDestination::Library`.
+    pub(super) fn library_placement_for(
+        &self,
+        batch: &ZoneReplacementBatch,
+        id: ObjectId,
+    ) -> Option<crate::program::LibraryPlacement> {
+        for step in batch.history().iter().rev() {
+            if step.optional == Some(ZoneOptionalAnswer::Decline)
+                || step.application.event.before() != id
+            {
+                continue;
+            }
+            let Some(source) = batch.sources().get(&step.application.effect) else {
+                continue;
+            };
+            if source.instance.unearth
+                || source.instance.madness
+                || source.instance.created.is_some()
+            {
+                continue;
+            }
+            let placement = batch
+                .evaluated()
+                .get(source.instance.source)
+                .and_then(|view| {
+                    view.printed_text
+                        .zone_replacement_extras
+                        .get(&source.instance.ability)
+                })
+                .or_else(|| {
+                    self.copiable_program(source.instance.source)
+                        .and_then(|program| {
+                            program
+                                .zone_replacement_extras
+                                .get(&source.instance.ability)
+                        })
+                })
+                .and_then(|extra| extra.library_placement);
+            if placement.is_some() {
+                return placement;
+            }
+        }
+        batch.ordered_library_placement
     }
 
     pub(super) fn apply_zone_replacement_extras_from_movements(

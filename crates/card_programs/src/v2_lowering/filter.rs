@@ -406,6 +406,24 @@ fn apply_exclude_self(clause: &mut ObjectClause, in_trigger: bool) -> LowerResul
     Ok(())
 }
 
+fn resolve_subtype_or_batch(
+    raw: &str,
+    type_hint: ast::CardTypeMask,
+    ctx: &LowerCtx<'_>,
+) -> LowerResult<Vec<SingleSubtype>> {
+    if raw.eq_ignore_ascii_case("outlaw") {
+        let mut out = Vec::with_capacity(5);
+        for member in ["Assassin", "Mercenary", "Pirate", "Rogue", "Warlock"] {
+            let ct = ctx
+                .lookup_creature_type(member)
+                .ok_or(LoweringError::Unsupported("v2:filter:unknown-subtype"))?;
+            out.push(SingleSubtype::Creature(ct));
+        }
+        return Ok(out);
+    }
+    Ok(vec![resolve_single_subtype(raw, type_hint, ctx)?])
+}
+
 fn apply_subtypes_to_clause(
     clause: &mut ObjectClause,
     filter: &v2::ObjectFilter,
@@ -413,26 +431,37 @@ fn apply_subtypes_to_clause(
 ) -> LowerResult<()> {
     let type_hint = filter.all_types.union(filter.any_types);
     let mut req_subs: Vec<SingleSubtype> = Vec::with_capacity(filter.subtypes.len());
+    let mut effective_match_any = filter.subtypes_match_any;
     for raw in &filter.subtypes {
-        let sub = resolve_single_subtype(raw, type_hint, ctx)?;
-        if !req_subs.contains(&sub) {
-            req_subs.push(sub);
+        let expanded = resolve_subtype_or_batch(raw, type_hint, ctx)?;
+        if expanded.len() > 1 {
+            if filter.subtypes.len() == 1 || filter.subtypes_match_any {
+                effective_match_any = true;
+            } else {
+                return Err(LoweringError::Unsupported("v2:filter:unknown-subtype"));
+            }
+        }
+        for sub in expanded {
+            if !req_subs.contains(&sub) {
+                req_subs.push(sub);
+            }
         }
     }
 
     let mut forb_subs: Vec<SingleSubtype> = Vec::new();
     for raw in &filter.forbidden_subtypes {
-        let sub = resolve_single_subtype(raw, type_hint, ctx)?;
-        match sub {
-            SingleSubtype::Aura => {
-                clause.flags = clause.flags.union(ObjectFilterFlags::NON_AURA);
-            }
-            SingleSubtype::Enchantment(spellwake_engine::program::EnchantmentSubtype::Saga) => {
-                clause.flags = clause.flags.union(ObjectFilterFlags::NON_SAGA);
-            }
-            other => {
-                if !forb_subs.contains(&other) {
-                    forb_subs.push(other);
+        for sub in resolve_subtype_or_batch(raw, type_hint, ctx)? {
+            match sub {
+                SingleSubtype::Aura => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::NON_AURA);
+                }
+                SingleSubtype::Enchantment(spellwake_engine::program::EnchantmentSubtype::Saga) => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::NON_SAGA);
+                }
+                other => {
+                    if !forb_subs.contains(&other) {
+                        forb_subs.push(other);
+                    }
                 }
             }
         }
@@ -445,7 +474,7 @@ fn apply_subtypes_to_clause(
     }
 
     if !req_subs.is_empty() {
-        clause.subtypes = build_positive_subtype_filter(&req_subs, filter.subtypes_match_any)?;
+        clause.subtypes = build_positive_subtype_filter(&req_subs, effective_match_any)?;
     } else if !forb_subs.is_empty() {
         clause.subtypes = build_negative_subtype_filter(&forb_subs)?;
     }
@@ -921,6 +950,7 @@ fn apply_predicates_to_clause(
     ctx: &mut LowerCtx<'_>,
 ) -> LowerResult<Option<(ObjectClause, ObjectClause)>> {
     let mut deferred_any_of: Vec<&[v2::ObjectFilter]> = Vec::new();
+    let mut deferred_exclude_basic_land = false;
 
     for pred in predicates {
         match pred {
@@ -928,14 +958,32 @@ fn apply_predicates_to_clause(
                 deferred_any_of.push(subs.as_slice());
             }
             v2::FilterPredicate::AttachedTo(subj) => match subj.as_ref() {
+                v2::SubjectRef::SelfObject
+                | v2::SubjectRef::Anaphora(v2::AnaphoraRef::ThatSource) => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::ATTACHED_TO_SOURCE);
+                }
+                v2::SubjectRef::Anaphora(v2::AnaphoraRef::SameTarget) => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::ATTACHED_TO_TARGET);
+                }
                 v2::SubjectRef::Anaphora(
-                    v2::AnaphoraRef::SameTarget
-                    | v2::AnaphoraRef::It
+                    v2::AnaphoraRef::It
                     | v2::AnaphoraRef::ThatCreature
                     | v2::AnaphoraRef::ThatPermanent
                     | v2::AnaphoraRef::ThatObject,
                 ) => {
-                    clause.flags = clause.flags.union(ObjectFilterFlags::ATTACHED_TO_TARGET);
+                    if ctx.last_moved_binding.is_some() {
+                        return Err(LoweringError::Unsupported("v2:filter:pred:attached-to"));
+                    }
+                    let flag = if ctx.has_object_target {
+                        ObjectFilterFlags::ATTACHED_TO_TARGET
+                    } else if ctx.in_trigger {
+                        ObjectFilterFlags::ATTACHED_TO_TRIGGER
+                    } else if ctx.self_antecedent {
+                        ObjectFilterFlags::ATTACHED_TO_SOURCE
+                    } else {
+                        return Err(LoweringError::Unsupported("v2:filter:pred:attached-to"));
+                    };
+                    clause.flags = clause.flags.union(flag);
                 }
                 _ => {
                     return Err(LoweringError::Unsupported("v2:filter:pred:attached-to"));
@@ -960,6 +1008,11 @@ fn apply_predicates_to_clause(
                 | v2::PriorActionKind::CreatedThisWay => {
                     clause.flags = clause.flags.union(ObjectFilterFlags::IN_LAST_MOVED);
                 }
+                v2::PriorActionKind::DealtDamageThisWay if ctx.last_damage_was_self => {
+                    clause.flags = clause
+                        .flags
+                        .union(ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN);
+                }
                 _ => {
                     return Err(LoweringError::Unsupported(
                         "v2:filter:pred:prior-action-kind",
@@ -968,7 +1021,13 @@ fn apply_predicates_to_clause(
             },
             v2::FilterPredicate::Exclude(subj) => match subj.as_ref() {
                 v2::SubjectRef::SelfObject => apply_exclude_self(clause, ctx.in_trigger)?,
-                v2::SubjectRef::Group(ex_flt) => apply_excluded_group_filter(clause, ex_flt, ctx)?,
+                v2::SubjectRef::Group(ex_flt) => {
+                    if is_basic_land_only_filter(ex_flt) {
+                        deferred_exclude_basic_land = true;
+                    } else {
+                        apply_excluded_group_filter(clause, ex_flt, ctx)?;
+                    }
+                }
                 _ => return Err(LoweringError::Unsupported("v2:filter:pred:exclude")),
             },
             v2::FilterPredicate::HasCounterKind(ck) => match ck {
@@ -1194,7 +1253,52 @@ fn apply_predicates_to_clause(
         }
     }
 
+    if deferred_exclude_basic_land {
+        // De Morgan expansion: `NOT (Basic AND Land)` <=> `(NOT Land) OR (Land AND NOT Basic)`.
+        let nonland = ObjectClause {
+            forbidden_types: EngineCardTypeMask::LAND,
+            ..Default::default()
+        };
+        let nonbasic_land = ObjectClause {
+            required_types: EngineCardTypeMask::LAND,
+            forbidden_supertypes: lower_supertype_mask(ast::SupertypeMask::BASIC)?,
+            ..Default::default()
+        };
+        if split.is_some() {
+            return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
+        }
+        split = Some((
+            merge_clauses(*clause, nonland)?,
+            merge_clauses(*clause, nonbasic_land)?,
+        ));
+    }
+
     Ok(split)
+}
+
+fn is_basic_land_only_filter(ex: &v2::ObjectFilter) -> bool {
+    let is_land = (ex.all_types == ast::CardTypeMask::LAND && ex.any_types.is_empty())
+        || (ex.any_types == ast::CardTypeMask::LAND && ex.all_types.is_empty());
+    is_land
+        && ex.required_supertypes == ast::SupertypeMask::BASIC
+        && ex.forbidden_types.is_empty()
+        && ex.forbidden_supertypes.is_empty()
+        && ex.subtypes.is_empty()
+        && ex.forbidden_subtypes.is_empty()
+        && ex.any_colors.is_empty()
+        && ex.forbidden_colors.is_empty()
+        && ex.color_arity.is_none()
+        && ex.controller.is_none()
+        && ex.owner.is_none()
+        && ex.zones.is_empty()
+        && ex.combat.is_none()
+        && ex.tapped.is_none()
+        && ex.token.is_none()
+        && ex.required_keywords.is_empty()
+        && ex.forbidden_keywords.is_empty()
+        && ex.stat_bounds.is_empty()
+        && ex.flags.is_empty()
+        && ex.predicates.is_empty()
 }
 
 fn is_self_combat_ref(subj: &v2::SubjectRef, ctx: &LowerCtx<'_>) -> bool {
@@ -1202,7 +1306,7 @@ fn is_self_combat_ref(subj: &v2::SubjectRef, ctx: &LowerCtx<'_>) -> bool {
         subj,
         v2::SubjectRef::SelfObject | v2::SubjectRef::Anaphora(v2::AnaphoraRef::ThatSource)
     ) || (!ctx.has_object_target
-        && !ctx.in_trigger
+        && (ctx.self_antecedent || !ctx.in_trigger)
         && matches!(
             subj,
             v2::SubjectRef::Anaphora(
@@ -1254,7 +1358,18 @@ fn apply_combat_targets_subject(
                         | v2::AnaphoraRef::EquippedCreature
                         | v2::AnaphoraRef::EnchantedPermanent
                 )
-            ) {
+            ) || (ctx.attached_host_antecedent
+                && !ctx.has_object_target
+                && matches!(
+                    subj,
+                    v2::SubjectRef::Anaphora(
+                        v2::AnaphoraRef::It
+                            | v2::AnaphoraRef::ThatCreature
+                            | v2::AnaphoraRef::ThatPermanent
+                            | v2::AnaphoraRef::ThatObject
+                    )
+                ))
+            {
                 clause.combat = CombatFilter::BlockingAttachedHost;
                 return Ok(());
             }
@@ -1379,6 +1494,7 @@ fn apply_shares_property(
         v2::SubjectRef::SelfObject | v2::SubjectRef::Anaphora(v2::AnaphoraRef::ThatSource)
     ) || (!ctx.has_object_target
         && !ctx.in_trigger
+        && ctx.last_moved_binding.is_none()
         && matches!(
             reference,
             v2::SubjectRef::Anaphora(
@@ -1428,6 +1544,37 @@ fn apply_shares_property(
         };
     }
 
+    if property == v2::SharedProperty::Name
+        && negated
+        && let v2::SubjectRef::Group(ref_flt) = reference
+        && ref_flt.flags == v2::FilterFlags::EXCLUDE_SELF
+        && ref_flt.controller == Some(ast::ControllerRelation::You)
+        && ref_flt.all_types.is_empty()
+        && ref_flt.any_types.is_empty()
+        && ref_flt.forbidden_types.is_empty()
+        && ref_flt.required_supertypes.is_empty()
+        && ref_flt.forbidden_supertypes.is_empty()
+        && ref_flt.subtypes.is_empty()
+        && ref_flt.forbidden_subtypes.is_empty()
+        && ref_flt.any_colors.is_empty()
+        && ref_flt.forbidden_colors.is_empty()
+        && ref_flt.color_arity.is_none()
+        && ref_flt.owner.is_none()
+        && ref_flt.zones.is_empty()
+        && ref_flt.combat.is_none()
+        && ref_flt.tapped.is_none()
+        && ref_flt.token.is_none()
+        && ref_flt.required_keywords.is_empty()
+        && ref_flt.forbidden_keywords.is_empty()
+        && ref_flt.stat_bounds.is_empty()
+        && ref_flt.predicates.is_empty()
+    {
+        clause.flags = clause
+            .flags
+            .union(ObjectFilterFlags::UNIQUE_NAME_AMONG_CONTROLLED);
+        return Ok(());
+    }
+
     match reference {
         v2::SubjectRef::Anaphora(v2::AnaphoraRef::SameTarget) => {
             apply_shares_property_with_target(clause, property, negated)
@@ -1442,19 +1589,109 @@ fn apply_shares_property(
             | v2::AnaphoraRef::It
             | v2::AnaphoraRef::ThatObject,
         ) if ctx.has_object_target => apply_shares_property_with_target(clause, property, negated),
-        v2::SubjectRef::Anaphora(v2::AnaphoraRef::SacrificedObject) => match (property, negated) {
-            (v2::SharedProperty::Color, false) => {
-                clause.flags = clause
-                    .flags
-                    .union(ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED);
-                Ok(())
-            }
-            _ => Err(LoweringError::Unsupported(
-                "v2:filter:pred:shares-property-sacrificed",
-            )),
-        },
+        v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::ThatCreature
+            | v2::AnaphoraRef::ThatPermanent
+            | v2::AnaphoraRef::ThatCard
+            | v2::AnaphoraRef::ThatSpell
+            | v2::AnaphoraRef::ThatLand
+            | v2::AnaphoraRef::ThatToken
+            | v2::AnaphoraRef::It
+            | v2::AnaphoraRef::ThatObject,
+        ) if ctx.in_trigger && ctx.last_moved_binding.is_none() => {
+            apply_shares_property_with_trigger(clause, property, negated)
+        }
+        v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::SacrificedObject
+            | v2::AnaphoraRef::ExiledObject
+            | v2::AnaphoraRef::TheExiledCard
+            | v2::AnaphoraRef::DiscardedObject
+            | v2::AnaphoraRef::RevealedCard,
+        ) => apply_shares_property_with_last_moved(clause, property, negated),
+        v2::SubjectRef::Anaphora(
+            v2::AnaphoraRef::ThatCreature
+            | v2::AnaphoraRef::ThatPermanent
+            | v2::AnaphoraRef::ThatCard
+            | v2::AnaphoraRef::ThatSpell
+            | v2::AnaphoraRef::ThatLand
+            | v2::AnaphoraRef::ThatToken
+            | v2::AnaphoraRef::It
+            | v2::AnaphoraRef::ThatObject,
+        ) if ctx.last_moved_binding.is_some() => {
+            apply_shares_property_with_last_moved(clause, property, negated)
+        }
         _ => Err(LoweringError::Unsupported(
             "v2:filter:pred:shares-property-ref",
+        )),
+    }
+}
+
+fn apply_shares_property_with_trigger(
+    clause: &mut ObjectClause,
+    property: v2::SharedProperty,
+    negated: bool,
+) -> LowerResult<()> {
+    match (property, negated) {
+        (v2::SharedProperty::Color, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_COLOR_WITH_TRIGGER);
+            Ok(())
+        }
+        (v2::SharedProperty::CreatureType, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TRIGGER);
+            Ok(())
+        }
+        (v2::SharedProperty::CardType, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TRIGGER);
+            Ok(())
+        }
+        (v2::SharedProperty::Name, false) => {
+            clause.flags = clause.flags.union(ObjectFilterFlags::SAME_NAME_AS_TRIGGER);
+            Ok(())
+        }
+        _ => Err(LoweringError::Unsupported(
+            "v2:filter:pred:shares-property-trigger",
+        )),
+    }
+}
+
+fn apply_shares_property_with_last_moved(
+    clause: &mut ObjectClause,
+    property: v2::SharedProperty,
+    negated: bool,
+) -> LowerResult<()> {
+    match (property, negated) {
+        (v2::SharedProperty::Color, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED);
+            Ok(())
+        }
+        (v2::SharedProperty::CreatureType, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_LAST_MOVED);
+            Ok(())
+        }
+        (v2::SharedProperty::CardType, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SHARES_CARD_TYPE_WITH_LAST_MOVED);
+            Ok(())
+        }
+        (v2::SharedProperty::Name, false) => {
+            clause.flags = clause
+                .flags
+                .union(ObjectFilterFlags::SAME_NAME_AS_LAST_MOVED);
+            Ok(())
+        }
+        _ => Err(LoweringError::Unsupported(
+            "v2:filter:pred:shares-property-last-moved",
         )),
     }
 }
@@ -1498,10 +1735,10 @@ fn apply_excluded_group_filter(
     ex: &v2::ObjectFilter,
     ctx: &LowerCtx<'_>,
 ) -> LowerResult<()> {
-    // Only fold simple pure exclusions (single forbidden card type, subtype, or color)
-    // so we never approximate complex negated conjunctions.
+    // Only fold simple single-axis exclusions (single forbidden card type, subtype, color,
+    // counter kind, keyword, token, tapped, or self exclusion) so we never approximate
+    // complex negated conjunctions.
     let no_extra = ex.forbidden_types.is_empty()
-        && ex.required_supertypes.is_empty()
         && ex.forbidden_supertypes.is_empty()
         && ex.forbidden_subtypes.is_empty()
         && ex.forbidden_colors.is_empty()
@@ -1510,24 +1747,105 @@ fn apply_excluded_group_filter(
         && ex.owner.is_none()
         && ex.zones.is_empty()
         && ex.combat.is_none()
-        && ex.tapped.is_none()
-        && ex.token.is_none()
-        && ex.required_keywords.is_empty()
         && ex.forbidden_keywords.is_empty()
-        && ex.stat_bounds.is_empty()
-        && ex.flags.is_empty()
-        && ex.predicates.is_empty();
+        && ex.stat_bounds.is_empty();
     if !no_extra {
         return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
     }
     let has_types = !ex.all_types.is_empty() || !ex.any_types.is_empty();
+    let has_supertypes = !ex.required_supertypes.is_empty();
     let has_subs = !ex.subtypes.is_empty();
     let has_colors = !ex.any_colors.is_empty();
-    let active_axes = u8::from(has_types) + u8::from(has_subs) + u8::from(has_colors);
+    let has_preds = !ex.predicates.is_empty();
+    let has_kws = !ex.required_keywords.is_empty();
+    let has_token = ex.token.is_some();
+    let has_tapped = ex.tapped.is_some();
+    let has_flags = !ex.flags.is_empty();
+    let active_axes = u8::from(has_types)
+        + u8::from(has_supertypes)
+        + u8::from(has_subs)
+        + u8::from(has_colors)
+        + u8::from(has_preds)
+        + u8::from(has_kws)
+        + u8::from(has_token)
+        + u8::from(has_tapped)
+        + u8::from(has_flags);
     if active_axes != 1 {
         return Err(LoweringError::Unsupported(
             "v2:filter:pred:multi-axis-exclude",
         ));
+    }
+    if has_supertypes {
+        if ex.required_supertypes.0.count_ones() != 1 {
+            return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
+        }
+        clause.forbidden_supertypes = clause
+            .forbidden_supertypes
+            .union(lower_supertype_mask(ex.required_supertypes)?);
+        return Ok(());
+    }
+    if has_preds {
+        if let [v2::FilterPredicate::HasCounterKind(ck)] = ex.predicates.as_slice() {
+            match ck {
+                v2::CounterKind::Any => {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::WITHOUT_COUNTERS);
+                    return Ok(());
+                }
+                other => {
+                    let kind = lower_counter_kind(other)?;
+                    if let Some(existing) = clause.forbidden_counter_kind {
+                        if existing != kind {
+                            return Err(LoweringError::Unsupported(
+                                "v2:filter:pred:multiple-forbidden-counters",
+                            ));
+                        }
+                    } else {
+                        clause.forbidden_counter_kind = Some(kind);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
+    }
+    if has_kws {
+        if let [kw] = ex.required_keywords.as_slice() {
+            let ability = lower_keyword_kind_plain(*kw)?;
+            if let Some(existing) = clause.forbidden_keyword {
+                if existing != ability {
+                    return Err(LoweringError::Unsupported(
+                        "v2:filter:pred:multiple-forbidden-keywords",
+                    ));
+                }
+            } else {
+                clause.forbidden_keyword = Some(ability);
+            }
+            return Ok(());
+        }
+        return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
+    }
+    if let Some(tok) = ex.token {
+        let want = !tok;
+        if clause.token.is_some_and(|prev| prev != want) {
+            return Err(LoweringError::Unsupported("v2:filter:pred:token-conflict"));
+        }
+        clause.token = Some(want);
+        return Ok(());
+    }
+    if let Some(tap) = ex.tapped {
+        let want = !tap;
+        if clause.tapped.is_some_and(|prev| prev != want) {
+            return Err(LoweringError::Unsupported("v2:filter:pred:tapped-conflict"));
+        }
+        clause.tapped = Some(want);
+        return Ok(());
+    }
+    if has_flags {
+        if ex.flags == v2::FilterFlags::EXCLUDE_SELF {
+            apply_exclude_self(clause, ctx.in_trigger)?;
+            return Ok(());
+        }
+        return Err(LoweringError::Unsupported("v2:filter:pred:complex-exclude"));
     }
     if has_types {
         if ex.all_types.0.count_ones() + ex.any_types.0.count_ones() > 1 && !ex.all_types.is_empty()
@@ -1964,24 +2282,35 @@ fn lower_filter_to_permanent_selector(
     sel.required_supertypes = lower_supertype_set(filter.required_supertypes);
     sel.forbidden_supertypes = lower_supertype_set(filter.forbidden_supertypes);
 
-    // Subtypes (full conjunctive, disjunctive, and forbidden support).
+    // Subtypes (full conjunctive, disjunctive, and forbidden support, plus CR 700.12 Outlaw batching).
     let type_hint = filter.all_types.union(filter.any_types);
+    let mut effective_match_any = filter.subtypes_match_any;
     for raw in &filter.subtypes {
-        let sub = resolve_single_subtype(raw, type_hint, ctx)?;
-        let sel_sub = single_subtype_to_selector(sub)?;
-        if filter.subtypes_match_any {
-            sel.any_subtypes.insert(sel_sub);
-        } else {
-            sel.required_subtypes.insert(sel_sub);
+        let expanded = resolve_subtype_or_batch(raw, type_hint, ctx)?;
+        if expanded.len() > 1 {
+            if filter.subtypes.len() == 1 || filter.subtypes_match_any {
+                effective_match_any = true;
+            } else {
+                return Err(LoweringError::Unsupported("v2:filter:unknown-subtype"));
+            }
+        }
+        for sub in expanded {
+            let sel_sub = single_subtype_to_selector(sub)?;
+            if effective_match_any {
+                sel.any_subtypes.insert(sel_sub);
+            } else {
+                sel.required_subtypes.insert(sel_sub);
+            }
         }
     }
     for raw in &filter.forbidden_subtypes {
-        let sub = resolve_single_subtype(raw, type_hint, ctx)?;
-        let sel_sub = single_subtype_to_selector(sub)?;
-        if sel_sub == SelectorSubtype::Aura {
-            sel.exclude_auras = true;
-        } else {
-            sel.forbidden_subtypes.insert(sel_sub);
+        for sub in resolve_subtype_or_batch(raw, type_hint, ctx)? {
+            let sel_sub = single_subtype_to_selector(sub)?;
+            if sel_sub == SelectorSubtype::Aura {
+                sel.exclude_auras = true;
+            } else {
+                sel.forbidden_subtypes.insert(sel_sub);
+            }
         }
     }
 
@@ -2457,6 +2786,19 @@ pub(crate) fn lower_spell_filter(
                         | v2::PlayerRef::AnyOpponent
                         | v2::PlayerRef::ThatPlayer,
                     ) => SpellTargetShape::TargetingPlayer,
+                    v2::SubjectRef::Group(obj_flt)
+                    | v2::SubjectRef::Each(obj_flt)
+                    | v2::SubjectRef::All(obj_flt) => {
+                        let lowered_obj = lower_object_filter(obj_flt, ctx)?;
+                        let compact =
+                            spellwake_engine::program::SpellTargetObjectFilter::try_from_object_filter(
+                                lowered_obj,
+                            )
+                            .ok_or(LoweringError::Unsupported(
+                                "v2:spell-filter:targets-subject",
+                            ))?;
+                        SpellTargetShape::TargetingObject(compact)
+                    }
                     _ => {
                         return Err(LoweringError::Unsupported(
                             "v2:spell-filter:targets-subject",

@@ -1210,6 +1210,7 @@ impl EffectWindow {
             };
             let eligible_reveals = match rule {
                 crate::land::EntryTap::ReadAhead { .. }
+                | crate::land::EntryTap::AlwaysChooseColor
                 | crate::land::EntryTap::AlwaysChooseColorExcept(_)
                 | crate::land::EntryTap::ChooseColor
                 | crate::land::EntryTap::ChooseColorExcept(_)
@@ -1326,8 +1327,10 @@ impl EffectWindow {
                 | crate::land::EntryTap::ChooseColorExcept(excluded),
                 crate::land::EntryChoice::Color(color),
             ) if color != excluded && color != ManaType::Colourless => {}
-            (crate::land::EntryTap::ChooseColor, crate::land::EntryChoice::Color(color))
-                if color != ManaType::Colourless => {}
+            (
+                crate::land::EntryTap::ChooseColor | crate::land::EntryTap::AlwaysChooseColor,
+                crate::land::EntryChoice::Color(color),
+            ) if color != ManaType::Colourless => {}
             (
                 crate::land::EntryTap::ReadAhead { final_chapter },
                 crate::land::EntryChoice::Chapter(n),
