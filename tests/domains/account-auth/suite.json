@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "slug": "account-auth",
+  "label": "Account & Auth",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Email OTP sign-in, OAuth callback handling, username onboarding, session lifecycle, default preferences, profile settings, and account deletion/retirement.",
+  "localOnly": false,
+  "unqualifiedReason": null,
+  "hostedCredentials": [
+    "SUPABASE_URL",
+    "SUPABASE_PUBLISHABLE_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY"
+  ],
+  "notes": "Local CI verifies Rust session/identity/deletion invariants, Postgres RLS and retirement cleanup, frontend auth/deletion unit tests, and the standalone Playwright browser auth & deletion suite. Live hosted verification requires Supabase Auth credentials.",
+  "subdomains": [
+    {
+      "slug": "sign-in-and-sessions",
+      "label": "Sign-In & Sessions",
+      "description": "Email OTP validation, OAuth callback exchange, refused/expired session handling, and sign-out cleanup.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/account.rs",
+        "services/application/tests/database/auth_sessions.rs",
+        "apps/play/src/data/auth-flow.test.ts",
+        "apps/play/src/data/entry-flow.test.ts"
+      ]
+    },
+    {
+      "slug": "onboarding-and-profile",
+      "label": "Onboarding & Profile",
+      "description": "Username registration validation, uniqueness enforcement, profile art/defaults, and account settings.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/profile_art.rs",
+        "apps/play/src/data/profile-defaults.test.ts",
+        "apps/play/src/data/portrait-crop.test.ts"
+      ]
+    },
+    {
+      "slug": "account-deletion",
+      "label": "Account Deletion & Retirement",
+      "description": "Account deletion confirmation, pending-deletion hold screen, credential-free status polling, and backend retirement cleanup.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/deletion.rs",
+        "services/application/src/deletion_workflow.rs",
+        "apps/play/src/data/deletion-journal.test.ts",
+        "apps/play/src/data/deletion-recovery.test.ts"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application account lib tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "services/application/Cargo.toml",
+          "--lib",
+          "account"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "cargo",
+        "label": "application deletion lib tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "services/application/Cargo.toml",
+          "--lib",
+          "deletion"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "account_api",
+      "auth_admission",
+      "auth_after_wait",
+      "auth_identity",
+      "auth_provenance",
+      "auth_receipts",
+      "auth_sessions",
+      "current_session",
+      "deletion",
+      "profile_art_api",
+      "profile_defaults",
+      "retirement",
+      "retirement_cleanup_integrity",
+      "retirement_minimization_integrity",
+      "retirement_source_obligations_integrity",
+      "whole_access"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "play auth, entry, profile, and deletion unit tests",
+        "args": [
+          "bun",
+          "test",
+          "apps/play/src/data/auth-flow.test.ts",
+          "apps/play/src/data/entry-flow.test.ts",
+          "apps/play/src/data/profile-defaults.test.ts",
+          "apps/play/src/data/portrait-crop.test.ts",
+          "apps/play/src/data/deletion-journal.test.ts",
+          "apps/play/src/data/deletion-recovery.test.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright account auth, onboarding, sign-out, and deletion E2E suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-auth.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/account.rs",
+    "services/application/src/deletion.rs",
+    "services/application/src/deletion_workflow.rs",
+    "services/application/src/profile_art.rs",
+    "apps/play/src/auth",
+    "apps/play/scripts/qualify-auth.ts"
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "slug": "cosmetics",
+  "label": "Cosmetics",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Player and deck cosmetics across all categories (card backs, sleeves, dice, playmats, and pets), covering catalogue schemas, entitlements, Postgres reversals, and frontend selection rules.",
+  "localOnly": false,
+  "unqualifiedReason": null,
+  "hostedCredentials": [
+    "SPELLWAKE_SUPABASE_URL",
+    "SPELLWAKE_SUPABASE_PUBLISHABLE_KEY",
+    "SPELLWAKE_SUPABASE_SECRET_KEY",
+    "Approved runtime cosmetic assets (Spellwake/spellwake-assets)"
+  ],
+  "notes": "Card backs, sleeves, dice, and playmats have Rust validation, Postgres entitlement/reversal tests, and frontend selector contracts. The pets subdomain remains visibly unqualified until AppearanceSelection, equip/entitlement DB tests, and approved pet assets are wired.",
+  "subdomains": [
+    {
+      "slug": "card-backs",
+      "label": "Card backs",
+      "description": "Default and per-deck card back selection, grants, and refund reversal fallback.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/cosmetics.rs",
+        "services/application/tests/database/cosmetics.rs",
+        "apps/play/src/data/cosmetic-sources.test.ts"
+      ]
+    },
+    {
+      "slug": "sleeves",
+      "label": "Sleeves",
+      "description": "Card sleeve selection, grants, and sleeve material/profile contracts.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/cosmetics.rs",
+        "services/application/tests/database/cosmetics.rs",
+        "apps/play/src/data/cosmetic-sources.test.ts",
+        "benchmarks/browser-rendering/src/sleeve-profile.test.ts"
+      ]
+    },
+    {
+      "slug": "dice",
+      "label": "Dice",
+      "description": "Dice cosmetic selection and entitlement checks.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/cosmetics.rs",
+        "services/application/tests/database/cosmetics.rs",
+        "apps/play/src/data/cosmetic-sources.test.ts"
+      ]
+    },
+    {
+      "slug": "playmats",
+      "label": "Playmats",
+      "description": "Optional playmat selection, grants, and reversal fallback.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/cosmetics.rs",
+        "services/application/tests/database/cosmetics.rs",
+        "apps/play/src/data/cosmetic-sources.test.ts"
+      ]
+    },
+    {
+      "slug": "pets",
+      "label": "Pets",
+      "description": "Companion pet appearance slots, entitlements, equip endpoints, and approved pet assets.",
+      "unqualifiedReason": "Unqualified: migration 20261121028300 adds cosmetic kind='pet', profile.default_pet_id, deck.pet_id, and GET /v1/cosmetics/catalogue?kind=pet, but AppearanceSelection (services/application/src/cosmetics.rs) and connected-cosmetics.ts have no pet slot, no pet equip/entitlement DB tests exist, and no approved pet assets are published.",
+      "relatedPaths": [
+        "services/application/src/cosmetics.rs",
+        "apps/play/src/data/cosmetic-sources.test.ts"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application cosmetics unit tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--lib",
+          "cosmetics"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "cosmetics",
+      "profile_defaults",
+      "deck_settings"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "frontend cosmetics and appearance selector contracts",
+        "args": [
+          "bun",
+          "test",
+          "src/data/cosmetic-sources.test.ts",
+          "src/collection/data/demo-appearance.test.ts"
+        ],
+        "cwd": "apps/play",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/cosmetics.rs",
+    "services/application/tests/database/cosmetics.rs",
+    "services/application/tests/database/profile_defaults.rs",
+    "services/application/tests/database/deck_settings.rs",
+    "apps/play/src/data/cosmetic-sources.test.ts",
+    "apps/play/src/collection/data/demo-appearance.test.ts"
+  ]
+}

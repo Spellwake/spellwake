@@ -33,8 +33,16 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.3.11
+      - name: Setup Node.js 24 for Playwright E2E suites
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
       - name: Install JS workspace dependencies
         run: bun install --frozen-lockfile
+      - name: Install Playwright Chromium for browser E2E suites
+        run: bunx playwright install --with-deps chromium
+      - name: Validate test registry and Rules Engine benchmarks
+        run: python3 scripts/rules_benchmarks.py --list
       - name: Run preview-format isolation checks in application service
         run: |
           cargo test --locked --manifest-path services/application/Cargo.toml --lib formats
@@ -55,10 +63,11 @@ jobs:
             sleep 2
           done
           exit 1
-      - name: Run all domain health checks and generate badges
+      - name: Run all domain health checks (including browser E2E) and generate badges
         run: |
           mkdir -p domain-health-out/badges
           python3 scripts/health_checks.py \
+            --include-browser-e2e \
             --output domain-health-out/health-status.json \
             --badges-dir domain-health-out/badges
       - name: Run catalog-refresh and health-check unit tests
@@ -85,6 +94,16 @@ jobs:
           for d in data["domains"]:
               creds = ", ".join(d["hostedCredentialsRequired"])
               print(f"| {d['label']} | `{d['localBadge']['message']}` | `{d['liveBadge']['message']}` | {d['passedTests']} | {creds} |")
+          bench = data.get("rulesBenchmarks")
+          if bench:
+              s = bench["summary"]
+              print("")
+              print("## Rules Engine Interaction Benchmarks")
+              print("")
+              print(f"- **Status:** `{bench['badge']['message']}` ({s['totalBenchmarks']} specs, {s['totalCases']} cases)")
+              print(f"- **Registry & schema validation:** `{'pass' if bench['validationPassed'] else 'fail'}`")
+              if s["missingCapabilities"]:
+                  print(f"- **Pending engine capabilities:** {len(s['missingCapabilities'])}")
           PY
       - name: Upload domain health report and badges
         if: always()

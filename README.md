@@ -16,6 +16,7 @@ Use Bun 1.3.11 and the Rust toolchain pinned in `rust-toolchain.toml`. Run `bun 
 ![Parser Pure Typed AST](https://raw.githubusercontent.com/Spellwake/spellwake/badges/parser-typed-ast.svg)
 ![Parser Audit](https://raw.githubusercontent.com/Spellwake/spellwake/badges/parser-audit-defects.svg)
 ![Rules Engine](https://raw.githubusercontent.com/Spellwake/spellwake/badges/card-support-engine.svg)
+![Rules Benchmarks](https://raw.githubusercontent.com/Spellwake/spellwake/badges/rules-engine-benchmarks.svg)
 ![Stage 3 Qualified](https://raw.githubusercontent.com/Spellwake/spellwake/badges/card-support-qualified.svg)
 
 ## Parser Audit & Testing Kit
@@ -35,18 +36,27 @@ RUST_MIN_STACK=67108864 cargo run --locked --release -p spellwake-oracle-compile
 
 ## System Health
 
+All domain test suites and declarative Rules Engine benchmarks are organized under [`tests/`](tests/README.md) via [`tests/registry.json`](tests/registry.json).
+
 | Domain | Local CI | Live |
 | --- | --- | --- |
-| **Oracle Parser** | ![Oracle Parser local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-oracle-parser.svg) | ![Oracle Parser live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-oracle-parser-live.svg) |
 | **Patreon** | ![Patreon local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-patreon.svg) | ![Patreon live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-patreon-live.svg) |
 | **Stripe** | ![Stripe local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-stripe.svg) | ![Stripe live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-stripe-live.svg) |
-| **AI** | ![AI local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-ai.svg) | ![AI live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-ai-live.svg) |
 | **Matchmaking** | ![Matchmaking local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-matchmaking.svg) | ![Matchmaking live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-matchmaking-live.svg) |
 | **Predictions** | ![Predictions local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-predictions.svg) | ![Predictions live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-predictions-live.svg) |
 | **Market** | ![Market local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-market.svg) | ![Market live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-market-live.svg) |
-| **Pet cosmetics** | ![Pet cosmetics local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-pet-cosmetics.svg) | ![Pet cosmetics live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-pet-cosmetics-live.svg) |
+| **Cosmetics** | ![Cosmetics local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-cosmetics.svg) | ![Cosmetics live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-cosmetics-live.svg) |
+| **Account & Auth** | ![Account & Auth local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-account-auth.svg) | ![Account & Auth live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-account-auth-live.svg) |
+| **Decks & Collection** | ![Decks & Collection local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-decks-collection.svg) | ![Decks & Collection live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-decks-collection-live.svg) |
+| **Custom Cards** | ![Custom Cards local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-custom-cards.svg) | ![Custom Cards live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-custom-cards-live.svg) |
+| **Social & Messaging** | ![Social & Messaging local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-social.svg) | ![Social & Messaging live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-social-live.svg) |
+| **League & Progression** | ![League & Progression local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-league-progression.svg) | ![League & Progression live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-league-progression-live.svg) |
+| **Rendering** | ![Rendering local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-rendering.svg) | ![Rendering live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-rendering-live.svg) |
+| **Oracle Parser** | ![Oracle Parser local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-oracle-parser.svg) | ![Oracle Parser live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-oracle-parser-live.svg) |
+| **Rules Engine** | ![Rules Engine local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-rules-engine.svg) | ![Rules Engine live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-rules-engine-live.svg) |
+| **AI** | ![AI local](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-ai.svg) | ![AI live](https://raw.githubusercontent.com/Spellwake/spellwake/badges/health-ai-live.svg) |
 
-Updated automatically from `main` and daily CI (`badges` branch). Live checks require hosted secrets; pet cosmetics are not wired yet.
+Updated automatically from `main` and daily CI (`badges` branch). Live checks require hosted secrets; within Cosmetics, the `pets` subdomain remains unqualified (`partial` badge) until wired and approved.
 
 <details>
 <summary>Hosted credentials for live checks</summary>

@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "slug": "market",
+  "label": "Market",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Marketplace listings, direct trades, pack supply shop, inventory Postgres integrity, frontend economy contracts, and browser E2E flows.",
+  "localOnly": false,
+  "unqualifiedReason": null,
+  "hostedCredentials": [
+    "SPELLWAKE_SUPABASE_URL",
+    "SPELLWAKE_SUPABASE_PUBLISHABLE_KEY",
+    "SPELLWAKE_SUPABASE_SECRET_KEY",
+    "SPELLWAKE_APPLICATION_API_URL"
+  ],
+  "notes": "Marketplace listings, direct trades, pack shop, inventory Postgres integrity, frontend economy/market rules, and standalone Playwright browser E2E checks; hosted live exchange and real-world supply feeds require hosted configuration.",
+  "subdomains": [
+    {
+      "slug": "listings",
+      "label": "Marketplace Listings",
+      "description": "Create, filter, buy, cancel, and disposition-recovery flows for player card and pack listings.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/market.rs",
+        "apps/play/src/data/market-rules.test.ts",
+        "apps/play/scripts/qualify-market.ts"
+      ]
+    },
+    {
+      "slug": "pack-supply",
+      "label": "Pack Supply & Shop",
+      "description": "Dynamic pack quotes, stock tracking, idempotent pack purchases, and opening recovery.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/packs.rs",
+        "services/application/tests/database/pack_shop.rs",
+        "apps/play/scripts/qualify-market.ts"
+      ]
+    },
+    {
+      "slug": "direct-trades",
+      "label": "Direct Player Trades",
+      "description": "Trade room rules, offer locking, and unavailable trade room guards.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/trades.rs",
+        "apps/play/src/data/trade-rules.test.ts",
+        "apps/play/scripts/qualify-market.ts"
+      ]
+    },
+    {
+      "slug": "economy-and-inventory",
+      "label": "Economy Ledger & Inventory",
+      "description": "Account inventory accounting, economy command journals, and exchange reads.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/economy_commands.rs",
+        "services/application/tests/database/inventory.rs",
+        "apps/play/src/data/economy-api.test.ts",
+        "apps/play/src/data/economy-journal.test.ts"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application pack/shop unit tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--lib",
+          "pack"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "cargo",
+        "label": "application exchange unit tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--lib",
+          "exchange"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "market",
+      "trades",
+      "economy_commands",
+      "exchange_reads",
+      "packs",
+      "pack_shop",
+      "inventory"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "frontend market/trade/economy contracts",
+        "args": [
+          "bun",
+          "test",
+          "src/data/market-rules.test.ts",
+          "src/data/trade-rules.test.ts",
+          "src/data/economy-api.test.ts",
+          "src/data/economy-journal.test.ts",
+          "src/data/economy-queries.test.ts",
+          "src/data/exchange-api.test.ts"
+        ],
+        "cwd": "apps/play",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright market listings, pack supply, trade guard, and responsive suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-market.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/tests/fixtures/exchange-reads.json",
+    "services/application/tests/fixtures/pack-shop.json",
+    "apps/play/src/data/market-rules.test.ts",
+    "apps/play/src/data/trade-rules.test.ts",
+    "apps/play/scripts/qualify-market.ts"
+  ]
+}
