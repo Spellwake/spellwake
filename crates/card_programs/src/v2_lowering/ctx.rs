@@ -14,7 +14,7 @@ use spellwake_engine::{
         Instruction, PlaneswalkerSubtype, ResolvingPlayer, SpellSubtype, TriggeredAbilityId,
         ZoneReplacementAbilityId,
     },
-    toolbox::BindingId,
+    toolbox::{BindingId, TagKey},
 };
 use spellwake_oracle_compiler::{Vocabulary as OracleVocabulary, v2::ir::TargetCount};
 
@@ -50,6 +50,7 @@ pub(crate) struct LowerCtx<'a> {
     pub next_binding_slot: u16,
     pub in_trigger: bool,
     pub trigger_has_participant: bool,
+    pub trigger_is_spell_cast: bool,
     pub trigger_damage_event: Option<EventValueKind>,
     pub has_object_target: bool,
     pub last_player_target: Option<ResolvingPlayer>,
@@ -59,6 +60,8 @@ pub(crate) struct LowerCtx<'a> {
     pub last_moved_binding: Option<BindingId>,
     pub last_unchosen_binding: Option<BindingId>,
     pub last_succeeded_binding: Option<BindingId>,
+    pub self_antecedent: bool,
+    pub delayed_tag_key: Option<TagKey>,
 }
 
 impl<'a> LowerCtx<'a> {
@@ -75,6 +78,7 @@ impl<'a> LowerCtx<'a> {
             next_binding_slot: 1,
             in_trigger: false,
             trigger_has_participant: true,
+            trigger_is_spell_cast: false,
             trigger_damage_event: None,
             has_object_target: false,
             last_player_target: None,
@@ -84,6 +88,8 @@ impl<'a> LowerCtx<'a> {
             last_moved_binding: None,
             last_unchosen_binding: None,
             last_succeeded_binding: None,
+            self_antecedent: false,
+            delayed_tag_key: None,
         }
     }
 
@@ -91,6 +97,8 @@ impl<'a> LowerCtx<'a> {
         self.has_object_target = false;
         self.last_player_target = None;
         self.trigger_damage_event = None;
+        self.self_antecedent = false;
+        self.delayed_tag_key = None;
     }
 
     pub fn alloc_mana_id(&mut self) -> ManaAbilityId {
@@ -303,7 +311,21 @@ impl BodyAcc {
                 self.target_bounds = Some((n, n));
             }
             TargetCount::UpTo(1) => {
-                self.up_to_one = true;
+                if matches!(
+                    target,
+                    BodyTarget::Object {
+                        zone: spellwake_engine::program::TargetZone::OwnGraveyard
+                            | spellwake_engine::program::TargetZone::AnyGraveyard { .. }
+                            | spellwake_engine::program::TargetZone::Exile {
+                                owned_flashback_only: false
+                            },
+                        ..
+                    }
+                ) {
+                    self.target_bounds = Some((0, 1));
+                } else {
+                    self.up_to_one = true;
+                }
             }
             TargetCount::UpTo(n) if n > 1 => {
                 self.target_bounds = Some((0, n));

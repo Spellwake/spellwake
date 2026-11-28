@@ -50,7 +50,24 @@ pub(crate) fn lower_effects_into(
     let mut i = 0;
     while i < effects.len() {
         // 1. Fuse `[base_effect, BranchCondition { cond, then: [ReplacePrevious(alt), ..], else: [] }]`.
-        if let Some((rewritten, next_i)) = try_fuse_replace_previous(effects, i) {
+        if let Some((mut rewritten, mut next_i)) = try_fuse_replace_previous(effects, i) {
+            // If a trailing pure search-shuffle follows a replaced search-library branch
+            // (e.g. Increasing Ambition: "Search ... If cast from a graveyard, instead search ... Then shuffle."),
+            // distribute that trailing shuffle into both arms so each arm fuses cleanly.
+            if let v2::Effect::BranchCondition {
+                then_body,
+                else_body,
+                ..
+            } = &mut rewritten
+                && let Some(trailing) = effects.get(next_i)
+                && (is_pure_search_shuffle(trailing) || is_conditional_search_shuffle(trailing))
+                && body_has_unshuffled_search(then_body)
+                && body_has_unshuffled_search(else_body)
+            {
+                then_body.push(trailing.clone());
+                else_body.push(trailing.clone());
+                next_i += 1;
+            }
             lower_step_with_target_dispatch(&rewritten, acc, ctx)?;
             i = next_i;
             continue;
@@ -67,6 +84,27 @@ pub(crate) fn lower_effects_into(
         if is_flashback_grant_plus_cost_clause(effects, i) {
             lower_step_with_target_dispatch(&effects[i], acc, ctx)?;
             i += 2;
+            continue;
+        }
+
+        // 3b. Fuse `[CopyObject / Optional(CopyObject) / DelayedTrigger(CopyObject), (Optional)? MutatePlayer(Retarget(TheCopy|TheCopies))]`
+        //     since `StackOpKind::Copy { may_choose_new_targets: true }` already implements retargeting.
+        if matches!(
+            &effects[i],
+            v2::Effect::CopyObject { .. }
+                | v2::Effect::Optional { .. }
+                | v2::Effect::DelayedTrigger { .. }
+                | v2::Effect::BranchCondition { .. }
+                | v2::Effect::IfPrevious { .. }
+        ) && effects.get(i + 1).is_some_and(is_copy_retarget_followup)
+        {
+            let prev_len = acc.instructions.len();
+            lower_step_with_target_dispatch(&effects[i], acc, ctx)?;
+            if instructions_emit_retargetable_stack_copy(&acc.instructions[prev_len..]) {
+                i += 2;
+                continue;
+            }
+            i += 1;
             continue;
         }
 
@@ -665,6 +703,52 @@ fn try_fuse_destroy_no_regen(effects: &[v2::Effect], i: usize) -> Option<(v2::Ef
     ))
 }
 
+fn instructions_emit_retargetable_stack_copy(instructions: &[Instruction]) -> bool {
+    instructions.iter().any(|ins| match ins {
+        Instruction::StackOp(spec) => matches!(
+            spec.op,
+            spellwake_engine::toolbox::StackOpKind::Copy {
+                may_choose_new_targets: true,
+                ..
+            }
+        ),
+        Instruction::RepeatLoop { body, .. }
+        | Instruction::ForEach { body, .. }
+        | Instruction::ForEachPlayerQuery { body, .. }
+        | Instruction::ScheduleDelayedEventTrigger { body, .. } => {
+            instructions_emit_retargetable_stack_copy(&body.instructions)
+        }
+        _ => false,
+    })
+}
+
+fn is_copy_retarget_followup(eff: &v2::Effect) -> bool {
+    let is_retarget_copy = |e: &v2::Effect| {
+        matches!(
+            e,
+            v2::Effect::MutatePlayer {
+                player: v2::PlayerRef::You,
+                mutation: v2::PlayerMutation::Retarget {
+                    subject,
+                    new_target: None,
+                },
+                ..
+            } if matches!(
+                subject.as_ref(),
+                v2::SubjectRef::Anaphora(v2::AnaphoraRef::TheCopy | v2::AnaphoraRef::TheCopies)
+            )
+        )
+    };
+    is_retarget_copy(eff)
+        || matches!(
+            eff,
+            v2::Effect::Optional {
+                actor: v2::PlayerRef::You,
+                body,
+            } if body.len() == 1 && is_retarget_copy(&body[0])
+        )
+}
+
 fn is_flashback_grant_plus_cost_clause(effects: &[v2::Effect], i: usize) -> bool {
     let v2::Effect::MutateObject {
         mutation: v2::ObjectMutation::GrantKeywords(kws),
@@ -902,15 +986,30 @@ impl SearchFusionState {
     }
 }
 
+fn body_has_unshuffled_search(body: &[v2::Effect]) -> bool {
+    body.iter().any(|e| match e {
+        v2::Effect::ZoneOp {
+            op: v2::ZoneOpKind::SearchLibrary { shuffle: false, .. },
+            ..
+        } => true,
+        v2::Effect::Optional { body, .. } | v2::Effect::BindVariable { body, .. } => {
+            body_has_unshuffled_search(body)
+        }
+        _ => false,
+    })
+}
+
 fn try_fuse_search_library_sequence(
     effects: &[v2::Effect],
     i: usize,
 ) -> Option<(v2::Effect, usize)> {
-    let (opt_actor, search_eff, inner_tail) = match &effects[i] {
+    let mut bind_wrapper: Option<(v2::VarName, v2::ValueExpr)> = None;
+    let mut opt_actor: Option<v2::PlayerRef> = None;
+    let (search_eff, inner_tail): (&v2::Effect, &[v2::Effect]) = match &effects[i] {
         eff @ v2::Effect::ZoneOp {
             op: v2::ZoneOpKind::SearchLibrary { shuffle: false, .. },
             ..
-        } => (None, eff, &[][..]),
+        } => (eff, &[][..]),
         v2::Effect::Optional { actor, body } => {
             let first = body.first()?;
             if !matches!(
@@ -922,7 +1021,39 @@ fn try_fuse_search_library_sequence(
             ) {
                 return None;
             }
-            (Some(*actor), first, &body[1..])
+            opt_actor = Some(*actor);
+            (first, &body[1..])
+        }
+        v2::Effect::BindVariable { var, expr, body } => {
+            let first = body.first()?;
+            match first {
+                eff @ v2::Effect::ZoneOp {
+                    op: v2::ZoneOpKind::SearchLibrary { shuffle: false, .. },
+                    ..
+                } => {
+                    bind_wrapper = Some((*var, expr.clone()));
+                    (eff, &body[1..])
+                }
+                v2::Effect::Optional {
+                    actor,
+                    body: opt_body,
+                } if body.len() == 1 => {
+                    let inner_first = opt_body.first()?;
+                    if !matches!(
+                        inner_first,
+                        v2::Effect::ZoneOp {
+                            op: v2::ZoneOpKind::SearchLibrary { shuffle: false, .. },
+                            ..
+                        }
+                    ) {
+                        return None;
+                    }
+                    bind_wrapper = Some((*var, expr.clone()));
+                    opt_actor = Some(*actor);
+                    (inner_first, &opt_body[1..])
+                }
+                _ => return None,
+            }
         }
         _ => return None,
     };
@@ -1037,6 +1168,14 @@ fn try_fuse_search_library_sequence(
             body: vec![fused_search],
         },
         None => fused_search,
+    };
+    let out = match bind_wrapper {
+        Some((var, expr)) => v2::Effect::BindVariable {
+            var,
+            expr,
+            body: vec![out],
+        },
+        None => out,
     };
     Some((out, j))
 }
@@ -1619,12 +1758,14 @@ pub(crate) fn lower_effect_body(
     acc.into_body()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct CtxFlowSnapshot {
     next_binding_slot: u16,
     last_moved_binding: Option<BindingId>,
     last_unchosen_binding: Option<BindingId>,
     last_succeeded_binding: Option<BindingId>,
+    self_antecedent: bool,
+    delayed_tag_key: Option<TagKey>,
 }
 
 impl CtxFlowSnapshot {
@@ -1634,14 +1775,18 @@ impl CtxFlowSnapshot {
             last_moved_binding: ctx.last_moved_binding,
             last_unchosen_binding: ctx.last_unchosen_binding,
             last_succeeded_binding: ctx.last_succeeded_binding,
+            self_antecedent: ctx.self_antecedent,
+            delayed_tag_key: ctx.delayed_tag_key.clone(),
         }
     }
 
-    fn restore(self, ctx: &mut LowerCtx<'_>) {
+    fn restore(&self, ctx: &mut LowerCtx<'_>) {
         ctx.next_binding_slot = self.next_binding_slot;
         ctx.last_moved_binding = self.last_moved_binding;
         ctx.last_unchosen_binding = self.last_unchosen_binding;
         ctx.last_succeeded_binding = self.last_succeeded_binding;
+        ctx.self_antecedent = self.self_antecedent;
+        ctx.delayed_tag_key = self.delayed_tag_key.clone();
     }
 }
 
@@ -1759,9 +1904,7 @@ fn lower_one_effect(
             cost,
             condition: cond,
         } => lower_unless(body, *payer, cost.as_ref(), cond.as_ref(), acc, ctx),
-        v2::Effect::UnlessEffect { .. } => {
-            Err(LoweringError::Unsupported("v2:effect-unless-effect"))
-        }
+        v2::Effect::UnlessEffect { body, unless } => lower_unless_effect(body, unless, acc, ctx),
         v2::Effect::ForEach { over, body } => lower_for_each(over, body, acc, ctx),
         v2::Effect::BindVariable { var, expr, body } => {
             lower_bind_variable(*var, expr, body, acc, ctx)
@@ -1862,7 +2005,13 @@ fn lower_deal_damage(
     }
 
     let src_query = match source {
-        v2::SubjectRef::SelfObject => DamageSourceQuery::EntrySource,
+        v2::SubjectRef::SelfObject => {
+            ctx.self_antecedent = true;
+            DamageSourceQuery::EntrySource
+        }
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It) if ctx.self_antecedent => {
+            DamageSourceQuery::EntrySource
+        }
         other => DamageSourceQuery::Objects(atoms::lower_subject_to_query(other, acc, ctx)?),
     };
 
@@ -2290,6 +2439,19 @@ fn lower_prompt_choice(
                     })));
                     return Ok(());
                 }
+                v2::SubjectRef::TargetObject { .. } | v2::SubjectRef::AnyTarget => {
+                    // "Choose [up to N / any number of] target <objects>" selects targets on cast;
+                    // register the target on `acc` so subsequent anaphora (`it`/`them`) resolve to
+                    // `ObjectQuery::Targets` without emitting a duplicate resolution prompt.
+                    let (bt, tc) = atoms::lower_subject_to_target(subj, ctx)?;
+                    acc.register_target(bt, tc)?;
+                    ctx.has_object_target = acc.target_set
+                        && matches!(
+                            acc.target,
+                            BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
+                        );
+                    return Ok(());
+                }
                 _ => {}
             }
             let (query, min, max) = match subj {
@@ -2432,11 +2594,83 @@ fn lower_option_branches(
         return Err(LoweringError::Unsupported("v2:choice-branch-bounds"));
     }
     let mut labels = Vec::with_capacity(branches.len());
-    let mut option_branches = Vec::with_capacity(branches.len());
+    let mut branch_accs = Vec::with_capacity(branches.len());
     for (idx, branch) in branches.iter().enumerate() {
         labels.push(format!("Option {}", idx + 1));
-        option_branches.push(lower_effect_body(branch, ctx)?);
+        if branch.is_empty() {
+            return Err(LoweringError::Unsupported("v2:empty-effect-body"));
+        }
+        let mut b_acc = BodyAcc::new();
+        lower_effects_into(branch, &mut b_acc, ctx)?;
+        branch_accs.push(b_acc);
     }
+
+    // Engine requires `PromptChoice.option_branches[i].target == BodyTarget::None` and inherits
+    // `self.target` from the enclosing body. Hoist a shared branch target onto `acc` when every
+    // targeted branch agrees on the exact same target & cardinality.
+    let mut shared_target: Option<(BodyTarget, Option<(u16, u16)>, bool, bool, bool)> = None;
+    let mut can_hoist = true;
+    for b_acc in &branch_accs {
+        if !b_acc.target_set {
+            continue;
+        }
+        let sig = (
+            b_acc.target,
+            b_acc.target_bounds,
+            b_acc.up_to_one,
+            b_acc.x_target_count,
+            b_acc.up_to_x_target_count,
+        );
+        match shared_target {
+            None => shared_target = Some(sig),
+            Some(prev) if prev == sig => {}
+            Some(_) => {
+                can_hoist = false;
+                break;
+            }
+        }
+    }
+    if can_hoist && let Some((bt, bounds, up_to_one, x_cnt, up_to_x_cnt)) = shared_target {
+        let count = if up_to_x_cnt {
+            v2::TargetCount::UpToX
+        } else if x_cnt {
+            v2::TargetCount::VariableX
+        } else if up_to_one {
+            v2::TargetCount::UpTo(1)
+        } else if let Some((lo, hi)) = bounds {
+            if lo == 0 && hi == u16::MAX {
+                v2::TargetCount::AnyNumber
+            } else if lo == 0 {
+                v2::TargetCount::UpTo(hi)
+            } else if lo == hi {
+                v2::TargetCount::Exact(hi)
+            } else {
+                v2::TargetCount::Exact(1)
+            }
+        } else {
+            v2::TargetCount::Exact(1)
+        };
+        acc.register_target(bt, count)?;
+        ctx.has_object_target = acc.target_set
+            && matches!(
+                acc.target,
+                BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
+            );
+        for b_acc in &mut branch_accs {
+            b_acc.target = BodyTarget::None;
+            b_acc.target_set = false;
+            b_acc.target_bounds = None;
+            b_acc.up_to_one = false;
+            b_acc.x_target_count = false;
+            b_acc.up_to_x_target_count = false;
+        }
+    }
+
+    let mut option_branches = Vec::with_capacity(branch_accs.len());
+    for b_acc in branch_accs {
+        option_branches.push(b_acc.into_body()?);
+    }
+
     let bind_to = ctx.alloc_binding()?;
     acc.push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
         chooser,
@@ -2516,6 +2750,146 @@ fn lower_optional(
     Ok(())
 }
 
+fn cond_mentions_self(cond: &v2::ConditionExpr) -> bool {
+    match cond {
+        v2::ConditionExpr::HasKeyword { subject, .. }
+        | v2::ConditionExpr::SubjectState { subject, .. }
+        | v2::ConditionExpr::SubjectMatches { subject, .. }
+        | v2::ConditionExpr::SubjectCombatWith { subject, .. }
+        | v2::ConditionExpr::SubjectAttachedTo { subject, .. }
+        | v2::ConditionExpr::AttachedCount { subject, .. }
+        | v2::ConditionExpr::TargetsFilter { subject, .. }
+        | v2::ConditionExpr::ManaCostContains { subject, .. }
+        | v2::ConditionExpr::InZone { subject, .. }
+        | v2::ConditionExpr::CastFromZone { subject, .. }
+        | v2::ConditionExpr::SubjectCheck { subject, .. } => {
+            matches!(subject.as_ref(), v2::SubjectRef::SelfObject)
+        }
+        v2::ConditionExpr::SharesTypeWith { subject, other, .. }
+        | v2::ConditionExpr::HasGreaterStatThan { subject, other, .. } => {
+            matches!(subject.as_ref(), v2::SubjectRef::SelfObject)
+                || matches!(other.as_ref(), v2::SubjectRef::SelfObject)
+        }
+        v2::ConditionExpr::Compare { lhs, rhs, .. } => {
+            value_expr_mentions_self(lhs) || value_expr_mentions_self(rhs)
+        }
+        v2::ConditionExpr::Flag(flag) => matches!(
+            flag,
+            v2::ConditionFlag::WasKicked
+                | v2::ConditionFlag::WasBargained
+                | v2::ConditionFlag::WasCastFromHand
+                | v2::ConditionFlag::YouCastIt
+                | v2::ConditionFlag::ControlsSelf
+                | v2::ConditionFlag::GiftWasPromised
+                | v2::ConditionFlag::TributeNotPaid
+                | v2::ConditionFlag::AdditionalCostPaid
+                | v2::ConditionFlag::CardsExiledWithSelf
+        ),
+        v2::ConditionExpr::Not(inner) => cond_mentions_self(inner),
+        v2::ConditionExpr::And(a, b) | v2::ConditionExpr::Or(a, b) => {
+            cond_mentions_self(a) || cond_mentions_self(b)
+        }
+        _ => false,
+    }
+}
+
+fn value_expr_mentions_self(expr: &v2::ValueExpr) -> bool {
+    match expr {
+        v2::ValueExpr::ObjectStat { subject, .. }
+        | v2::ValueExpr::CounterCount { subject, .. }
+        | v2::ValueExpr::ColorCount(subject)
+        | v2::ValueExpr::StatDifference(subject) => {
+            matches!(subject.as_ref(), v2::SubjectRef::SelfObject)
+        }
+        v2::ValueExpr::Add(a, b) | v2::ValueExpr::Sub(a, b) | v2::ValueExpr::Mul(a, b) => {
+            value_expr_mentions_self(a) || value_expr_mentions_self(b)
+        }
+        v2::ValueExpr::Div { expr, .. } => value_expr_mentions_self(expr),
+        _ => false,
+    }
+}
+
+fn cond_mentions_anaphora(cond: &v2::ConditionExpr) -> bool {
+    match cond {
+        v2::ConditionExpr::HasKeyword { subject, .. }
+        | v2::ConditionExpr::SubjectState { subject, .. }
+        | v2::ConditionExpr::SubjectMatches { subject, .. }
+        | v2::ConditionExpr::SubjectCombatWith { subject, .. }
+        | v2::ConditionExpr::SubjectAttachedTo { subject, .. }
+        | v2::ConditionExpr::AttachedCount { subject, .. }
+        | v2::ConditionExpr::TargetsFilter { subject, .. }
+        | v2::ConditionExpr::ManaCostContains { subject, .. }
+        | v2::ConditionExpr::InZone { subject, .. }
+        | v2::ConditionExpr::CastFromZone { subject, .. }
+        | v2::ConditionExpr::SubjectCheck { subject, .. } => {
+            matches!(subject.as_ref(), v2::SubjectRef::Anaphora(_))
+        }
+        v2::ConditionExpr::SharesTypeWith { subject, other, .. }
+        | v2::ConditionExpr::HasGreaterStatThan { subject, other, .. } => {
+            matches!(subject.as_ref(), v2::SubjectRef::Anaphora(_))
+                || matches!(other.as_ref(), v2::SubjectRef::Anaphora(_))
+        }
+        v2::ConditionExpr::Compare { lhs, rhs, .. } => {
+            value_expr_mentions_anaphora(lhs) || value_expr_mentions_anaphora(rhs)
+        }
+        v2::ConditionExpr::Not(inner) => cond_mentions_anaphora(inner),
+        v2::ConditionExpr::And(a, b) | v2::ConditionExpr::Or(a, b) => {
+            cond_mentions_anaphora(a) || cond_mentions_anaphora(b)
+        }
+        _ => false,
+    }
+}
+
+fn value_expr_mentions_anaphora(expr: &v2::ValueExpr) -> bool {
+    match expr {
+        v2::ValueExpr::ObjectStat { subject, .. }
+        | v2::ValueExpr::CounterCount { subject, .. }
+        | v2::ValueExpr::ColorCount(subject)
+        | v2::ValueExpr::StatDifference(subject) => {
+            matches!(subject.as_ref(), v2::SubjectRef::Anaphora(_))
+        }
+        v2::ValueExpr::Add(a, b) | v2::ValueExpr::Sub(a, b) | v2::ValueExpr::Mul(a, b) => {
+            value_expr_mentions_anaphora(a) || value_expr_mentions_anaphora(b)
+        }
+        v2::ValueExpr::Div { expr, .. } => value_expr_mentions_anaphora(expr),
+        _ => false,
+    }
+}
+
+fn find_first_direct_target<'a>(effects: &'a [v2::Effect]) -> Option<&'a v2::SubjectRef> {
+    for eff in effects {
+        let candidate = match eff {
+            v2::Effect::ZoneOp { subject, .. }
+            | v2::Effect::MutateObject { subject, .. }
+            | v2::Effect::CopyObject { subject, .. } => Some(subject),
+            v2::Effect::DealDamage { target, .. } => Some(target),
+            v2::Effect::BranchCondition {
+                then_body,
+                else_body,
+                ..
+            } => {
+                if let Some(t) = find_first_direct_target(then_body) {
+                    return Some(t);
+                }
+                if let Some(t) = find_first_direct_target(else_body) {
+                    return Some(t);
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(
+            subj @ (v2::SubjectRef::TargetObject { .. }
+            | v2::SubjectRef::AnyTarget
+            | v2::SubjectRef::TargetPlayer { .. }),
+        ) = candidate
+        {
+            return Some(subj);
+        }
+    }
+    None
+}
+
 fn lower_branch_condition(
     cond: &v2::ConditionExpr,
     then_body: &[v2::Effect],
@@ -2526,56 +2900,89 @@ fn lower_branch_condition(
     if then_body.is_empty() && else_body.is_empty() {
         return Err(LoweringError::Unsupported("v2:branch-both-empty"));
     }
-    let lowered_cond = condition::lower_condition_expr(cond, ctx)?;
 
-    if then_body.is_empty() {
-        let negated = EngineConditionExpr::Not(Box::new(lowered_cond));
+    // Pre-register a single unambiguous target from `else_body` or `then_body` when either
+    // `cond` references that target via anaphora (e.g. "Destroy target artifact if its mana value
+    // is 2 or less") or `try_fuse_replace_previous` moved the original targeting effect into
+    // `else_body` while `then_body` references it via anaphora (e.g. Colossal Growth).
+    if !acc.target_set {
+        let pre_target = if !else_body.is_empty() && find_first_direct_target(then_body).is_none() {
+            find_first_direct_target(else_body)
+        } else if cond_mentions_anaphora(cond) {
+            find_first_direct_target(then_body).or_else(|| find_first_direct_target(else_body))
+        } else {
+            None
+        };
+        if let Some(target_subj) = pre_target
+            && let Ok((bt, tc)) = atoms::lower_subject_to_target(target_subj, ctx)
+        {
+            acc.register_target(bt, tc)?;
+            ctx.has_object_target = acc.target_set
+                && matches!(
+                    acc.target,
+                    BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
+                );
+        }
+    }
+
+    let lowered_cond = condition::lower_condition_expr(cond, ctx)?;
+    let prev_self = ctx.self_antecedent;
+    if cond_mentions_self(cond) {
+        ctx.self_antecedent = true;
+    }
+
+    let res: LowerResult<()> = (|| {
+        if then_body.is_empty() {
+            let negated = EngineConditionExpr::Not(Box::new(lowered_cond));
+            let branch_idx = acc.instructions.len();
+            acc.push(Instruction::BranchCondition {
+                condition: Box::new(negated),
+                destination: 0,
+            });
+            lower_effects_into(else_body, acc, ctx)?;
+            let after_else = acc.instructions.len();
+            if let Some(Instruction::BranchCondition { destination, .. }) =
+                acc.instructions.get_mut(branch_idx)
+            {
+                *destination = after_else;
+            }
+            return Ok(());
+        }
+
         let branch_idx = acc.instructions.len();
         acc.push(Instruction::BranchCondition {
-            condition: Box::new(negated),
+            condition: Box::new(lowered_cond),
             destination: 0,
         });
+        lower_effects_into(then_body, acc, ctx)?;
+
+        if else_body.is_empty() {
+            let after_then = acc.instructions.len();
+            if let Some(Instruction::BranchCondition { destination, .. }) =
+                acc.instructions.get_mut(branch_idx)
+            {
+                *destination = after_then;
+            }
+            return Ok(());
+        }
+
+        let jump_idx = acc.instructions.len();
+        acc.push(Instruction::Jump { destination: 0 });
+        let else_start = acc.instructions.len();
+        if let Some(Instruction::BranchCondition { destination, .. }) =
+            acc.instructions.get_mut(branch_idx)
+        {
+            *destination = else_start;
+        }
         lower_effects_into(else_body, acc, ctx)?;
         let after_else = acc.instructions.len();
-        if let Some(Instruction::BranchCondition { destination, .. }) =
-            acc.instructions.get_mut(branch_idx)
-        {
+        if let Some(Instruction::Jump { destination }) = acc.instructions.get_mut(jump_idx) {
             *destination = after_else;
         }
-        return Ok(());
-    }
-
-    let branch_idx = acc.instructions.len();
-    acc.push(Instruction::BranchCondition {
-        condition: Box::new(lowered_cond),
-        destination: 0,
-    });
-    lower_effects_into(then_body, acc, ctx)?;
-
-    if else_body.is_empty() {
-        let after_then = acc.instructions.len();
-        if let Some(Instruction::BranchCondition { destination, .. }) =
-            acc.instructions.get_mut(branch_idx)
-        {
-            *destination = after_then;
-        }
-        return Ok(());
-    }
-
-    let jump_idx = acc.instructions.len();
-    acc.push(Instruction::Jump { destination: 0 });
-    let else_start = acc.instructions.len();
-    if let Some(Instruction::BranchCondition { destination, .. }) =
-        acc.instructions.get_mut(branch_idx)
-    {
-        *destination = else_start;
-    }
-    lower_effects_into(else_body, acc, ctx)?;
-    let after_else = acc.instructions.len();
-    if let Some(Instruction::Jump { destination }) = acc.instructions.get_mut(jump_idx) {
-        *destination = after_else;
-    }
-    Ok(())
+        Ok(())
+    })();
+    ctx.self_antecedent = prev_self;
+    res
 }
 
 fn lower_if_previous(
@@ -2782,6 +3189,120 @@ fn lower_unless(
     }
 }
 
+fn infer_unless_effect_actor(unless: &[v2::Effect]) -> Option<v2::PlayerRef> {
+    for eff in unless {
+        match eff {
+            v2::Effect::ZoneOp { actor, .. }
+            | v2::Effect::CopyObject { actor, .. }
+            | v2::Effect::Optional { actor, .. } => return Some(*actor),
+            v2::Effect::MutatePlayer { player, .. } | v2::Effect::AdjustLife { player, .. } => {
+                return Some(*player);
+            }
+            v2::Effect::PromptChoice { chooser, .. } => return Some(*chooser),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn lower_unless_effect(
+    body: &[v2::Effect],
+    unless: &[v2::Effect],
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    if body.is_empty() || unless.is_empty() {
+        return Err(LoweringError::Unsupported("v2:unless-empty-body"));
+    }
+    // Lower `body` into a staging accumulator first so any target on `body` (e.g.
+    // "Counter target spell unless its controller exiles all cards from their graveyard")
+    // is registered before resolving the payer in `unless`.
+    let mut body_acc = acc.clone();
+    body_acc.instructions.clear();
+    lower_effects_into(body, &mut body_acc, ctx)?;
+    if !acc.target_set && body_acc.target_set {
+        acc.target = body_acc.target;
+        acc.target_set = true;
+        acc.target_bounds = body_acc.target_bounds;
+        acc.up_to_one = body_acc.up_to_one;
+        acc.x_target_count = body_acc.x_target_count;
+        acc.up_to_x_target_count = body_acc.up_to_x_target_count;
+        ctx.has_object_target = matches!(
+            acc.target,
+            BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
+        );
+    }
+
+    let payer_v2 = infer_unless_effect_actor(unless).unwrap_or(if acc.target_set {
+        v2::PlayerRef::ItsController
+    } else {
+        v2::PlayerRef::You
+    });
+    let payer_rp = atoms::lower_resolving_player(payer_v2, acc, ctx)?;
+
+    let prev_succeeded = ctx.last_succeeded_binding;
+    let mut unless_acc = acc.clone();
+    unless_acc.instructions.clear();
+    lower_effects_into(unless, &mut unless_acc, ctx)?;
+    if unless_acc.instructions.is_empty() {
+        return Err(LoweringError::Unsupported("v2:effect-unless-effect"));
+    }
+    validate_optional_slice(&unless_acc.instructions)?;
+    if !acc.target_set && unless_acc.target_set {
+        acc.target = unless_acc.target;
+        acc.target_set = true;
+        acc.target_bounds = unless_acc.target_bounds;
+        acc.up_to_one = unless_acc.up_to_one;
+        acc.x_target_count = unless_acc.x_target_count;
+        acc.up_to_x_target_count = unless_acc.up_to_x_target_count;
+    }
+
+    let cost_len = unless_acc.instructions.len();
+    let (paid_slot, append_true_bind) = if ctx.last_succeeded_binding != prev_succeeded
+        && let Some(ok_slot) = ctx.last_succeeded_binding
+    {
+        (ok_slot, false)
+    } else {
+        (ctx.alloc_binding()?, true)
+    };
+
+    acc.push(Instruction::BindEnv {
+        binding: paid_slot,
+        value: Box::new(ExecValue::Bool(false)),
+    });
+    acc.push(Instruction::OptionalSequence {
+        chooser: payer_rp,
+        instructions: if append_true_bind {
+            cost_len + 1
+        } else {
+            cost_len
+        },
+    });
+    splice_untargeted_instructions(acc, unless_acc.instructions);
+    if append_true_bind {
+        acc.push(Instruction::BindEnv {
+            binding: paid_slot,
+            value: Box::new(ExecValue::Bool(true)),
+        });
+    }
+
+    let branch_idx = acc.instructions.len();
+    acc.push(Instruction::BranchCondition {
+        condition: Box::new(EngineConditionExpr::Not(Box::new(
+            EngineConditionExpr::BoundBool(paid_slot),
+        ))),
+        destination: 0,
+    });
+    splice_untargeted_instructions(acc, body_acc.instructions);
+    let after_body = acc.instructions.len();
+    if let Some(Instruction::BranchCondition { destination, .. }) =
+        acc.instructions.get_mut(branch_idx)
+    {
+        *destination = after_body;
+    }
+    Ok(())
+}
+
 fn lower_for_each(
     over: &v2::ForEachDomain,
     body: &[v2::Effect],
@@ -2878,6 +3399,96 @@ fn lower_bind_variable(
     }
 }
 
+fn body_uses_object_anaphora(effects: &[v2::Effect]) -> bool {
+    let is_obj_anaph = |s: &v2::SubjectRef| {
+        matches!(
+            s,
+            v2::SubjectRef::Anaphora(
+                v2::AnaphoraRef::It
+                    | v2::AnaphoraRef::Them
+                    | v2::AnaphoraRef::ThatCreature
+                    | v2::AnaphoraRef::ThatPermanent
+                    | v2::AnaphoraRef::ThatCard
+                    | v2::AnaphoraRef::ThatToken
+                    | v2::AnaphoraRef::ThatLand
+                    | v2::AnaphoraRef::ThatObject
+                    | v2::AnaphoraRef::ThoseCreatures
+                    | v2::AnaphoraRef::ThosePermanents
+                    | v2::AnaphoraRef::ThoseCards
+                    | v2::AnaphoraRef::SameTarget
+            )
+        )
+    };
+    effects.iter().any(|eff| match eff {
+        v2::Effect::ZoneOp { subject, .. }
+        | v2::Effect::MutateObject { subject, .. }
+        | v2::Effect::CopyObject { subject, .. } => is_obj_anaph(subject),
+        v2::Effect::DealDamage { source, target, .. } => {
+            is_obj_anaph(source) || is_obj_anaph(target)
+        }
+        v2::Effect::Optional { body, .. }
+        | v2::Effect::IfPrevious { body, .. }
+        | v2::Effect::ScopedDuration { body, .. }
+        | v2::Effect::BindVariable { body, .. } => body_uses_object_anaphora(body),
+        v2::Effect::BranchCondition {
+            condition,
+            then_body,
+            else_body,
+        } => {
+            cond_mentions_anaphora(condition)
+                || body_uses_object_anaphora(then_body)
+                || body_uses_object_anaphora(else_body)
+        }
+        _ => false,
+    })
+}
+
+fn outer_antecedent_query_for_delayed(acc: &BodyAcc, ctx: &LowerCtx<'_>) -> Option<ObjectQuery> {
+    if let Some(binding) = ctx.in_loop_object {
+        return Some(ObjectQuery::Bound(binding));
+    }
+    if let Some(binding) = ctx.last_moved_binding {
+        return Some(ObjectQuery::Bound(binding));
+    }
+    for ins in acc.instructions.iter().rev() {
+        match ins {
+            Instruction::CreateTokens { .. } => return Some(ObjectQuery::CreatedTokens),
+            Instruction::MutateObject(spec) => {
+                if let Some(binding) = spec.bind_mutated {
+                    return Some(ObjectQuery::Bound(binding));
+                }
+                if matches!(
+                    spec.selection,
+                    spellwake_engine::toolbox::ZoneSelection::All
+                ) && !matches!(spec.source, ObjectQuery::Empty)
+                {
+                    return Some(spec.source.clone());
+                }
+                break;
+            }
+            Instruction::ZoneOp(spec) => {
+                if let Some(binding) = spec.bind_moved {
+                    return Some(ObjectQuery::Bound(binding));
+                }
+                return Some(ObjectQuery::LastMoved);
+            }
+            _ => {}
+        }
+    }
+    if acc.target_set
+        && matches!(
+            acc.target,
+            BodyTarget::Object { .. } | BodyTarget::AnyTarget(_)
+        )
+    {
+        return Some(ObjectQuery::Targets);
+    }
+    if ctx.in_trigger {
+        return Some(ObjectQuery::TriggerSubject);
+    }
+    None
+}
+
 fn lower_delayed_trigger(
     delayed: &v2::DelayedTriggerKind,
     body: &[v2::Effect],
@@ -2903,7 +3514,46 @@ fn lower_delayed_trigger(
                     return Err(LoweringError::Unsupported("v2:delayed-trigger-step-owner"));
                 }
             };
-            let sub_body = lower_effect_body(body, ctx)?;
+            let tagged_antecedent = if body_uses_object_anaphora(body) {
+                outer_antecedent_query_for_delayed(acc, ctx)
+            } else {
+                None
+            };
+            let sub_body = if let Some(outer_query) = tagged_antecedent {
+                let tag_slot = ctx.alloc_binding()?;
+                let tag_key = TagKey::Label(format!("v2:delayed:{}", tag_slot.0));
+                acc.push(Instruction::SetObjectTag {
+                    query: Box::new(outer_query),
+                    key: tag_key.clone(),
+                    value: Some(TagValue::Unit),
+                });
+                let prev_tag = ctx.delayed_tag_key.replace(tag_key.clone());
+                let prev_has_obj = ctx.has_object_target;
+                let prev_in_trig = ctx.in_trigger;
+                let prev_last_moved = ctx.last_moved_binding;
+                ctx.has_object_target = false;
+                ctx.in_trigger = false;
+                ctx.last_moved_binding = None;
+                let res = lower_effect_body(body, ctx);
+                ctx.delayed_tag_key = prev_tag;
+                ctx.has_object_target = prev_has_obj;
+                ctx.in_trigger = prev_in_trig;
+                ctx.last_moved_binding = prev_last_moved;
+                let mut inner = res?;
+                inner.instructions.push(Instruction::SetObjectTag {
+                    query: Box::new(ObjectQuery::Tagged {
+                        key: tag_key,
+                        value: Some(TagValue::Unit),
+                        zone: None,
+                        filter: None,
+                    }),
+                    key: TagKey::Label(format!("v2:delayed:{}", tag_slot.0)),
+                    value: None,
+                });
+                inner
+            } else {
+                lower_effect_body(body, ctx)?
+            };
             acc.push(Instruction::ScheduleDelayedStepTrigger {
                 step: engine_step,
                 own_step_only,
@@ -2913,10 +3563,17 @@ fn lower_delayed_trigger(
         }
         v2::DelayedTriggerKind::Event(trig_spec) => {
             let prev_in_trig = ctx.in_trigger;
+            let prev_is_spell_cast = ctx.trigger_is_spell_cast;
             ctx.in_trigger = true;
+            ctx.trigger_is_spell_cast = !trig_spec.events.is_empty()
+                && trig_spec
+                    .events
+                    .iter()
+                    .all(|ev| matches!(ev, v2::TriggerEvent::SpellCast { .. }));
             let lowered = trigger::lower_trigger_events(trig_spec, ctx);
             let sub_body_res = lower_effect_body(body, ctx);
             ctx.in_trigger = prev_in_trig;
+            ctx.trigger_is_spell_cast = prev_is_spell_cast;
 
             let (specs, _grouping, intervening) = lowered?;
             let sub_body = sub_body_res?;

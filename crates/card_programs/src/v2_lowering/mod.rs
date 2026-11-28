@@ -554,6 +554,23 @@ mod tests {
         let mut v2_parsed_ok = 0usize;
         let mut v2_lowered_ok = 0usize;
         let dump_samples = std::env::var("V2_DUMP_SAMPLES").is_ok();
+        let top_n: usize = std::env::var("V2_TOP_N")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(40);
+        let inspect_codes: Vec<String> = std::env::var("V2_INSPECT_CODE")
+            .map(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let inspect_limit: usize = std::env::var("V2_INSPECT_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15);
         let mut blocker_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut blocker_samples: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
 
@@ -591,9 +608,11 @@ mod tests {
                 Err(err) => {
                     let code = err.reason_code();
                     *blocker_counts.entry(code).or_insert(0) += 1;
-                    if dump_samples && code != "v2:ast-parse-incomplete" {
+                    let inspected = inspect_codes.iter().any(|c| c == code);
+                    if (dump_samples || inspected) && code != "v2:ast-parse-incomplete" {
                         let entry = blocker_samples.entry(code).or_default();
-                        if entry.len() < 3 {
+                        let cap = if inspected { inspect_limit } else { 3 };
+                        if entry.len() < cap {
                             let oracle = card
                                 .faces
                                 .iter()
@@ -601,7 +620,8 @@ mod tests {
                                 .collect::<Vec<_>>()
                                 .join(" // ");
                             let ir = format!("{:?}", compiled.faces);
-                            let ir_short: String = ir.chars().take(420).collect();
+                            let ir_cap = if inspected { 900 } else { 420 };
+                            let ir_short: String = ir.chars().take(ir_cap).collect();
                             entry.push(format!(
                                 "{} [{}]: {} || IR={}",
                                 card.name,
@@ -637,12 +657,25 @@ mod tests {
         eprintln!(
             "v2_lowering bound valid:  {v2_lowered_ok} ({total_pct:.2}% of corpus, {bind_of_parsed_pct:.2}% of v2 parsed)"
         );
-        eprintln!("--- Top 40 blocker reasons ---");
+        eprintln!("--- Top {top_n} blocker reasons ---");
 
         let mut ranked: Vec<(&'static str, usize)> = blocker_counts.into_iter().collect();
         ranked.sort_by_key(|&(code, count)| (Reverse(count), code));
-        for (idx, (code, count)) in ranked.iter().take(40).enumerate() {
+        for (idx, (code, count)) in ranked.iter().take(top_n).enumerate() {
             eprintln!("{:>2}. {:>6}  {code}", idx + 1, count);
+        }
+        if !inspect_codes.is_empty() {
+            eprintln!("--- Inspected Blocker Samples ---");
+            for want in &inspect_codes {
+                if let Some(&(code, count)) = ranked.iter().find(|(c, _)| *c == want.as_str()) {
+                    eprintln!("=== {code} ({count}) ===");
+                    if let Some(samples) = blocker_samples.get(code) {
+                        for s in samples {
+                            eprintln!("  * {s}");
+                        }
+                    }
+                }
+            }
         }
         if dump_samples {
             eprintln!("--- Blocker IR Samples (Top 30 non-parse) ---");

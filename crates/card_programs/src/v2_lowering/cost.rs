@@ -242,95 +242,103 @@ pub(crate) fn lower_activated_ability(
     }
 
     // Check for top-level modal activated ability (`Choose one - ...`).
+    let prev_self_antecedent = ctx.self_antecedent;
+    ctx.self_antecedent = cost_establishes_self_antecedent(cost, &source_cost, &extra_costs);
     if let Some((prefix_effs, choice_count, modes, suffix_effs)) =
         extract_modal_choice(&exec_effects)
     {
-        let (min_modes, max_modes) = lower_choice_count(choice_count, modes.len())?;
-        let prefix = if prefix_effs.is_empty() {
-            None
-        } else {
-            let pb = lower_effect_body(prefix_effs, ctx)?;
-            if pb.target != BodyTarget::None
-                || pb
-                    .instructions
-                    .iter()
-                    .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
-            {
-                return Err(LoweringError::Unsupported(
-                    "v2:activated:modal-prefix-target",
-                ));
-            }
-            Some(Box::new(pb))
-        };
-        let suffix = if suffix_effs.is_empty() {
-            None
-        } else {
-            let sb = lower_effect_body(suffix_effs, ctx)?;
-            if sb.target != BodyTarget::None
-                || sb
-                    .instructions
-                    .iter()
-                    .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
-            {
-                return Err(LoweringError::Unsupported(
-                    "v2:activated:modal-suffix-target",
-                ));
-            }
-            Some(Box::new(sb))
-        };
+        let modal_res: LowerResult<()> = (|| {
+            let (min_modes, max_modes) = lower_choice_count(choice_count, modes.len())?;
+            let prefix = if prefix_effs.is_empty() {
+                None
+            } else {
+                let pb = lower_effect_body(prefix_effs, ctx)?;
+                if pb.target != BodyTarget::None
+                    || pb
+                        .instructions
+                        .iter()
+                        .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+                {
+                    return Err(LoweringError::Unsupported(
+                        "v2:activated:modal-prefix-target",
+                    ));
+                }
+                Some(Box::new(pb))
+            };
+            let suffix = if suffix_effs.is_empty() {
+                None
+            } else {
+                let sb = lower_effect_body(suffix_effs, ctx)?;
+                if sb.target != BodyTarget::None
+                    || sb
+                        .instructions
+                        .iter()
+                        .any(|op| matches!(op, Instruction::FixedTargetClause(_)))
+                {
+                    return Err(LoweringError::Unsupported(
+                        "v2:activated:modal-suffix-target",
+                    ));
+                }
+                Some(Box::new(sb))
+            };
 
-        let mut lowered_modes: Vec<ExecutableBody> = Vec::with_capacity(modes.len());
-        for mode in modes {
-            let mb = lower_effect_body(&mode.body, ctx)?;
-            if mb.instructions.is_empty() {
-                return Err(LoweringError::Unsupported("v2:activated:modal-empty-mode"));
+            let mut lowered_modes: Vec<ExecutableBody> = Vec::with_capacity(modes.len());
+            for mode in modes {
+                let mb = lower_effect_body(&mode.body, ctx)?;
+                if mb.instructions.is_empty() {
+                    return Err(LoweringError::Unsupported("v2:activated:modal-empty-mode"));
+                }
+                lowered_modes.push(mb);
             }
-            lowered_modes.push(mb);
-        }
-        if lowered_modes.len() < 2 {
-            return Err(LoweringError::Unsupported("v2:activated:modal-too-few"));
-        }
+            if lowered_modes.len() < 2 {
+                return Err(LoweringError::Unsupported("v2:activated:modal-too-few"));
+            }
 
-        let first = lowered_modes.remove(0);
-        let id = ctx.alloc_activated_id();
-        if !hybrids.is_empty() {
-            program.activation_hybrid_symbols.insert(id, hybrids);
-        }
-        if !extra_costs.is_empty() {
-            program.extra_activation_costs.insert(id, extra_costs);
-        }
-        if let Some(red) = inline_cost_reduction {
-            program.activation_cost_reductions.insert(id, red);
-        }
-        if let Some(res) = restriction {
-            program.activation_restrictions.insert(id, res);
-        }
-        program.activation_modes.insert(
-            id,
-            SpellModes {
-                minimum: min_modes,
-                maximum: max_modes,
-                conditional_maximum: None,
-                allow_repeat: false,
-                distinct_targets: false,
-                uniqueness: ModalUniqueness::None,
-                mode_costs: Vec::new(),
-                escalate_mana: None,
-                prefix,
-                suffix,
-                additional: lowered_modes,
-            },
-        );
-        program.activated.push(ActivatedAbility {
-            id,
-            mana_cost,
-            source_cost,
-            body: first,
-        });
-        return Ok(());
+            let first = lowered_modes.remove(0);
+            let id = ctx.alloc_activated_id();
+            if !hybrids.is_empty() {
+                program.activation_hybrid_symbols.insert(id, hybrids);
+            }
+            if !extra_costs.is_empty() {
+                program.extra_activation_costs.insert(id, extra_costs);
+            }
+            if let Some(red) = inline_cost_reduction {
+                program.activation_cost_reductions.insert(id, red);
+            }
+            if let Some(res) = restriction {
+                program.activation_restrictions.insert(id, res);
+            }
+            program.activation_modes.insert(
+                id,
+                SpellModes {
+                    minimum: min_modes,
+                    maximum: max_modes,
+                    conditional_maximum: None,
+                    allow_repeat: false,
+                    distinct_targets: false,
+                    uniqueness: ModalUniqueness::None,
+                    mode_costs: Vec::new(),
+                    escalate_mana: None,
+                    prefix,
+                    suffix,
+                    additional: lowered_modes,
+                },
+            );
+            program.activated.push(ActivatedAbility {
+                id,
+                mana_cost,
+                source_cost,
+                body: first,
+            });
+            Ok(())
+        })();
+        ctx.self_antecedent = prev_self_antecedent;
+        return modal_res;
     }
 
-    let lowered_body = lower_effect_body(&exec_effects, ctx)?;
+    let lowered_body_res = lower_effect_body(&exec_effects, ctx);
+    ctx.self_antecedent = prev_self_antecedent;
+    let lowered_body = lowered_body_res?;
     let id = ctx.alloc_activated_id();
     if !hybrids.is_empty() {
         program.activation_hybrid_symbols.insert(id, hybrids);
@@ -351,6 +359,65 @@ pub(crate) fn lower_activated_ability(
         body: lowered_body,
     });
     Ok(())
+}
+
+/// True when an activated ability's cost explicitly names its source object (e.g. "Sacrifice this
+/// creature:", "Discard this card:", "Exile this artifact:", "Remove a counter from this permanent:"),
+/// establishing `SelfObject` as a grammatical antecedent for `"it"` in the effect body.
+fn cost_establishes_self_antecedent(
+    cost: &[v2::Cost],
+    source_cost: &SourceCost,
+    extra_costs: &[ExtraActivationCost],
+) -> bool {
+    if matches!(
+        source_cost,
+        SourceCost::HandDiscardSelf(_)
+            | SourceCost::Sacrifice
+            | SourceCost::TapSacrifice
+            | SourceCost::Exile { .. }
+            | SourceCost::ReturnSelfToHand { .. }
+            | SourceCost::Counter { .. }
+            | SourceCost::Discard {
+                sacrifice_source: true,
+                ..
+            }
+    ) || extra_costs.iter().any(|c| {
+        matches!(
+            c,
+            ExtraActivationCost::SacrificeSource
+                | ExtraActivationCost::ExileSource { .. }
+                | ExtraActivationCost::ExertSource
+                | ExtraActivationCost::Unattach { self_source: true }
+        )
+    }) {
+        return true;
+    }
+    cost.iter().any(|c| match c {
+        v2::Cost::SacrificeSelf
+        | v2::Cost::ExileSelf
+        | v2::Cost::ExertSelf
+        | v2::Cost::UnattachSelf => true,
+        v2::Cost::ReturnToHand {
+            subject: v2::SubjectRef::SelfObject,
+        }
+        | v2::Cost::PutCounters {
+            subject: v2::SubjectRef::SelfObject,
+            ..
+        }
+        | v2::Cost::RemoveCounters {
+            subject: Some(v2::SubjectRef::SelfObject) | None,
+            ..
+        }
+        | v2::Cost::RemoveEitherCounter {
+            subject: Some(v2::SubjectRef::SelfObject) | None,
+            ..
+        }
+        | v2::Cost::PutZone {
+            subject: v2::SubjectRef::SelfObject,
+            ..
+        } => true,
+        _ => false,
+    })
 }
 
 fn lower_inline_activation_cost_reduction(
@@ -715,6 +782,24 @@ pub(crate) fn lower_additional_cast_costs(
                 }
                 _ => {}
             }
+        }
+        if let v2::Cost::Sacrifice {
+            count: v2::ValueExpr::Const(1),
+            filter,
+        } = atom
+            && matches!(program.kind, ProgramKind::Spell(_))
+            && !program.sacrifice_creature_cast_cost
+            && !program.tap_creatures_cast_cost
+            && !program.reveal_colorless_creature_cast_cost
+        {
+            let obj_filter = lower_object_filter(filter, ctx)?;
+            program.sacrifice_creature_cast_cost = true;
+            program.sacrifice_cast_cost_filter = if obj_filter == ObjectFilter::creature() {
+                None
+            } else {
+                Some(obj_filter)
+            };
+            continue;
         }
         let extra = lower_extra_cost_atom(atom, ctx)?;
         if is_battlefield_only_source_cost(&extra) {

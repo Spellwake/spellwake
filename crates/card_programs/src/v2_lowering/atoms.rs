@@ -2605,6 +2605,49 @@ fn lower_compound_target(
             ));
         }
 
+        // Merge `target creature or planeswalker` + `target player` into `SINGLE_ANY_TARGET`.
+        let cpw_mask = ast::CardTypeMask::CREATURE.union(ast::CardTypeMask::PLANESWALKER);
+        let is_cpw_target = |s: &v2::SubjectRef| -> Option<v2::TargetCount> {
+            match s {
+                v2::SubjectRef::TargetObject {
+                    filter,
+                    count,
+                    another: false,
+                } if filter.all_types.is_empty()
+                    && filter.any_types == cpw_mask
+                    && filter.forbidden_types.is_empty()
+                    && filter.required_supertypes.is_empty()
+                    && filter.forbidden_supertypes.is_empty()
+                    && filter.subtypes.is_empty()
+                    && filter.forbidden_subtypes.is_empty()
+                    && filter.any_colors.is_empty()
+                    && filter.forbidden_colors.is_empty()
+                    && filter.color_arity.is_none()
+                    && filter.controller.is_none()
+                    && filter.owner.is_none()
+                    && filter.zones.is_empty()
+                    && filter.combat.is_none()
+                    && filter.tapped.is_none()
+                    && filter.token.is_none()
+                    && filter.required_keywords.is_empty()
+                    && filter.forbidden_keywords.is_empty()
+                    && filter.stat_bounds.is_empty()
+                    && filter.flags.is_empty()
+                    && filter.predicates.is_empty() =>
+                {
+                    Some(*count)
+                }
+                _ => None,
+            }
+        };
+        if let Some((c1, c2)) = is_cpw_target(a)
+            .zip(player_single_target_count(b, false))
+            .or_else(|| player_single_target_count(a, false).zip(is_cpw_target(b)))
+            && c1 == c2
+        {
+            return Ok((BodyTarget::SINGLE_ANY_TARGET, c1));
+        }
+
         // Merge two single-clause object targets in the same zone into `ObjectFilter::Either`.
         if let (
             Ok((
@@ -2718,7 +2761,27 @@ pub(crate) fn lower_subject_to_query(
             if parts.is_empty() {
                 return Err(LoweringError::Unsupported("v2:subject:empty-compound"));
             }
-            if parts.iter().any(subject_is_targeting) {
+            let targeting_count = parts.iter().filter(|p| subject_is_targeting(p)).count();
+            if targeting_count == parts.len() {
+                let (target, count) = lower_compound_target(parts, ctx)?;
+                acc.register_target(target, count)?;
+                ctx.has_object_target = acc.target_set && target_is_object_like(acc.target);
+                return Ok(ObjectQuery::Targets);
+            }
+            if targeting_count == 1 {
+                // Lower the single targeting part first so subsequent non-targeting parts
+                // (e.g. `all other creatures with the same name as that creature`,
+                // `all Auras attached to it`, or `this creature`) see `acc.target_set`.
+                let mut queries = Vec::with_capacity(parts.len());
+                for part in parts.iter().filter(|p| subject_is_targeting(p)) {
+                    queries.push(lower_subject_to_query(part, acc, ctx)?);
+                }
+                for part in parts.iter().filter(|p| !subject_is_targeting(p)) {
+                    queries.push(lower_subject_to_query(part, acc, ctx)?);
+                }
+                return Ok(ObjectQuery::Union(queries));
+            }
+            if targeting_count > 1 {
                 let (target, count) = lower_compound_target(parts, ctx)?;
                 acc.register_target(target, count)?;
                 ctx.has_object_target = acc.target_set && target_is_object_like(acc.target);
@@ -2763,6 +2826,14 @@ fn lower_anaphora_to_query(
         | v2::AnaphoraRef::ThoseCreatures
         | v2::AnaphoraRef::ThosePermanents
         | v2::AnaphoraRef::ThoseCards => {
+            if let Some(tag_key) = &ctx.delayed_tag_key {
+                return Ok(ObjectQuery::Tagged {
+                    key: tag_key.clone(),
+                    value: Some(spellwake_engine::toolbox::TagValue::Unit),
+                    zone: Some(QueryZone::Battlefield),
+                    filter: None,
+                });
+            }
             if let Some(binding) = ctx.in_loop_object {
                 return Ok(ObjectQuery::Bound(binding));
             }
@@ -2814,10 +2885,20 @@ fn lower_anaphora_to_query(
                     _ => {}
                 }
             }
+            if ctx.self_antecedent && matches!(anaph, v2::AnaphoraRef::It) {
+                return Ok(ObjectQuery::Source);
+            }
             Err(LoweringError::Unsupported("v2:subject:unbound-anaphora"))
         }
         v2::AnaphoraRef::SameTarget => {
-            if has_obj_target {
+            if let Some(tag_key) = &ctx.delayed_tag_key {
+                Ok(ObjectQuery::Tagged {
+                    key: tag_key.clone(),
+                    value: Some(spellwake_engine::toolbox::TagValue::Unit),
+                    zone: Some(QueryZone::Battlefield),
+                    filter: None,
+                })
+            } else if has_obj_target {
                 Ok(ObjectQuery::Targets)
             } else if let Some(binding) = ctx.last_moved_binding {
                 Ok(ObjectQuery::Bound(binding))

@@ -678,6 +678,11 @@ fn try_lower_stack_copy(
     let is_stack_subject = match subject {
         v2::SubjectRef::TargetObject { filter, .. } => is_stack_only_filter(filter),
         v2::SubjectRef::Anaphora(v2::AnaphoraRef::ThatSpell) => true,
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It) | v2::SubjectRef::SelfObject
+            if ctx.in_trigger && ctx.trigger_is_spell_cast =>
+        {
+            true
+        }
         _ => false,
     };
     if !is_stack_subject {
@@ -739,6 +744,15 @@ fn try_lower_stack_copy(
                     "v2:copy-that-spell-outside-trigger",
                 ));
             }
+            Ok(Some(StackOpSpec::copy_stack(
+                StackCopyTarget::TriggeringSpell,
+                amount,
+                true,
+            )))
+        }
+        v2::SubjectRef::Anaphora(v2::AnaphoraRef::It) | v2::SubjectRef::SelfObject
+            if ctx.in_trigger && ctx.trigger_is_spell_cast =>
+        {
             Ok(Some(StackOpSpec::copy_stack(
                 StackCopyTarget::TriggeringSpell,
                 amount,

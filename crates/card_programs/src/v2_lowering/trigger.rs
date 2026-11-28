@@ -115,14 +115,21 @@ pub(crate) fn lower_triggered_ability(
     };
 
     let prev_has_participant = ctx.trigger_has_participant;
+    let prev_is_spell_cast = ctx.trigger_is_spell_cast;
     let prev_damage_event = ctx.trigger_damage_event;
     ctx.trigger_has_participant = !specs.is_empty()
         && specs
             .iter()
             .all(|s| trigger_spec_has_participant(s, grouping));
+    ctx.trigger_is_spell_cast = !effective_spec.events.is_empty()
+        && effective_spec
+            .events
+            .iter()
+            .all(|ev| matches!(ev, v2::TriggerEvent::SpellCast { .. }));
     ctx.trigger_damage_event = infer_trigger_damage_event(&specs);
     let exec_body_res = lower_triggered_body(&exec_effects, remaining_cond, ctx);
     ctx.trigger_has_participant = prev_has_participant;
+    ctx.trigger_is_spell_cast = prev_is_spell_cast;
     ctx.trigger_damage_event = prev_damage_event;
     let exec_body = exec_body_res?;
 

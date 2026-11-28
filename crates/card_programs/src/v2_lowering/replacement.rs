@@ -106,8 +106,35 @@ pub(crate) fn lower_temporary_replacement(
             Ok(())
         }
         v2::Replacement::DamageRule(v2::DamageReplacement::RedirectNext { amount, from, to }) => {
-            let from_rec = lower_damage_recipient(from, ctx)?;
-            let to_tgt = lower_damage_redirect_target(to)?;
+            let (from_rec, to_tgt) = if let (
+                v2::SubjectRef::TargetObject {
+                    filter: f1,
+                    count: v2::TargetCount::Exact(1),
+                    another: false,
+                },
+                v2::SubjectRef::TargetObject {
+                    filter: f2,
+                    count: v2::TargetCount::Exact(1),
+                    another: true,
+                },
+            ) = (from, to)
+                && f1 == f2
+            {
+                let (bt, _) = crate::v2_lowering::atoms::lower_subject_to_target(from, ctx)?;
+                acc.register_target(bt, v2::TargetCount::Exact(2))?;
+                ctx.has_object_target = true;
+                (
+                    StaticDamageRecipient::TargetObject,
+                    DamageRedirectTarget::SecondTargetObject,
+                )
+            } else {
+                register_damage_subject_target(from, acc, ctx)?;
+                register_damage_subject_target(to, acc, ctx)?;
+                (
+                    lower_damage_recipient(from, ctx)?,
+                    lower_damage_redirect_target(to)?,
+                )
+            };
             let amt = lower_value_expr(amount, ctx)?;
             acc.push(Instruction::ApplyContinuous(Box::new(
                 ApplyContinuousSpec::temporary_rule(
@@ -130,6 +157,9 @@ pub(crate) fn lower_temporary_replacement(
             target,
             amount,
         }) => {
+            if let Some(t) = target {
+                register_damage_subject_target(t, acc, ctx)?;
+            }
             let src_flt = match source {
                 Some(f) => Some(lower_object_filter(f, ctx)?),
                 None => None,
@@ -2396,6 +2426,39 @@ fn lower_compound_damage_recipient(
                 "v2:replacement-damage-compound-recipient",
             ))
         }
+    }
+}
+
+fn register_damage_subject_target(
+    subj: &v2::SubjectRef,
+    acc: &mut BodyAcc,
+    ctx: &mut LowerCtx<'_>,
+) -> LowerResult<()> {
+    match subj {
+        v2::SubjectRef::TargetObject { .. } => {
+            let (bt, tc) = crate::v2_lowering::atoms::lower_subject_to_target(subj, ctx)?;
+            acc.register_target(bt, tc)?;
+            ctx.has_object_target = true;
+            Ok(())
+        }
+        v2::SubjectRef::AnyTarget => {
+            acc.register_target(BodyTarget::SINGLE_ANY_TARGET, v2::TargetCount::Exact(1))?;
+            ctx.has_object_target = true;
+            Ok(())
+        }
+        v2::SubjectRef::TargetPlayer {
+            opponent_only,
+            count,
+        } => {
+            acc.register_target(
+                BodyTarget::Player {
+                    opponents_only: *opponent_only,
+                },
+                *count,
+            )?;
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 

@@ -1,0 +1,792 @@
+//! Live `GameState` execution tests for Stage 4.0 `v2_lowering` waves.
+//!
+//! Each test compiles card rules strictly through `v2 -> v2_lowering -> Program`,
+//! seeds a live `spellwake_engine::GameState`, executes casts/activations/triggers/decisions,
+//! and asserts actual board, zone, life, mana, or stat outcomes.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use spellwake_card_programs::v2_lowering::compile_v2_with_reason;
+use spellwake_content::{CatalogFace, InventoryCard};
+use spellwake_contracts::creature_types::CreatureTypeVocabulary;
+use spellwake_contracts::names::NameRules;
+use spellwake_engine::{
+    combat::CombatRules,
+    effects::{
+        CopyTargetChoice, DecisionReply, OptionalEffectChoice, ResolutionPaymentReply, SeedCard,
+    },
+    game::{GameCommand, GameContext, GameId, GameInput, GameState, NativeCandidate, RuleFrame},
+    mana::{CastResource, CastingPayment, FloatingMana, ManaPayment, ManaSpend, ManaType},
+    object_identity::{CardId, GameObject, ObjectDestination, ObjectZone},
+    priority::{PriorityPhase, SeatId},
+    program::Program,
+    setup::GameSeed,
+    stack_window::WindowPhase,
+    targets::TargetRef,
+    toolbox::PromptChoiceReply,
+    turn::{Step, TurnStart},
+};
+
+const ALICE: SeatId = SeatId(0);
+const BOB: SeatId = SeatId(1);
+
+fn test_vocab() -> Arc<CreatureTypeVocabulary> {
+    let mut members = vec![
+        "Beast".to_string(),
+        "Bird".to_string(),
+        "Druid".to_string(),
+        "Elf".to_string(),
+        "Goblin".to_string(),
+        "Human".to_string(),
+        "Knight".to_string(),
+        "Soldier".to_string(),
+        "Spirit".to_string(),
+        "Warrior".to_string(),
+        "Wizard".to_string(),
+        "Zombie".to_string(),
+    ];
+    members.sort();
+    members.dedup();
+    Arc::new(
+        CreatureTypeVocabulary::new("v2-lowering-gameplay-vocab".to_string(), [1u8; 32], members)
+            .expect("test vocab"),
+    )
+}
+
+fn compile_card(
+    vocab: &CreatureTypeVocabulary,
+    name: &str,
+    type_line: &str,
+    mana_cost: Option<&str>,
+    pt: Option<(&str, &str)>,
+    oracle_text: &str,
+) -> Program {
+    let card = InventoryCard {
+        scryfall_id: "00000000-0000-0000-0000-000000000000".to_string(),
+        oracle_id: Some("00000000-0000-0000-0000-000000000001".to_string()),
+        name: name.to_string(),
+        layout: "normal".to_string(),
+        faces: vec![CatalogFace {
+            name: name.to_string(),
+            type_line: Some(type_line.to_string()),
+            oracle_text: Some(oracle_text.to_string()),
+            mana_cost: mana_cost.map(str::to_string),
+            power: pt.map(|(p, _)| p.to_string()),
+            toughness: pt.map(|(_, t)| t.to_string()),
+        }],
+        legalities: BTreeMap::new(),
+        eligible_formats: Vec::new(),
+        required_by_base_formats: true,
+        program_evidence: "v2-gameplay-test",
+    };
+    let program = compile_v2_with_reason(&card, vocab)
+        .unwrap_or_else(|e| panic!("failed to compile {name}: {e:?}"));
+    program
+        .validate(vocab)
+        .unwrap_or_else(|e| panic!("failed to validate {name}: {e:?}"));
+    program
+}
+
+fn start_game(
+    vocab: Arc<CreatureTypeVocabulary>,
+    mut cards: Vec<SeedCard>,
+    mana: &[(SeatId, ManaType, i64)],
+) -> GameState {
+    for i in 0..8u64 {
+        cards.push(SeedCard {
+            card: CardId(1000 + i),
+            owner: ALICE,
+            destination: ObjectDestination::LibraryBottom,
+            program: Program::artifact(None, vec![]),
+        });
+        cards.push(SeedCard {
+            card: CardId(2000 + i),
+            owner: BOB,
+            destination: ObjectDestination::LibraryBottom,
+            program: Program::artifact(None, vec![]),
+        });
+    }
+    let battlefield_order = cards
+        .iter()
+        .filter(|c| matches!(c.destination, ObjectDestination::Battlefield { .. }))
+        .map(|c| c.card)
+        .collect();
+    let names = Arc::new(NameRules::literal_names());
+    let context = GameContext::new(
+        "v2-lowering-gameplay".into(),
+        vocab.rules_revision().into(),
+        "0000000000000000000000000000000000000000000000000000000000000000".into(),
+        "v2-lowering-gameplay-v1".into(),
+        "v2-lowering-gameplay".into(),
+        vocab.id(),
+        names.id(),
+    )
+    .expect("context");
+    GameState::initialize_scheduled(
+        GameId(1),
+        context,
+        GameSeed::with_uniform_life(
+            vec![ALICE, BOB],
+            ALICE,
+            cards,
+            battlefield_order,
+            mana.iter()
+                .map(|&(player, mana_type, amount)| FloatingMana {
+                    player,
+                    mana_type,
+                    amount: amount.into(),
+                })
+                .collect(),
+            20.into(),
+            CombatRules::UnrestrictedFreeForAll,
+            vocab,
+            names,
+        ),
+        TurnStart {
+            number: 1,
+            step: Step::PrecombatMain,
+        },
+    )
+    .expect("init game")
+    .into_state()
+}
+
+fn object(game: &GameState, card: u64) -> &GameObject {
+    let cards = game.execution().window().cards();
+    cards
+        .get(cards.current_identity(CardId(card)).expect("card id"))
+        .expect("object")
+}
+
+fn advance(game: &GameState, actor: SeatId, command: GameCommand) -> NativeCandidate {
+    game.advance(GameInput {
+        basis: game.basis().clone(),
+        actor,
+        command: command.clone(),
+    })
+    .unwrap_or_else(|e| panic!("command {command:?} failed: {e:?}"))
+}
+
+fn pass(game: &GameState) -> GameState {
+    let WindowPhase::Priority(PriorityPhase::Ready { holder }) = game.execution().window().phase()
+    else {
+        panic!(
+            "expected priority, got {:?}, pending={:?}",
+            game.execution().window().phase(),
+            game.pending_decision()
+        );
+    };
+    advance(game, holder, GameCommand::Pass).into_state()
+}
+
+fn resolve_top(game: &GameState) -> GameState {
+    let g = pass(game);
+    pass(&g)
+}
+
+fn reply(game: &GameState, choice: DecisionReply) -> GameState {
+    let pending = game.pending_decision().expect("expected pending decision");
+    advance(
+        game,
+        pending.chooser(),
+        GameCommand::Reply {
+            decision: pending.id(),
+            choice,
+        },
+    )
+    .into_state()
+}
+
+fn pay_mana(items: &[(ManaType, i64)]) -> Option<ManaPayment> {
+    Some(ManaPayment {
+        from_lots: Default::default(),
+        spend: items
+            .iter()
+            .map(|&(mana_type, amount)| ManaSpend {
+                mana_type,
+                amount: amount.into(),
+            })
+            .collect(),
+    })
+}
+
+fn life(game: &GameState, seat: SeatId) -> spellwake_contracts::RulesInteger {
+    game.execution()
+        .life_total(seat)
+        .expect("life total")
+        .clone()
+}
+
+fn first_activated_id(
+    game: &GameState,
+    card: u64,
+) -> spellwake_engine::activated::ActivatedAbilityId {
+    game.execution()
+        .programs()
+        .find(|&(c, _)| c == CardId(card))
+        .expect("program")
+        .1
+        .activated
+        .first()
+        .expect("activated ability")
+        .id
+}
+
+fn hand_count(game: &GameState, seat: SeatId) -> usize {
+    game.execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|o| o.zone() == ObjectZone::Hand(seat))
+        .count()
+}
+
+#[test]
+fn wave1_self_antecedent_activated_sacrifice_deals_damage() {
+    let vocab = test_vocab();
+    let aeolipile = compile_card(
+        &vocab,
+        "Aeolipile",
+        "Artifact",
+        Some("{2}"),
+        None,
+        "{1}, {T}, Sacrifice this artifact: It deals 2 damage to any target.",
+    );
+    let game = start_game(
+        Arc::clone(&vocab),
+        vec![SeedCard {
+            card: CardId(1),
+            owner: ALICE,
+            destination: ObjectDestination::Battlefield { controller: ALICE },
+            program: aeolipile,
+        }],
+        &[(ALICE, ManaType::Colourless, 1)],
+    );
+
+    let act = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateAbility {
+            source: object(&game, 1).id(),
+            ability: first_activated_id(&game, 1),
+            target: TargetRef::Player(BOB),
+            payment: pay_mana(&[(ManaType::Colourless, 1)]),
+        },
+    )
+    .into_state();
+    assert_eq!(object(&act, 1).zone(), ObjectZone::Graveyard(ALICE));
+
+    let after = resolve_top(&act);
+    assert_eq!(life(&after, BOB), 18.into());
+}
+
+#[test]
+fn wave1_forward_target_branch_and_mixed_compound_subject() {
+    let vocab = test_vocab();
+    let branch_pump = compile_card(
+        &vocab,
+        "Goblin Boost",
+        "Instant",
+        Some("{R}"),
+        None,
+        "If you control a Goblin, target creature gets +3/+3 until end of turn. Otherwise, target creature gets +1/+1 until end of turn.",
+    );
+    let goblin = compile_card(
+        &vocab,
+        "Raging Goblin",
+        "Creature \u{2014} Goblin",
+        Some("{R}"),
+        Some(("1", "1")),
+        "Haste",
+    );
+    let compound_exile = compile_card(
+        &vocab,
+        "Mutual Banish",
+        "Artifact",
+        Some("{1}"),
+        None,
+        "{T}: Exile this artifact and target creature.",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Grizzly Bears",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+
+    let game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: branch_pump,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: goblin,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: compound_exile,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: bear,
+            },
+        ],
+        &[(ALICE, ManaType::Red, 1)],
+    );
+
+    let cast = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: Some(TargetRef::Object(object(&game, 4).id())),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    let after_pump = resolve_top(&cast);
+    let bear_pt = after_pump
+        .execution()
+        .current_characteristics(object(&after_pump, 4).id())
+        .expect("chars")
+        .expect("present")
+        .power_toughness
+        .expect("pt");
+    assert_eq!(bear_pt.derived.power, 5.into());
+    assert_eq!(bear_pt.derived.toughness, 5.into());
+
+    let act = advance(
+        &after_pump,
+        ALICE,
+        GameCommand::ActivateAbility {
+            source: object(&after_pump, 3).id(),
+            ability: first_activated_id(&after_pump, 3),
+            target: TargetRef::Object(object(&after_pump, 4).id()),
+            payment: None,
+        },
+    )
+    .into_state();
+    let after_exile = resolve_top(&act);
+    assert_eq!(object(&after_exile, 3).zone(), ObjectZone::Exile);
+    assert_eq!(object(&after_exile, 4).zone(), ObjectZone::Exile);
+}
+
+#[test]
+fn wave1_delayed_end_step_tagged_anaphora_destroys_target() {
+    let vocab = test_vocab();
+    let doomed_pump = compile_card(
+        &vocab,
+        "Reckless Surge",
+        "Instant",
+        Some("{R}"),
+        None,
+        "Target creature gets +2/+0 until end of turn. Destroy it at the beginning of the next end step.",
+    );
+    let bear = compile_card(
+        &vocab,
+        "Grizzly Bears",
+        "Creature \u{2014} Beast",
+        Some("{1}{G}"),
+        Some(("2", "2")),
+        "",
+    );
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: doomed_pump,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: BOB,
+                destination: ObjectDestination::Battlefield { controller: BOB },
+                program: bear,
+            },
+        ],
+        &[(ALICE, ManaType::Red, 1)],
+    );
+
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: Some(TargetRef::Object(object(&game, 2).id())),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(object(&game, 2).zone(), ObjectZone::Battlefield);
+    let pt = game
+        .execution()
+        .current_characteristics(object(&game, 2).id())
+        .unwrap()
+        .unwrap()
+        .power_toughness
+        .unwrap();
+    assert_eq!(pt.derived.power, 4.into());
+
+    for _ in 0..30 {
+        if object(&game, 2).zone() == ObjectZone::Graveyard(BOB) {
+            break;
+        }
+        if let Some(pending) = game.pending_decision() {
+            match pending.frame() {
+                RuleFrame::Combat(_) => {
+                    game = reply(&game, DecisionReply::DeclareAttackers(vec![]));
+                }
+                other => panic!("unexpected decision while advancing to end step: {other:?}"),
+            }
+        } else {
+            game = pass(&game);
+        }
+    }
+    assert_eq!(
+        object(&game, 2).zone(),
+        ObjectZone::Graveyard(BOB),
+        "delayed end-step trigger should destroy the tagged creature"
+    );
+}
+
+#[test]
+fn wave2_unless_effect_and_choose_branch_target_hoisting_and_sacrifice_cast_cost() {
+    let vocab = test_vocab();
+    let tax_burn = compile_card(
+        &vocab,
+        "Taxing Bolt",
+        "Sorcery",
+        Some("{B}"),
+        None,
+        "Target opponent loses 4 life unless they pay {2}.",
+    );
+    let twiddle_tap = compile_card(
+        &vocab,
+        "Frost Twiddler",
+        "Creature \u{2014} Human Wizard",
+        Some("{U}"),
+        Some(("1", "1")),
+        "{U}: Tap or untap target creature.",
+    );
+    let sac_draw = compile_card(
+        &vocab,
+        "Blood Harvest",
+        "Sorcery",
+        Some("{1}{B}"),
+        None,
+        "As an additional cost to cast this spell, sacrifice a creature.\nDraw cards equal to the sacrificed creature's power.",
+    );
+    let fodder = compile_card(
+        &vocab,
+        "Big Beast",
+        "Creature \u{2014} Beast",
+        Some("{2}{G}"),
+        Some(("3", "3")),
+        "",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: tax_burn,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: twiddle_tap,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: sac_draw,
+            },
+            SeedCard {
+                card: CardId(4),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: fodder,
+            },
+        ],
+        &[
+            (ALICE, ManaType::Black, 2),
+            (ALICE, ManaType::Blue, 1),
+            (ALICE, ManaType::Colourless, 1),
+        ],
+    );
+
+    // 1. UnlessEffect: Bob declines payment -> loses 4 life (20 -> 16).
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1).id(),
+            target: Some(TargetRef::Player(BOB)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    if let Some(pending) = game.pending_decision() {
+        assert_eq!(pending.chooser(), BOB);
+        game = reply(
+            &game,
+            DecisionReply::ResolutionPayment(ResolutionPaymentReply::Decline),
+        );
+    }
+    assert_eq!(life(&game, BOB), 16.into());
+
+    // 2. ChooseBranch with hoisted target: tap Big Beast via option 0.
+    assert_eq!(object(&game, 4).tapped(), Some(false));
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateAbility {
+            source: object(&game, 2).id(),
+            ability: first_activated_id(&game, 2),
+            target: TargetRef::Object(object(&game, 4).id()),
+            payment: pay_mana(&[(ManaType::Blue, 1)]),
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    if let Some(pending) = game.pending_decision() {
+        match pending.frame() {
+            RuleFrame::PromptChoice(_) => {
+                game = reply(
+                    &game,
+                    DecisionReply::PromptChoice(PromptChoiceReply::Options(vec![0])),
+                );
+            }
+            RuleFrame::OptionIndex(_) => {
+                game = reply(&game, DecisionReply::OptionIndex(0));
+            }
+            other => panic!("unexpected twiddle decision: {other:?}"),
+        }
+    }
+    assert_eq!(
+        object(&game, 4).tapped(),
+        Some(true),
+        "branch 0 should tap Big Beast via hoisted shared target"
+    );
+
+    // 3. Spell with additional sacrifice cost: sacrifice 3/3 Big Beast -> draw 3 cards.
+    let hand_before = hand_count(&game, ALICE);
+    let fodder_id = object(&game, 4).id();
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 3).id(),
+            target: None,
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Black, 1), (ManaType::Colourless, 1)]),
+                objects: vec![CastResource::SacrificeForSpell(fodder_id)],
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    assert_eq!(object(&game, 4).zone(), ObjectZone::Graveyard(ALICE));
+    game = resolve_top(&game);
+    let hand_after = hand_count(&game, ALICE);
+    assert_eq!(hand_after, hand_before + 2);
+}
+
+#[test]
+fn wave2_redirect_next_damage_and_spell_cast_copy_retarget() {
+    let vocab = test_vocab();
+    let en_kor = compile_card(
+        &vocab,
+        "Shield Bearer",
+        "Creature \u{2014} Human Knight",
+        Some("{W}{W}"),
+        Some(("2", "2")),
+        "{0}: The next 1 damage that would be dealt to this creature this turn is dealt to target creature you control instead.",
+    );
+    let ally = compile_card(
+        &vocab,
+        "Tough Ally",
+        "Creature \u{2014} Human Soldier",
+        Some("{1}{W}"),
+        Some(("1", "4")),
+        "",
+    );
+    let ping = compile_card(
+        &vocab,
+        "Spark Ping",
+        "Instant",
+        Some("{R}"),
+        None,
+        "Spark Ping deals 2 damage to any target.",
+    );
+    let copier = compile_card(
+        &vocab,
+        "Spell Echo",
+        "Creature \u{2014} Human Wizard",
+        Some("{2}{U}"),
+        Some(("2", "2")),
+        "Whenever you cast an instant or sorcery spell, you may copy it. You may choose new targets for the copy.",
+    );
+
+    let mut game = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: en_kor,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: ally,
+            },
+            SeedCard {
+                card: CardId(3),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: ping,
+            },
+        ],
+        &[(ALICE, ManaType::Red, 1)],
+    );
+
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::ActivateAbility {
+            source: object(&game, 1).id(),
+            ability: first_activated_id(&game, 1),
+            target: TargetRef::Object(object(&game, 2).id()),
+            payment: None,
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+
+    game = advance(
+        &game,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game, 3).id(),
+            target: Some(TargetRef::Object(object(&game, 1).id())),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    game = resolve_top(&game);
+    assert_eq!(object(&game, 1).zone(), ObjectZone::Battlefield);
+    assert_eq!(
+        game.execution()
+            .battlefield_marked_damage(object(&game, 1).id()),
+        Some(1.into())
+    );
+    assert_eq!(
+        game.execution()
+            .battlefield_marked_damage(object(&game, 2).id()),
+        Some(1.into())
+    );
+
+    // SpellCast copy + retarget fusion: casting a 2-damage spell at Bob deals 4 total.
+    let ping2 = compile_card(
+        &vocab,
+        "Spark Ping",
+        "Instant",
+        Some("{R}"),
+        None,
+        "Spark Ping deals 2 damage to any target.",
+    );
+    let mut game2 = start_game(
+        Arc::clone(&vocab),
+        vec![
+            SeedCard {
+                card: CardId(1),
+                owner: ALICE,
+                destination: ObjectDestination::Battlefield { controller: ALICE },
+                program: copier,
+            },
+            SeedCard {
+                card: CardId(2),
+                owner: ALICE,
+                destination: ObjectDestination::Hand,
+                program: ping2,
+            },
+        ],
+        &[(ALICE, ManaType::Red, 1)],
+    );
+    game2 = advance(
+        &game2,
+        ALICE,
+        GameCommand::CastWithResources {
+            spell: object(&game2, 2).id(),
+            target: Some(TargetRef::Player(BOB)),
+            payment: CastingPayment {
+                mana: pay_mana(&[(ManaType::Red, 1)]),
+                ..Default::default()
+            },
+        },
+    )
+    .into_state();
+    for _ in 0..20 {
+        if let Some(pending) = game2.pending_decision() {
+            match pending.frame() {
+                RuleFrame::OptionalEffect(_) => {
+                    game2 = reply(
+                        &game2,
+                        DecisionReply::OptionalEffect(OptionalEffectChoice::Take),
+                    );
+                }
+                RuleFrame::CopyTargets(_) => {
+                    game2 = reply(&game2, DecisionReply::CopyTargets(CopyTargetChoice::Retain));
+                }
+                other => panic!("unexpected copy decision: {other:?}"),
+            }
+        } else if game2.execution().window().entries().is_empty() {
+            break;
+        } else {
+            game2 = pass(&game2);
+        }
+    }
+    assert_eq!(
+        life(&game2, BOB),
+        16.into(),
+        "original 2 damage + copied 2 damage should leave Bob at 16 life"
+    );
+}

@@ -1,6 +1,6 @@
 use super::super::progress_rules::{RuleStepContext, StepOutcome};
 use super::super::*;
-use crate::occurrence::EventCause;
+use crate::occurrence::{EventCause, TriggerRelated};
 use crate::{
     stack_window::StackEntry,
     toolbox::{StackOpKind, StackOpSpec, StackTargetSelector},
@@ -134,10 +134,16 @@ impl EffectWindow {
                         }),
                     crate::program::StackCopyTarget::TriggeringSpell
                     | crate::program::StackCopyTarget::TriggeringAbility => self
-                        .window
-                        .entries()
-                        .last()
-                        .map(crate::stack_window::StackEntry::id),
+                        .execution_bindings(entry.id())
+                        .and_then(|b| b.trigger.as_ref())
+                        .and_then(|t| t.causes.members().first())
+                        .and_then(|member| match &member.related {
+                            TriggerRelated::SpellCast(cast) => Some(cast.entry()),
+                            TriggerRelated::TargetingEntry(id)
+                            | TriggerRelated::SpellCopied(id) => Some(*id),
+                            _ => None,
+                        })
+                        .filter(|&id| id != entry.id()),
                 };
                 if copies > 0
                     && let Some(target_id) = target_entry_id
